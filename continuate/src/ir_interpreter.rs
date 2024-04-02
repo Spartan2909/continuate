@@ -97,7 +97,7 @@ impl<'arena> Value<'arena> {
         &self,
         params: Vec<ValueRef<'arena>>,
         mut bound_params: HashMap<Ident, ValueRef<'arena>>,
-        executor: &Executor<'arena>,
+        executor: &mut Executor<'arena>,
     ) -> ControlFlow<ValueRef<'arena>> {
         match self {
             Value::Function(func_ref) => {
@@ -109,7 +109,10 @@ impl<'arena> Value<'arena> {
                 bound_params.extend(continuations);
                 callee.call(params, bound_params, executor)
             }
-            Value::Closure { func_ref, environment } => {
+            Value::Closure {
+                func_ref,
+                environment,
+            } => {
                 let function = *executor.program.functions.get(func_ref).unwrap();
                 bound_params.extend(function.params.keys().copied().zip(params));
                 executor.function(function, bound_params, Some(Rc::clone(environment)))
@@ -324,7 +327,20 @@ impl<'arena> Executor<'arena> {
         }
     }
 
-    fn expr_list(&self, exprs: &[&Expr<'arena>]) -> ControlFlow<Vec<ValueRef<'arena>>> {
+    fn begin_scope(&mut self) {
+        let enclosing = mem::replace(
+            &mut self.environment,
+            Rc::new(RefCell::new(Environment::new())),
+        );
+        self.environment.borrow_mut().enclosing = Some(enclosing);
+    }
+
+    fn end_scope(&mut self) {
+        let enclosing = Rc::clone(self.environment.borrow().enclosing.as_ref().unwrap());
+        self.environment = enclosing;
+    }
+
+    fn expr_list(&mut self, exprs: &[&Expr<'arena>]) -> ControlFlow<Vec<ValueRef<'arena>>> {
         let mut values = Vec::with_capacity(exprs.len());
         for &expr in exprs {
             values.push(value!(self.expr(expr)));
@@ -333,7 +349,7 @@ impl<'arena> Executor<'arena> {
     }
 
     fn binary_op(
-        &self,
+        &mut self,
         left: &Expr<'arena>,
         right: &Expr<'arena>,
         op: BinaryOp,
@@ -356,7 +372,7 @@ impl<'arena> Executor<'arena> {
         ControlFlow::value(result.unwrap(), self.arena)
     }
 
-    fn closure(&self, func: &Expr<'arena>) -> ControlFlow<ValueRef<'arena>> {
+    fn closure(&mut self, func: &Expr<'arena>) -> ControlFlow<ValueRef<'arena>> {
         let func_ref = value!(self.expr(func)).as_fn().unwrap();
         let mut new_env = Environment::new();
         new_env.enclosing = Some(Rc::clone(&self.environment));
@@ -370,7 +386,7 @@ impl<'arena> Executor<'arena> {
         )
     }
 
-    fn expr(&self, expr: &Expr<'arena>) -> ControlFlow<ValueRef<'arena>> {
+    fn expr(&mut self, expr: &Expr<'arena>) -> ControlFlow<ValueRef<'arena>> {
         match expr {
             Expr::Literal(lit) => ControlFlow::value(lit.clone().into(), self.arena),
             Expr::Ident(ident) => {
@@ -378,11 +394,14 @@ impl<'arena> Executor<'arena> {
             }
             Expr::Function(func_ref) => ControlFlow::value(Value::Function(*func_ref), self.arena),
             Expr::Block(block) => {
+                self.begin_scope();
                 let (&last, block) = block.split_last().unwrap();
                 for &expr in block {
                     value!(self.expr(expr));
                 }
-                self.expr(last)
+                let val = self.expr(last);
+                self.end_scope();
+                val
             }
             Expr::Tuple(tuple) => {
                 ControlFlow::value(Value::tuple(value!(self.expr_list(tuple))), self.arena)
@@ -457,9 +476,7 @@ impl<'arena> Executor<'arena> {
                 ControlFlow::Goto(block_id)
             }
             Expr::Goto(block_id) => ControlFlow::Goto(*block_id),
-            Expr::Closure { func } => {
-                self.closure(func)
-            }
+            Expr::Closure { func } => self.closure(func),
             Expr::Terminate(exit_code) => {
                 let exit_code = value!(self.expr(exit_code)).as_int().unwrap();
                 ControlFlow::Terminate(exit_code)
@@ -469,7 +486,7 @@ impl<'arena> Executor<'arena> {
     }
 
     fn function(
-        &self,
+        &mut self,
         function: &Function<'arena>,
         params: HashMap<Ident, ValueRef<'arena>>,
         enclosing_environment: Option<SharedEnvironment<'arena>>,
@@ -487,7 +504,7 @@ impl<'arena> Executor<'arena> {
         }
     }
 
-    fn run(self, termination_param: Ident, termination_fn: ValueRef<'arena>) -> i64 {
+    fn run(mut self, termination_param: Ident, termination_fn: ValueRef<'arena>) -> i64 {
         let entry_point = self
             .program
             .functions
