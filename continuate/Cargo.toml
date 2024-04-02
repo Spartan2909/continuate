@@ -1,0 +1,10 @@
+[package]
+name = "continuate"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+continuate-arena = { version = "0.1.0", path = "../continuate-arena" }
+
+[lints]
+workspace = true

@@ -1,0 +1,16 @@
+[package]
+name = "continuate-cli"
+version = "0.1.0"
+edition = "2021"
+default-run = "continuate"
+
+[dependencies]
+continuate = { version = "0.1.0", path = "../continuate" }
+continuate-arena = { version = "0.1.0", path = "../continuate-arena" }
+
+[[bin]]
+name = "continuate"
+path = "src/main.rs"
+
+[lints]
+workspace = true
