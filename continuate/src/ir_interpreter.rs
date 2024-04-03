@@ -1,16 +1,13 @@
 use crate::low_level_ir::BinaryOp;
-use crate::low_level_ir::Block;
 use crate::low_level_ir::BlockId;
 use crate::low_level_ir::Expr;
 use crate::low_level_ir::FuncRef;
 use crate::low_level_ir::Function;
 use crate::low_level_ir::Ident;
+use crate::low_level_ir::Intrinsic;
 use crate::low_level_ir::Literal;
 use crate::low_level_ir::Program;
-use crate::low_level_ir::Type;
-use crate::low_level_ir::TypeConstructor;
 use crate::low_level_ir::UnaryOp;
-use crate::low_level_ir::UserDefinedType;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -41,7 +38,7 @@ pub enum Value<'arena> {
 }
 
 impl<'arena> Value<'arena> {
-    fn discriminant(&self) -> i64 {
+    pub(crate) fn discriminant(&self) -> i64 {
         match self {
             Value::UserDefined {
                 discriminant,
@@ -77,7 +74,7 @@ impl<'arena> Value<'arena> {
         }
     }
 
-    const fn as_int(&self) -> Option<i64> {
+    pub const fn as_int(&self) -> Option<i64> {
         if let Value::Int(n) = self {
             Some(*n)
         } else {
@@ -85,7 +82,7 @@ impl<'arena> Value<'arena> {
         }
     }
 
-    const fn as_fn(&self) -> Option<FuncRef> {
+    pub const fn as_fn(&self) -> Option<FuncRef> {
         if let Value::Function(fn_ref) = self {
             Some(*fn_ref)
         } else {
@@ -98,12 +95,12 @@ impl<'arena> Value<'arena> {
         params: Vec<ValueRef<'arena>>,
         mut bound_params: HashMap<Ident, ValueRef<'arena>>,
         executor: &mut Executor<'arena>,
-    ) -> ControlFlow<ValueRef<'arena>> {
+    ) -> ControlFlow<Void> {
         match self {
             Value::Function(func_ref) => {
                 let function = *executor.program.functions.get(func_ref).unwrap();
                 bound_params.extend(function.params.keys().copied().zip(params));
-                executor.function(function, bound_params, None)
+                executor.function(function, *func_ref, bound_params, None)
             }
             Value::ContinuedFunction(callee, continuations) => {
                 bound_params.extend(continuations);
@@ -115,7 +112,12 @@ impl<'arena> Value<'arena> {
             } => {
                 let function = *executor.program.functions.get(func_ref).unwrap();
                 bound_params.extend(function.params.keys().copied().zip(params));
-                executor.function(function, bound_params, Some(Rc::clone(environment)))
+                executor.function(
+                    function,
+                    *func_ref,
+                    bound_params,
+                    Some(Rc::clone(environment)),
+                )
             }
             _ => unreachable!(),
         }
@@ -138,15 +140,15 @@ impl<'arena> Value<'arena> {
         }
     }
 
-    const fn array(values: Vec<ValueRef<'arena>>) -> Value {
+    pub const fn array(values: Vec<ValueRef<'arena>>) -> Value {
         Value::Array(RefCell::new(values))
     }
 
-    const fn tuple(values: Vec<ValueRef<'arena>>) -> Value {
+    pub const fn tuple(values: Vec<ValueRef<'arena>>) -> Value {
         Value::Tuple(RefCell::new(values))
     }
 
-    const fn user_defined(discriminant: Option<usize>, fields: Vec<ValueRef<'arena>>) -> Value {
+    pub const fn user_defined(discriminant: Option<usize>, fields: Vec<ValueRef<'arena>>) -> Value {
         Value::UserDefined {
             discriminant,
             fields: RefCell::new(fields),
@@ -230,7 +232,13 @@ impl<'arena> From<Literal> for Value<'arena> {
     }
 }
 
-type ValueRef<'arena> = &'arena Value<'arena>;
+impl<'arena> From<Void> for &Value<'arena> {
+    fn from(value: Void) -> Self {
+        match value {}
+    }
+}
+
+pub type ValueRef<'arena> = &'arena Value<'arena>;
 
 #[derive(Debug)]
 enum ControlFlow<T> {
@@ -256,11 +264,41 @@ impl<T> ControlFlow<T> {
         }
     }
 
+    fn cast<U>(self) -> ControlFlow<U>
+    where
+        T: Into<U>,
+    {
+        if let ControlFlow::Value(value) = self {
+            ControlFlow::Value(value.into())
+        } else {
+            // SAFETY: `self` is not `ControlFlow::Value`.
+            unsafe { self.cast_unchecked() }
+        }
+    }
+
     fn try_cast<U>(self) -> Option<ControlFlow<U>> {
+        if matches!(self, ControlFlow::Value(_)) {
+            None
+        } else {
+            // SAFETY: `self` is not `ControlFlow::Value`.
+            let ctrl = unsafe { self.cast_unchecked() };
+            Some(ctrl)
+        }
+    }
+
+    /// ## Safety
+    ///
+    /// If `self` is `ControlFlow::Value`, it must be valid to reinterpret values of `T` as `U`.
+    unsafe fn cast_unchecked<U>(self) -> ControlFlow<U> {
         match self {
-            ControlFlow::Goto(id) => Some(ControlFlow::Goto(id)),
-            ControlFlow::Terminate(n) => Some(ControlFlow::Terminate(n)),
-            ControlFlow::Value(_) => None,
+            ControlFlow::Goto(id) => ControlFlow::Goto(id),
+            ControlFlow::Terminate(n) => ControlFlow::Terminate(n),
+            ControlFlow::Value(value) => {
+                // SAFETY: Must be ensured by caller.
+                let output_value = unsafe { mem::transmute_copy(&value) };
+                mem::forget(value);
+                ControlFlow::Value(output_value)
+            }
         }
     }
 }
@@ -312,18 +350,27 @@ impl<'arena> Environment<'arena> {
 
 type SharedEnvironment<'arena> = Rc<RefCell<Environment<'arena>>>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Void {}
+
 struct Executor<'arena> {
     program: Program<'arena>,
     arena: &'arena Arena<'arena>,
     environment: SharedEnvironment<'arena>,
+    func_ref: FuncRef,
 }
 
 impl<'arena> Executor<'arena> {
-    fn new(program: Program<'arena>, arena: &'arena Arena<'arena>) -> Executor<'arena> {
+    fn new(
+        program: Program<'arena>,
+        arena: &'arena Arena<'arena>,
+        func_ref: FuncRef,
+    ) -> Executor<'arena> {
         Executor {
             program,
             arena,
             environment: Rc::new(RefCell::new(Environment::new())),
+            func_ref,
         }
     }
 
@@ -417,24 +464,29 @@ impl<'arena> Executor<'arena> {
             Expr::Array(arr) => {
                 ControlFlow::value(Value::array(value!(self.expr_list(arr))), self.arena)
             }
-            Expr::Discriminant(expr) => ControlFlow::value(
-                Value::Int(value!(self.expr(expr)).discriminant()),
-                self.arena,
-            ),
-            Expr::Get(object, index) => {
+            Expr::Get {
+                object,
+                object_variant: _,
+                field,
+            } => {
                 let object = value!(self.expr(object));
-                ControlFlow::Value(object.get(*index).unwrap())
+                ControlFlow::Value(object.get(*field).unwrap())
             }
-            Expr::Set(object, index, value) => {
+            Expr::Set {
+                object,
+                object_variant: _,
+                field,
+                value,
+            } => {
                 let object = value!(self.expr(object));
                 let value = value!(self.expr(value));
-                object.set(*index, value);
+                object.set(*field, value);
                 ControlFlow::Value(value)
             }
             Expr::Call(callee, params) => {
                 let callee = value!(self.expr(callee));
                 let params = value!(self.expr_list(params));
-                callee.call(params, HashMap::new(), self)
+                callee.call(params, HashMap::new(), self).cast()
             }
             Expr::ContApplication(func, continuations) => {
                 let func = value!(self.expr(func));
@@ -477,20 +529,48 @@ impl<'arena> Executor<'arena> {
             }
             Expr::Goto(block_id) => ControlFlow::Goto(*block_id),
             Expr::Closure { func } => self.closure(func),
-            Expr::Terminate(exit_code) => {
-                let exit_code = value!(self.expr(exit_code)).as_int().unwrap();
+            Expr::Unreachable => unreachable!(),
+        }
+    }
+
+    fn intrinsic(
+        &mut self,
+        intrinsic: Intrinsic,
+        params: &HashMap<Ident, ValueRef<'arena>>,
+    ) -> ControlFlow<Void> {
+        match intrinsic {
+            Intrinsic::Discriminant => {
+                let discriminant = params[&Ident(0)].discriminant();
+                let continuation = params[&Ident(1)];
+                continuation
+                    .call(
+                        vec![self.arena.allocate(Value::Int(discriminant))],
+                        HashMap::new(),
+                        self,
+                    )
+                    .try_cast()
+                    .unwrap()
+            }
+            Intrinsic::Terminate => {
+                let exit_code = params[&Ident(0)].as_int().unwrap();
                 ControlFlow::Terminate(exit_code)
             }
-            Expr::Unreachable => unreachable!(),
         }
     }
 
     fn function(
         &mut self,
         function: &Function<'arena>,
+        func_ref: FuncRef,
         params: HashMap<Ident, ValueRef<'arena>>,
         enclosing_environment: Option<SharedEnvironment<'arena>>,
-    ) -> ControlFlow<ValueRef<'arena>> {
+    ) -> ControlFlow<Void> {
+        if let Some(intrinsic) = function.intrinsic {
+            return self.intrinsic(intrinsic, &params);
+        }
+
+        self.func_ref = func_ref;
+
         let mut env = self.environment.borrow_mut();
         *env = Environment::from_map(params);
         env.enclosing = enclosing_environment;
@@ -499,19 +579,24 @@ impl<'arena> Executor<'arena> {
         loop {
             match self.expr(block.expr) {
                 ControlFlow::Goto(block_id) => block = function.blocks.get(&block_id).unwrap(),
-                ctrl => return ctrl,
+                ctrl => return ctrl.try_cast().unwrap(),
             }
         }
     }
 
-    fn run(mut self, termination_param: Ident, termination_fn: ValueRef<'arena>) -> i64 {
+    fn run(mut self) -> i64 {
         let entry_point = self
             .program
             .functions
             .get(&self.program.entry_point())
             .unwrap();
+        let termination_param = *entry_point.params.keys().next().unwrap();
+        let termination_fn = &*self
+            .arena
+            .allocate(Value::Function(self.program.fn_termination.unwrap()));
         self.function(
             entry_point,
+            self.program.entry_point(),
             iter::once((termination_param, termination_fn)).collect(),
             None,
         )
@@ -519,62 +604,7 @@ impl<'arena> Executor<'arena> {
     }
 }
 
-pub fn run<'arena>(
-    program: Program<'arena>,
-    termination_param: Ident,
-    termination_fn: ValueRef<'arena>,
-    arena: &'arena Arena<'arena>,
-) -> i64 {
-    Executor::new(program, arena).run(termination_param, termination_fn)
-}
-
-#[non_exhaustive]
-pub struct StdLib<'arena> {
-    pub ty_bool: &'arena Type<'arena>,
-    pub ty_int: &'arena Type<'arena>,
-
-    pub b_true: ValueRef<'arena>,
-    pub b_false: ValueRef<'arena>,
-
-    pub fn_termination: ValueRef<'arena>,
-}
-
-pub fn standard_library<'arena>(
-    arena: &'arena Arena<'arena>,
-    program: &mut Program<'arena>,
-) -> StdLib<'arena> {
-    let ty_bool = arena.allocate(UserDefinedType {
-        constructor: TypeConstructor::Sum(vec![vec![], vec![]]),
-    });
-    let ty_bool = arena.allocate(Type::UserDefined(ty_bool));
-    let ty_int = arena.allocate(Type::Int);
-
-    let b_true = arena.allocate(Value::user_defined(Some(1), vec![]));
-    let b_false = arena.allocate(Value::user_defined(Some(0), vec![]));
-
-    let fn_termination = arena.allocate(Function::new());
-    let param = fn_termination.ident();
-    fn_termination.params.insert(param, ty_int);
-
-    let exit_code = arena.allocate(Expr::Ident(param));
-    let termiation_body = arena.allocate(Expr::Terminate(exit_code));
-
-    let block = Block {
-        expr: termiation_body,
-    };
-    let block_id = fn_termination.entry_point();
-    fn_termination.blocks.insert(block_id, block);
-
-    let fn_termination_ref = program.function();
-    program.functions.insert(fn_termination_ref, fn_termination);
-
-    let fn_termination = arena.allocate(Value::Function(fn_termination_ref));
-
-    StdLib {
-        ty_bool,
-        ty_int,
-        b_true,
-        b_false,
-        fn_termination,
-    }
+pub fn run<'arena>(program: Program<'arena>, arena: &'arena Arena<'arena>) -> i64 {
+    let func_ref = program.entry_point();
+    Executor::new(program, arena, func_ref).run()
 }

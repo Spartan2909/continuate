@@ -1,6 +1,10 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use continuate_arena::Arena;
+
+use crate::lib_std::{self, StdLib};
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
     Int(i64),
@@ -9,7 +13,7 @@ pub enum Literal {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Ident(u64);
+pub struct Ident(pub(crate) u64);
 
 impl fmt::Debug for Ident {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -38,6 +42,17 @@ pub enum BinaryOp {
 }
 
 #[derive(Debug)]
+pub enum Pattern<'arena> {
+    Ident(Ident),
+    Wildcard,
+    Destructure {
+        ty: &'arena Type<'arena>,
+        variant: Option<usize>,
+        fields: Vec<(Pattern<'arena>, Option<Ident>)>,
+    },
+}
+
+#[derive(Debug)]
 #[non_exhaustive]
 pub enum Expr<'arena> {
     Literal(Literal),
@@ -51,10 +66,20 @@ pub enum Expr<'arena> {
         fields: Vec<&'arena Expr<'arena>>,
     },
     Array(Vec<&'arena Expr<'arena>>),
-    Discriminant(&'arena Expr<'arena>),
 
-    Get(&'arena Expr<'arena>, usize),
-    Set(&'arena Expr<'arena>, usize, &'arena Expr<'arena>),
+    ExprContinuation,
+
+    Get {
+        object: &'arena Expr<'arena>,
+        object_variant: Option<usize>,
+        field: usize,
+    },
+    Set {
+        object: &'arena Expr<'arena>,
+        object_variant: Option<usize>,
+        field: usize,
+        value: &'arena Expr<'arena>,
+    },
 
     Call(&'arena Expr<'arena>, Vec<&'arena Expr<'arena>>),
     ContApplication(&'arena Expr<'arena>, HashMap<Ident, &'arena Expr<'arena>>),
@@ -65,6 +90,7 @@ pub enum Expr<'arena> {
 
     Declare {
         ident: Ident,
+        ty: &'arena Type<'arena>,
         expr: &'arena Expr<'arena>,
     },
     Assign {
@@ -72,18 +98,15 @@ pub enum Expr<'arena> {
         expr: &'arena Expr<'arena>,
     },
 
-    Switch {
+    Match {
         scrutinee: &'arena Expr<'arena>,
-        arms: HashMap<i64, BlockId>,
-        otherwise: BlockId,
+        arms: HashMap<Pattern<'arena>, BlockId>,
     },
     Goto(BlockId),
 
     Closure {
         func: &'arena Expr<'arena>,
     },
-
-    Terminate(&'arena Expr<'arena>),
 
     Unreachable,
 }
@@ -136,12 +159,18 @@ pub struct Block<'arena> {
     pub expr: &'arena Expr<'arena>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Intrinsic {
+    Discriminant,
+    Terminate,
+}
+
 #[derive(Debug)]
 pub struct Function<'arena> {
     pub params: HashMap<Ident, &'arena Type<'arena>>,
     pub continuations: HashMap<Ident, &'arena Type<'arena>>,
-    pub declarations: HashMap<Ident, (&'arena Type<'arena>, Option<Literal>)>,
     pub blocks: HashMap<BlockId, Block<'arena>>,
+    pub(crate) intrinsic: Option<Intrinsic>,
     next_ident: u64,
     next_block: u64,
 }
@@ -151,8 +180,8 @@ impl<'arena> Function<'arena> {
         Function {
             params: HashMap::new(),
             continuations: HashMap::new(),
-            declarations: HashMap::new(),
             blocks: HashMap::new(),
+            intrinsic: None,
             next_ident: 0,
             next_block: 1,
         }
@@ -186,14 +215,20 @@ impl<'arena> Default for Function<'arena> {
 pub struct Program<'arena> {
     pub functions: HashMap<FuncRef, &'arena Function<'arena>>,
     next_function: u64,
+    lib_std: StdLib<'arena>,
 }
 
 impl<'arena> Program<'arena> {
-    pub fn new() -> Program<'arena> {
+    pub fn new(arena: &'arena Arena<'arena>) -> Program<'arena> {
         Program {
             functions: HashMap::new(),
             next_function: 1,
+            lib_std: lib_std::standard_library(arena),
         }
+    }
+
+    pub const fn lib_std(&self) -> StdLib<'arena> {
+        self.lib_std.clone()
     }
 
     #[allow(clippy::unused_self)]
@@ -205,11 +240,5 @@ impl<'arena> Program<'arena> {
         let func_ref = FuncRef(self.next_function);
         self.next_function += 1;
         func_ref
-    }
-}
-
-impl<'arena> Default for Program<'arena> {
-    fn default() -> Self {
-        Self::new()
     }
 }
