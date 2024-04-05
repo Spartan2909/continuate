@@ -1,54 +1,31 @@
+use crate::common::BinaryOp;
+use crate::common::FuncRef;
+use crate::common::Ident;
+use crate::common::Intrinsic;
+use crate::common::Literal;
+use crate::common::TypeRef;
+use crate::common::UnaryOp;
+use crate::lib_std;
+use crate::lib_std::StdLib;
+
 use std::collections::HashMap;
 use std::fmt;
+use std::hash;
 
 use continuate_arena::Arena;
 
-use crate::lib_std::{self, StdLib};
+use bimap::BiHashMap;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Literal {
-    Int(i64),
-    Float(f64),
-    String(String),
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Ident(pub(crate) u64);
-
-impl fmt::Debug for Ident {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Ident({})", self.0)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UnaryOp {
-    Neg,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BinaryOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Rem,
-    Eq,
-    Ne,
-    Lt,
-    Le,
-    Gt,
-    Ge,
-}
+use itertools::Itertools as _;
 
 #[derive(Debug)]
-pub enum Pattern<'arena> {
+pub enum Pattern {
     Ident(Ident),
     Wildcard,
     Destructure {
-        ty: &'arena Type<'arena>,
+        ty: TypeRef,
         variant: Option<usize>,
-        fields: Vec<(Pattern<'arena>, Option<Ident>)>,
+        fields: Vec<(Pattern, Option<Ident>)>,
     },
 }
 
@@ -61,13 +38,11 @@ pub enum Expr<'arena> {
     Block(Vec<&'arena Expr<'arena>>),
     Tuple(Vec<&'arena Expr<'arena>>),
     Constructor {
-        ty: &'arena Type<'arena>,
+        ty: TypeRef,
         index: Option<usize>,
         fields: Vec<&'arena Expr<'arena>>,
     },
     Array(Vec<&'arena Expr<'arena>>),
-
-    ExprContinuation,
 
     Get {
         object: &'arena Expr<'arena>,
@@ -90,7 +65,7 @@ pub enum Expr<'arena> {
 
     Declare {
         ident: Ident,
-        ty: &'arena Type<'arena>,
+        ty: TypeRef,
         expr: &'arena Expr<'arena>,
     },
     Assign {
@@ -100,7 +75,7 @@ pub enum Expr<'arena> {
 
     Match {
         scrutinee: &'arena Expr<'arena>,
-        arms: HashMap<Pattern<'arena>, BlockId>,
+        arms: HashMap<Pattern, BlockId>,
     },
     Goto(BlockId),
 
@@ -111,38 +86,54 @@ pub enum Expr<'arena> {
     Unreachable,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FuncRef(u64);
+#[derive(Debug, PartialEq, Eq)]
+pub struct FunctionTy {
+    pub params: Vec<TypeRef>,
+    pub continuations: HashMap<Ident, TypeRef>,
+}
 
-impl fmt::Debug for FuncRef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "FuncRef({})", self.0)
+impl hash::Hash for FunctionTy {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        self.params.hash(state);
+        for (&name, &ty) in self
+            .continuations
+            .iter()
+            .sorted_unstable_by_key(|(&ident, _)| ident.0)
+        {
+            (name, ty).hash(state);
+        }
     }
 }
 
-#[derive(Debug)]
-pub enum Type<'arena> {
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub enum Type {
     Int,
     Float,
     String,
-    Array(&'arena Type<'arena>, u32),
-    Tuple(Vec<&'arena Type<'arena>>),
-    Function {
-        params: Vec<&'arena Type<'arena>>,
-        continuations: Vec<&'arena Type<'arena>>,
-    },
-    UserDefined(&'arena UserDefinedType<'arena>),
+    Array(TypeRef, u32),
+    Tuple(Vec<TypeRef>),
+    Function(FunctionTy),
+    UserDefined(UserDefinedType),
 }
 
-#[derive(Debug)]
-pub struct UserDefinedType<'arena> {
-    pub constructor: TypeConstructor<'arena>,
+impl Type {
+    pub const fn function(params: Vec<TypeRef>, continuations: HashMap<Ident, TypeRef>) -> Type {
+        Type::Function(FunctionTy {
+            params,
+            continuations,
+        })
+    }
 }
 
-#[derive(Debug)]
-pub enum TypeConstructor<'arena> {
-    Product(Vec<&'arena Type<'arena>>),
-    Sum(Vec<Vec<&'arena Type<'arena>>>),
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct UserDefinedType {
+    pub constructor: TypeConstructor,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub enum TypeConstructor {
+    Product(Vec<TypeRef>),
+    Sum(Vec<Vec<TypeRef>>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -159,16 +150,10 @@ pub struct Block<'arena> {
     pub expr: &'arena Expr<'arena>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Intrinsic {
-    Discriminant,
-    Terminate,
-}
-
 #[derive(Debug)]
 pub struct Function<'arena> {
-    pub params: HashMap<Ident, &'arena Type<'arena>>,
-    pub continuations: HashMap<Ident, &'arena Type<'arena>>,
+    pub params: Vec<(Ident, TypeRef)>,
+    pub continuations: HashMap<Ident, TypeRef>,
     pub blocks: HashMap<BlockId, Block<'arena>>,
     pub(crate) intrinsic: Option<Intrinsic>,
     next_ident: u64,
@@ -178,7 +163,7 @@ pub struct Function<'arena> {
 impl<'arena> Function<'arena> {
     pub fn new() -> Function<'arena> {
         Function {
-            params: HashMap::new(),
+            params: Vec::new(),
             continuations: HashMap::new(),
             blocks: HashMap::new(),
             intrinsic: None,
@@ -193,8 +178,7 @@ impl<'arena> Function<'arena> {
         ident
     }
 
-    #[allow(clippy::unused_self)]
-    pub const fn entry_point(&self) -> BlockId {
+    pub const fn entry_point() -> BlockId {
         BlockId(0)
     }
 
@@ -214,21 +198,30 @@ impl<'arena> Default for Function<'arena> {
 #[derive(Debug)]
 pub struct Program<'arena> {
     pub functions: HashMap<FuncRef, &'arena Function<'arena>>,
-    next_function: u64,
-    lib_std: StdLib<'arena>,
+    pub signatures: HashMap<FuncRef, TypeRef>,
+    pub types: BiHashMap<TypeRef, &'arena Type>,
+    pub(crate) next_function: u64,
+    pub(crate) next_ty: u64,
+    lib_std: Option<StdLib<'arena>>,
 }
 
 impl<'arena> Program<'arena> {
     pub fn new(arena: &'arena Arena<'arena>) -> Program<'arena> {
-        Program {
+        let mut program = Program {
             functions: HashMap::new(),
+            signatures: HashMap::new(),
+            types: BiHashMap::new(),
             next_function: 1,
-            lib_std: lib_std::standard_library(arena),
-        }
+            next_ty: 0,
+            lib_std: None,
+        };
+        program.lib_std = Some(lib_std::standard_library(&mut program, arena));
+        program
     }
 
-    pub const fn lib_std(&self) -> StdLib<'arena> {
-        self.lib_std.clone()
+    #[allow(clippy::missing_panics_doc)] // Will not panic.
+    pub fn lib_std(&self) -> &StdLib<'arena> {
+        self.lib_std.as_ref().unwrap()
     }
 
     #[allow(clippy::unused_self)]
@@ -240,5 +233,21 @@ impl<'arena> Program<'arena> {
         let func_ref = FuncRef(self.next_function);
         self.next_function += 1;
         func_ref
+    }
+
+    pub fn ty(&mut self) -> TypeRef {
+        let ty_ref = TypeRef(self.next_ty);
+        self.next_ty += 1;
+        ty_ref
+    }
+
+    pub fn insert_type(&mut self, ty: Type, arena: &'arena Arena<'arena>) -> TypeRef {
+        if let Some(type_ref) = self.types.get_by_right(&ty) {
+            *type_ref
+        } else {
+            let type_ref = self.ty();
+            self.types.insert(type_ref, arena.allocate(ty));
+            type_ref
+        }
     }
 }

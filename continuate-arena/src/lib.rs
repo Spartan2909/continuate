@@ -1,4 +1,5 @@
 #![feature(dropck_eyepatch, ptr_mask)]
+#![warn(clippy::missing_inline_in_public_items)]
 
 use std::alloc;
 use std::alloc::Layout;
@@ -80,6 +81,7 @@ impl<'arena> Arena<'arena> {
     /// All data allocated in this arena must *strictly* outlive the arena.
     ///
     /// This is most easily enforced with higher-rank trait bounds, as in [`with_arena`].
+    #[inline]
     pub unsafe fn new() -> Arena<'arena> {
         // SAFETY: `START_CAPACITY` is non-zero.
         let start_chunk = unsafe { Chunk::new(START_CAPACITY) };
@@ -103,6 +105,7 @@ impl<'arena> Arena<'arena> {
     /// ## Panics
     ///
     /// Panics if `mem::align_of::<T>() > 4096`/
+    #[inline]
     #[allow(clippy::mut_from_ref)]
     pub fn allocate<T: 'arena>(&'arena self, value: T) -> &'arena mut T {
         assert!(mem::align_of::<T>() <= START_CAPACITY);
@@ -131,6 +134,7 @@ impl<'arena> Arena<'arena> {
 }
 
 impl<'arena> fmt::Debug for Arena<'arena> {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Arena").finish_non_exhaustive()
     }
@@ -138,6 +142,7 @@ impl<'arena> fmt::Debug for Arena<'arena> {
 
 // SAFETY: Ensured by caller of `Arena::new`.
 unsafe impl<#[may_dangle] 'arena> Drop for Arena<'arena> {
+    #[inline]
     fn drop(&mut self) {
         for &mut value in self.managed.get_mut() {
             // SAFETY: This is the last pointer to `*value`.
@@ -155,6 +160,7 @@ trait Any {}
 
 impl<T: ?Sized> Any for T {}
 
+#[inline]
 pub fn with_arena<F, T>(f: F) -> T
 where
     F: for<'arena> FnOnce(&'arena Arena<'arena>) -> T,

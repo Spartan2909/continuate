@@ -1,10 +1,13 @@
 [package]
-name = "continuate"
+name = "continuate-ir"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+bimap = "0.6.3"
 continuate-arena = { version = "0.1.0", path = "../continuate-arena" }
+continuate-error = { version = "0.1.0", path = "../continuate-error" }
+itertools = "0.12.1"
 
 [lints]
 workspace = true

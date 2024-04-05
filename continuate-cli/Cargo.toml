@@ -5,7 +5,7 @@ edition = "2021"
 default-run = "continuate"
 
 [dependencies]
-continuate = { version = "0.1.0", path = "../continuate" }
+continuate-ir = { version = "0.1.0", path = "../continuate-ir" }
 continuate-arena = { version = "0.1.0", path = "../continuate-arena" }
 
 [[bin]]

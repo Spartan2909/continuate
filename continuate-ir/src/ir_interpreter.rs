@@ -1,13 +1,13 @@
-use crate::low_level_ir::BinaryOp;
+use crate::common::BinaryOp;
+use crate::common::FuncRef;
+use crate::common::Ident;
+use crate::common::Intrinsic;
+use crate::common::Literal;
+use crate::common::UnaryOp;
 use crate::low_level_ir::BlockId;
 use crate::low_level_ir::Expr;
-use crate::low_level_ir::FuncRef;
 use crate::low_level_ir::Function;
-use crate::low_level_ir::Ident;
-use crate::low_level_ir::Intrinsic;
-use crate::low_level_ir::Literal;
 use crate::low_level_ir::Program;
-use crate::low_level_ir::UnaryOp;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -96,25 +96,25 @@ impl<'arena> Value<'arena> {
         mut bound_params: HashMap<Ident, ValueRef<'arena>>,
         executor: &mut Executor<'arena>,
     ) -> ControlFlow<Void> {
-        match self {
+        match *self {
             Value::Function(func_ref) => {
-                let function = *executor.program.functions.get(func_ref).unwrap();
-                bound_params.extend(function.params.keys().copied().zip(params));
-                executor.function(function, *func_ref, bound_params, None)
+                let function = *executor.program.functions.get(&func_ref).unwrap();
+                bound_params.extend(function.params.iter().map(|(ident, _)| *ident).zip(params));
+                executor.function(function, func_ref, bound_params, None)
             }
-            Value::ContinuedFunction(callee, continuations) => {
+            Value::ContinuedFunction(callee, ref continuations) => {
                 bound_params.extend(continuations);
                 callee.call(params, bound_params, executor)
             }
             Value::Closure {
                 func_ref,
-                environment,
+                ref environment,
             } => {
-                let function = *executor.program.functions.get(func_ref).unwrap();
-                bound_params.extend(function.params.keys().copied().zip(params));
+                let function = *executor.program.functions.get(&func_ref).unwrap();
+                bound_params.extend(function.params.iter().map(|(ident, _)| *ident).zip(params));
                 executor.function(
                     function,
-                    *func_ref,
+                    func_ref,
                     bound_params,
                     Some(Rc::clone(environment)),
                 )
@@ -575,7 +575,7 @@ impl<'arena> Executor<'arena> {
         *env = Environment::from_map(params);
         env.enclosing = enclosing_environment;
         drop(env);
-        let mut block = function.blocks.get(&function.entry_point()).unwrap();
+        let mut block = function.blocks.get(&Function::entry_point()).unwrap();
         loop {
             match self.expr(block.expr) {
                 ControlFlow::Goto(block_id) => block = function.blocks.get(&block_id).unwrap(),
@@ -590,7 +590,7 @@ impl<'arena> Executor<'arena> {
             .functions
             .get(&self.program.entry_point())
             .unwrap();
-        let termination_param = *entry_point.params.keys().next().unwrap();
+        let termination_param = *entry_point.continuations.keys().next().unwrap();
         let termination_fn = &*self
             .arena
             .allocate(Value::Function(self.program.fn_termination.unwrap()));
