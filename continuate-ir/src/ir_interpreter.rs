@@ -1,10 +1,10 @@
 use crate::common::BinaryOp;
+use crate::common::BlockId;
 use crate::common::FuncRef;
 use crate::common::Ident;
 use crate::common::Intrinsic;
 use crate::common::Literal;
 use crate::common::UnaryOp;
-use crate::low_level_ir::BlockId;
 use crate::low_level_ir::Expr;
 use crate::low_level_ir::Function;
 use crate::low_level_ir::Program;
@@ -45,6 +45,53 @@ impl<'arena> Value<'arena> {
                 fields: _,
             } => discriminant.unwrap_or(0) as i64,
             _ => 0,
+        }
+    }
+
+    /// ## Panics
+    ///
+    /// Panics if `self` is `Value::Closure`.
+    pub(crate) fn clone_to<'a>(&self, arena: &'a Arena<'a>) -> Value<'a> {
+        match *self {
+            Value::Int(i) => Value::Int(i),
+            Value::Float(f) => Value::Float(f),
+            Value::String(ref s) => Value::String(s.clone()),
+            Value::Array(ref array) => Value::Array(RefCell::new(
+                array
+                    .borrow()
+                    .iter()
+                    .map(|value| &*arena.allocate(value.clone_to(arena)))
+                    .collect(),
+            )),
+            Value::Tuple(ref tuple) => Value::Tuple(RefCell::new(
+                tuple
+                    .borrow()
+                    .iter()
+                    .map(|value| &*arena.allocate(value.clone_to(arena)))
+                    .collect(),
+            )),
+            Value::Function(func) => Value::Function(func),
+            Value::ContinuedFunction(func, ref continuations) => Value::ContinuedFunction(
+                arena.allocate(func.clone_to(arena)),
+                continuations
+                    .iter()
+                    .map(|(&ident, value)| (ident, &*arena.allocate(value.clone_to(arena))))
+                    .collect(),
+            ),
+            Value::Closure { .. } => unimplemented!(),
+            Value::UserDefined {
+                discriminant,
+                ref fields,
+            } => Value::UserDefined {
+                discriminant,
+                fields: RefCell::new(
+                    fields
+                        .borrow()
+                        .iter()
+                        .map(|value| &*arena.allocate(value.clone_to(arena)))
+                        .collect(),
+                ),
+            },
         }
     }
 
@@ -508,11 +555,6 @@ impl<'arena> Executor<'arena> {
                 }
             }
             Expr::Binary(left, op, right) => self.binary_op(left, right, *op),
-            Expr::Declare { ident, expr } => {
-                let value = value!(self.expr(expr));
-                self.environment.borrow_mut().values.insert(*ident, value);
-                ControlFlow::Value(value)
-            }
             Expr::Assign { ident, expr } => {
                 let value = value!(self.expr(expr));
                 self.environment.borrow_mut().set(*ident, value);
@@ -528,7 +570,7 @@ impl<'arena> Executor<'arena> {
                 ControlFlow::Goto(block_id)
             }
             Expr::Goto(block_id) => ControlFlow::Goto(*block_id),
-            Expr::Closure { func } => self.closure(func),
+            Expr::Closure { func, captures: _ } => self.closure(func),
             Expr::Unreachable => unreachable!(),
         }
     }
@@ -574,6 +616,10 @@ impl<'arena> Executor<'arena> {
         let mut env = self.environment.borrow_mut();
         *env = Environment::from_map(params);
         env.enclosing = enclosing_environment;
+        for (&declaration, (_, initialiser)) in &function.declarations {
+            let value = initialiser.clone().map_or(Value::Int(0), Into::into);
+            env.values.insert(declaration, self.arena.allocate(value));
+        }
         drop(env);
         let mut block = function.blocks.get(&Function::entry_point()).unwrap();
         loop {
@@ -593,7 +639,7 @@ impl<'arena> Executor<'arena> {
         let termination_param = *entry_point.continuations.keys().next().unwrap();
         let termination_fn = &*self
             .arena
-            .allocate(Value::Function(self.program.fn_termination.unwrap()));
+            .allocate(Value::Function(self.program.lib_std.fn_termination));
         self.function(
             entry_point,
             self.program.entry_point(),

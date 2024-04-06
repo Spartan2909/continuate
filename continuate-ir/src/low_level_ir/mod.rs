@@ -2,6 +2,7 @@ mod lowering;
 pub use lowering::lower;
 
 use crate::common::BinaryOp;
+use crate::common::BlockId;
 use crate::common::FuncRef;
 use crate::common::Ident;
 use crate::common::Intrinsic;
@@ -9,9 +10,9 @@ use crate::common::Literal;
 use crate::common::TypeRef;
 use crate::common::UnaryOp;
 use crate::high_level_ir::Program as HirProgram;
+use crate::lib_std::StdLib;
 
 use std::collections::HashMap;
-use std::fmt;
 use std::hash;
 
 use bimap::BiHashMap;
@@ -56,10 +57,6 @@ pub enum Expr<'arena> {
 
     Binary(&'arena Expr<'arena>, BinaryOp, &'arena Expr<'arena>),
 
-    Declare {
-        ident: Ident,
-        expr: &'arena Expr<'arena>,
-    },
     Assign {
         ident: Ident,
         expr: &'arena Expr<'arena>,
@@ -74,6 +71,7 @@ pub enum Expr<'arena> {
 
     Closure {
         func: &'arena Expr<'arena>,
+        captures: HashMap<Ident, TypeRef>,
     },
 
     Unreachable,
@@ -232,15 +230,6 @@ pub enum TypeConstructor {
     Sum(Vec<Vec<TypeRef>>),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct BlockId(u64);
-
-impl fmt::Debug for BlockId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "BlockId({})", self.0)
-    }
-}
-
 #[derive(Debug)]
 pub struct Block<'arena> {
     pub expr: &'arena Expr<'arena>,
@@ -298,18 +287,18 @@ pub struct Program<'arena> {
     pub functions: HashMap<FuncRef, &'arena Function<'arena>>,
     pub signatures: HashMap<FuncRef, TypeRef>,
     pub types: BiHashMap<TypeRef, &'arena Type>,
-    pub fn_termination: Option<FuncRef>,
+    pub(crate) lib_std: StdLib<'arena>,
     next_function: u64,
     next_ty: u64,
 }
 
 impl<'arena> Program<'arena> {
-    pub fn new(program: &HirProgram) -> Program<'arena> {
+    pub fn new(program: &HirProgram, arena: &'arena Arena<'arena>) -> Program<'arena> {
         Program {
             functions: HashMap::new(),
             signatures: HashMap::new(),
             types: BiHashMap::new(),
-            fn_termination: None,
+            lib_std: program.lib_std().clone_to(arena),
             next_function: program.next_function,
             next_ty: program.next_ty,
         }

@@ -1,4 +1,5 @@
 use crate::common::BinaryOp;
+use crate::common::BlockId;
 use crate::common::FuncRef;
 use crate::common::Ident;
 use crate::common::Intrinsic;
@@ -9,7 +10,6 @@ use crate::lib_std;
 use crate::lib_std::StdLib;
 
 use std::collections::HashMap;
-use std::fmt;
 use std::hash;
 
 use continuate_arena::Arena;
@@ -136,15 +136,6 @@ pub enum TypeConstructor {
     Sum(Vec<Vec<TypeRef>>),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct BlockId(u64);
-
-impl fmt::Debug for BlockId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "BlockId({})", self.0)
-    }
-}
-
 #[derive(Debug)]
 pub struct Block<'arena> {
     pub expr: &'arena Expr<'arena>,
@@ -155,9 +146,10 @@ pub struct Function<'arena> {
     pub params: Vec<(Ident, TypeRef)>,
     pub continuations: HashMap<Ident, TypeRef>,
     pub blocks: HashMap<BlockId, Block<'arena>>,
+    pub captures: Vec<Ident>,
     pub(crate) intrinsic: Option<Intrinsic>,
     next_ident: u64,
-    next_block: u64,
+    pub(crate) next_block: u64,
 }
 
 impl<'arena> Function<'arena> {
@@ -166,6 +158,7 @@ impl<'arena> Function<'arena> {
             params: Vec::new(),
             continuations: HashMap::new(),
             blocks: HashMap::new(),
+            captures: Vec::new(),
             intrinsic: None,
             next_ident: 0,
             next_block: 1,

@@ -38,6 +38,19 @@ impl<'arena> StdLib<'arena> {
             Literal::String(_) => self.ty_string,
         }
     }
+
+    pub(crate) fn clone_to<'a>(&self, arena: &'a Arena<'a>) -> StdLib<'a> {
+        StdLib {
+            ty_bool: self.ty_bool,
+            ty_int: self.ty_int,
+            ty_float: self.ty_float,
+            ty_string: self.ty_string,
+            b_true: arena.allocate(self.b_true.clone_to(arena)),
+            b_false: arena.allocate(self.b_false.clone_to(arena)),
+            fn_termination: self.fn_termination,
+            fn_discriminant: self.fn_discriminant,
+        }
+    }
 }
 
 pub(crate) fn standard_library<'arena>(
