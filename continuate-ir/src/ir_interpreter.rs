@@ -17,6 +17,7 @@ use std::ops;
 use std::rc::Rc;
 
 use continuate_arena::Arena;
+use continuate_arena::ArenaSafe;
 
 #[derive(Debug)]
 pub enum Value<'arena> {
@@ -284,6 +285,9 @@ impl<'arena> From<Void> for &Value<'arena> {
         match value {}
     }
 }
+
+// SAFETY: `Value` is not `Drop`.
+unsafe impl<'arena> ArenaSafe for Value<'arena> {}
 
 pub type ValueRef<'arena> = &'arena Value<'arena>;
 

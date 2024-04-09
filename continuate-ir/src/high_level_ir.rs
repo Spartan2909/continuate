@@ -12,13 +12,14 @@ use crate::lib_std::StdLib;
 use std::collections::HashMap;
 use std::hash;
 
-use continuate_arena::Arena;
-
 use bimap::BiHashMap;
+
+use continuate_arena::Arena;
+use continuate_arena::ArenaSafe;
 
 use itertools::Itertools as _;
 
-#[derive(Debug)]
+#[derive(Debug, ArenaSafe)]
 pub enum Pattern {
     Ident(Ident),
     Wildcard,
@@ -29,7 +30,7 @@ pub enum Pattern {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, ArenaSafe)]
 #[non_exhaustive]
 pub enum Expr<'arena> {
     Literal(Literal),
@@ -86,7 +87,7 @@ pub enum Expr<'arena> {
     Unreachable,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, ArenaSafe)]
 pub struct FunctionTy {
     pub params: Vec<TypeRef>,
     pub continuations: HashMap<Ident, TypeRef>,
@@ -105,7 +106,7 @@ impl hash::Hash for FunctionTy {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, ArenaSafe)]
 pub enum Type {
     Int,
     Float,
@@ -125,23 +126,23 @@ impl Type {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, ArenaSafe)]
 pub struct UserDefinedType {
     pub constructor: TypeConstructor,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, ArenaSafe)]
 pub enum TypeConstructor {
     Product(Vec<TypeRef>),
     Sum(Vec<Vec<TypeRef>>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, ArenaSafe)]
 pub struct Block<'arena> {
     pub expr: &'arena Expr<'arena>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, ArenaSafe)]
 pub struct Function<'arena> {
     pub params: Vec<(Ident, TypeRef)>,
     pub continuations: HashMap<Ident, TypeRef>,

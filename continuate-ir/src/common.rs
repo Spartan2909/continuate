@@ -1,6 +1,9 @@
 use std::fmt;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+use continuate_arena::ArenaSafeCopy;
+use continuate_arena::ArenaSafeStatic;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ArenaSafeCopy)]
 pub struct Ident(pub(crate) u64);
 
 impl fmt::Debug for Ident {
@@ -10,7 +13,7 @@ impl fmt::Debug for Ident {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ArenaSafeCopy)]
 pub struct FuncRef(pub(crate) u64);
 
 impl fmt::Debug for FuncRef {
@@ -20,7 +23,7 @@ impl fmt::Debug for FuncRef {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ArenaSafeCopy)]
 pub struct TypeRef(pub(crate) u64);
 
 impl fmt::Debug for TypeRef {
@@ -30,7 +33,7 @@ impl fmt::Debug for TypeRef {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ArenaSafeCopy)]
 pub struct BlockId(pub(crate) u64);
 
 impl fmt::Debug for BlockId {
@@ -39,19 +42,19 @@ impl fmt::Debug for BlockId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, ArenaSafeStatic)]
 pub enum Literal {
     Int(i64),
     Float(f64),
     String(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ArenaSafeCopy)]
 pub enum UnaryOp {
     Neg,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ArenaSafeCopy)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -66,7 +69,7 @@ pub enum BinaryOp {
     Ge,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ArenaSafeCopy)]
 pub(crate) enum Intrinsic {
     Discriminant,
     Terminate,

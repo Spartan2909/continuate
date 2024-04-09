@@ -1,7 +1,8 @@
 [workspace]
-members = ["continuate-arena", "continuate-cli", "continuate-ir", "continuate-error"]
+members = ["continuate-arena", "continuate-arena-macros", "continuate-cli", "continuate-ir", "continuate-error"]
 default-members = ["continuate-cli"]
 resolver = "2"
+package.version = "0.1.0"
 
 [profile.dev.package."*"]
 opt-level = 3

@@ -3,6 +3,9 @@
 #![feature(ptr_mask)]
 #![warn(clippy::missing_inline_in_public_items)]
 
+mod arena_safe;
+pub use arena_safe::ArenaSafe;
+
 use std::alloc;
 use std::alloc::AllocError;
 use std::alloc::Allocator;
@@ -13,6 +16,10 @@ use std::cell::UnsafeCell;
 use std::fmt;
 use std::ptr;
 use std::ptr::NonNull;
+
+pub use continuate_arena_macros::ArenaSafe;
+pub use continuate_arena_macros::ArenaSafeCopy;
+pub use continuate_arena_macros::ArenaSafeStatic;
 
 struct Chunk {
     start: NonNull<()>,
@@ -36,7 +43,7 @@ impl Chunk {
 
     /// ## Safety
     ///
-    /// `self.has_capacity_for::<T>()` must return `true`.
+    /// `self.has_capacity_for(layout)` must return `true`.
     #[inline(always)]
     unsafe fn allocate(&mut self, layout: Layout) -> NonNull<()> {
         debug_assert!(self.has_capacity_for(layout));
@@ -75,17 +82,10 @@ const START_CAPACITY: usize = 4 * 1024;
 const MAX_CAPACITY: usize = 2 * 1024 * 1024;
 
 impl<'arena> Arena<'arena> {
-    /// ## Safety
-    ///
-    /// All data allocated in this arena must *strictly* outlive the arena.
-    ///
-    /// This is most easily enforced with higher-rank trait bounds, as in [`with_arena`].
-    ///
     /// ## Panics
-    ///
-    /// Panics on allocation error.
+    /// Panics on allocation failure.
     #[inline]
-    pub unsafe fn new() -> Arena<'arena> {
+    pub fn new() -> Arena<'arena> {
         // SAFETY: `START_CAPACITY` is non-zero.
         let start_chunk = unsafe { Chunk::new(START_CAPACITY).unwrap() };
         Arena {
@@ -127,7 +127,7 @@ impl<'arena> Arena<'arena> {
     /// Panics if `mem::align_of::<T>() > 4096`.
     #[inline]
     #[allow(clippy::mut_from_ref)]
-    pub fn allocate<T: 'arena>(&'arena self, value: T) -> &'arena mut T {
+    pub fn allocate<T: ArenaSafe + 'arena>(&'arena self, value: T) -> &'arena mut T {
         let layout = Layout::new::<T>();
         let ptr = self
             .allocate_raw(Layout::new::<T>())
@@ -155,6 +155,13 @@ impl<'arena> fmt::Debug for Arena<'arena> {
     }
 }
 
+impl<'arena> Default for Arena<'arena> {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // SAFETY: Ensured by caller of `Arena::new`.
 unsafe impl<#[may_dangle] 'arena> Drop for Arena<'arena> {
     #[inline]
@@ -175,16 +182,6 @@ trait Any {}
 
 impl<T: ?Sized> Any for T {}
 
-#[inline]
-pub fn with_arena<F, T>(f: F) -> T
-where
-    F: for<'arena> FnOnce(&'arena Arena<'arena>) -> T,
-{
-    // SAFETY: Ensured by higher-order lifetime.
-    let arena = unsafe { Arena::new() };
-    f(&arena)
-}
-
 // SAFETY: All returned pointers are valid.
 unsafe impl<'arena> Allocator for &'arena Arena<'arena> {
     #[inline]
@@ -198,6 +195,42 @@ unsafe impl<'arena> Allocator for &'arena Arena<'arena> {
     unsafe fn deallocate(&self, _: NonNull<u8>, _: Layout) {}
 
     #[inline]
+    unsafe fn grow(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<NonNull<[u8]>, AllocError> {
+        let new_ptr = self.allocate(new_layout)?;
+
+        // SAFETY: `new_layout.size()` >= `old_layout.size()`, and `allocate` returns a valid
+        // pointer.
+        unsafe {
+            ptr::copy_nonoverlapping(ptr.as_ptr(), new_ptr.cast().as_ptr(), old_layout.size());
+        }
+
+        Ok(new_ptr)
+    }
+
+    #[inline]
+    unsafe fn grow_zeroed(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<NonNull<[u8]>, AllocError> {
+        let new_ptr = self.allocate_zeroed(new_layout)?;
+
+        // SAFETY: `new_layout.size()` >= `old_layout.size()`, and `allocate` returns a valid
+        // pointer.
+        unsafe {
+            ptr::copy_nonoverlapping(ptr.as_ptr(), new_ptr.cast().as_ptr(), old_layout.size());
+        }
+
+        Ok(new_ptr)
+    }
+
+    #[inline]
     unsafe fn shrink(
         &self,
         ptr: NonNull<u8>,
@@ -208,7 +241,7 @@ unsafe impl<'arena> Allocator for &'arena Arena<'arena> {
             Ok(NonNull::slice_from_raw_parts(ptr, old_layout.size()))
         } else {
             let new_ptr = self.allocate(new_layout)?;
-            // SAFETY: `new_layout.size()` >= `old_layout.size()`, and `allocate` returns a valid
+            // SAFETY: `new_layout.size()` <= `old_layout.size()`, and `allocate` returns a valid
             // pointer.
             unsafe {
                 ptr::copy_nonoverlapping(ptr.as_ptr(), new_ptr.cast().as_ptr(), new_layout.size());
