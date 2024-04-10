@@ -3,7 +3,6 @@ use crate::common::Ident;
 use crate::common::Literal;
 use crate::common::TypeRef;
 use crate::common::UnaryOp;
-use crate::high_level_ir::Block as HirBlock;
 use crate::high_level_ir::Expr as HirExpr;
 use crate::high_level_ir::Function as HirFunction;
 use crate::high_level_ir::FunctionTy as HirFunctionTy;
@@ -65,38 +64,40 @@ impl<'arena> Lowerer<'arena> {
     fn expr_list(
         &mut self,
         exprs: &[&HirExpr],
+        block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<Vec<(Expr<'arena>, TypeRef)>> {
-        exprs.iter().map(|expr| self.expr(expr, function)).collect()
+        exprs
+            .iter()
+            .map(|expr| self.expr(expr, block, function))
+            .collect()
     }
 
     fn expr_block(
         &mut self,
         exprs: &[&HirExpr],
+        block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
-        let exprs = self.expr_list(exprs, function)?;
-        let block_ty = exprs.last().map_or_else(
-            || self.program.insert_type(Type::Tuple(vec![]), self.arena).0,
-            |(_, ty)| *ty,
-        );
-        Ok((
-            Expr::Block(
-                exprs
-                    .into_iter()
-                    .map(|(expr, _)| &*self.arena.allocate(expr))
-                    .collect(),
-            ),
-            block_ty,
-        ))
+        let mut exprs: Vec<_> = self.expr_list(exprs, block, function)?;
+        let (last_expr, block_ty) = exprs.pop().unwrap_or_else(|| {
+            let ty = self.program.insert_type(Type::Tuple(vec![]), self.arena).0;
+            (Expr::Tuple(vec![]), ty)
+        });
+        let exprs = exprs.into_iter().map(|(expr, _)| self.arena.allocate(expr));
+        for expr in exprs {
+            block.exprs.push(expr);
+        }
+        Ok((last_expr, block_ty))
     }
 
     fn expr_tuple(
         &mut self,
         elements: &[&HirExpr],
+        block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
-        let elements = self.expr_list(elements, function)?;
+        let elements = self.expr_list(elements, block, function)?;
         let types = elements.iter().map(|(_, ty)| *ty).collect();
         let values = elements
             .into_iter()
@@ -113,9 +114,10 @@ impl<'arena> Lowerer<'arena> {
         ty: TypeRef,
         index: Option<usize>,
         fields: &[&HirExpr],
+        block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
-        let fields = self.expr_list(fields, function)?;
+        let fields = self.expr_list(fields, block, function)?;
         let user_defined = *self.program.types.get_by_left(&ty).unwrap();
         let user_defined = user_defined
             .as_user_defined()
@@ -147,9 +149,10 @@ impl<'arena> Lowerer<'arena> {
     fn expr_array(
         &mut self,
         array: &[&HirExpr],
+        block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
-        let array = self.expr_list(array, function)?;
+        let array = self.expr_list(array, block, function)?;
         let mut array_ty = self.program.insert_type(Type::Unknown, self.arena).1;
         for (_, ty) in &array {
             let ty = *self.program.types.get_by_left(ty).unwrap();
@@ -168,9 +171,10 @@ impl<'arena> Lowerer<'arena> {
         object: &HirExpr,
         object_variant: Option<usize>,
         field: usize,
+        block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<(ExprGet<'arena>, TypeRef)> {
-        let (object, object_ty) = self.expr(object, function)?;
+        let (object, object_ty) = self.expr(object, block, function)?;
         let user_defined = *self.program.types.get_by_left(&object_ty).unwrap();
         let user_defined = user_defined
             .as_user_defined()
@@ -194,16 +198,17 @@ impl<'arena> Lowerer<'arena> {
         object_variant: Option<usize>,
         field: usize,
         value: &HirExpr,
+        block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
-        let (expr, field_ty) = self.expr_get(object, object_variant, field, function)?;
+        let (expr, field_ty) = self.expr_get(object, object_variant, field, block, function)?;
         let ExprGet {
             object,
             object_variant,
             field,
         } = expr;
 
-        let (value, value_ty) = self.expr(value, function)?;
+        let (value, value_ty) = self.expr(value, block, function)?;
 
         let field_ty = *self.program.types.get_by_left(&field_ty).unwrap();
         let value_ty = *self.program.types.get_by_left(&value_ty).unwrap();
@@ -222,10 +227,11 @@ impl<'arena> Lowerer<'arena> {
         &mut self,
         callee: &HirExpr,
         params: &[&HirExpr],
+        block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
-        let (callee, callee_ty) = self.expr(callee, function)?;
-        let params = self.expr_list(params, function)?;
+        let (callee, callee_ty) = self.expr(callee, block, function)?;
+        let params = self.expr_list(params, block, function)?;
         let callee_ty = *self.program.types.get_by_left(&callee_ty).unwrap();
         let callee_ty = callee_ty
             .as_function()
@@ -258,9 +264,10 @@ impl<'arena> Lowerer<'arena> {
         &mut self,
         callee: &HirExpr,
         continuations: &HashMap<Ident, &HirExpr>,
+        block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
-        let (callee, callee_ty) = self.expr(callee, function)?;
+        let (callee, callee_ty) = self.expr(callee, block, function)?;
         let callee_ty = *self.program.types.get_by_left(&callee_ty).unwrap();
         let callee_ty = callee_ty
             .as_function()
@@ -269,7 +276,7 @@ impl<'arena> Lowerer<'arena> {
         let mut outstanding_continuations = callee_ty.continuations.clone();
         let mut new_continuations = HashMap::with_capacity(continuations.len());
         for (&ident, &expr) in continuations {
-            let (expr, ty) = self.expr(expr, function)?;
+            let (expr, ty) = self.expr(expr, block, function)?;
             let expr = &*self.arena.allocate(expr);
 
             let cont_ty = callee_ty
@@ -298,9 +305,10 @@ impl<'arena> Lowerer<'arena> {
         &mut self,
         operator: UnaryOp,
         operand: &HirExpr,
+        block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
-        let (operand, input_ty_ref) = self.expr(operand, function)?;
+        let (operand, input_ty_ref) = self.expr(operand, block, function)?;
         let input_ty = *self.program.types.get_by_left(&input_ty_ref).unwrap();
         let output_ty = match (operator, input_ty) {
             (UnaryOp::Neg, Type::Int | Type::Float) => input_ty_ref,
@@ -315,11 +323,12 @@ impl<'arena> Lowerer<'arena> {
         left: &HirExpr,
         operator: BinaryOp,
         right: &HirExpr,
+        block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
-        let (left, left_ty_ref) = self.expr(left, function)?;
+        let (left, left_ty_ref) = self.expr(left, block, function)?;
         let left_ty = *self.program.types.get_by_left(&left_ty_ref).unwrap();
-        let (right, right_ty_ref) = self.expr(right, function)?;
+        let (right, right_ty_ref) = self.expr(right, block, function)?;
         let right_ty = *self.program.types.get_by_left(&right_ty_ref).unwrap();
 
         let output_ty = match (left_ty, operator, right_ty) {
@@ -357,9 +366,10 @@ impl<'arena> Lowerer<'arena> {
         ident: Ident,
         ty: TypeRef,
         expr: &HirExpr,
+        block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
-        let (expr, expr_ty) = self.expr(expr, function)?;
+        let (expr, expr_ty) = self.expr(expr, block, function)?;
         let expr_ty = *self.program.types.get_by_left(&expr_ty).unwrap();
         let slot_ty = *self.program.types.get_by_left(&ty).unwrap();
         let ty = expr_ty.unify(slot_ty, &mut self.program, self.arena)?;
@@ -377,16 +387,16 @@ impl<'arena> Lowerer<'arena> {
         &mut self,
         ident: Ident,
         expr: &HirExpr,
+        block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
-        let (expr, expr_ty) = self.expr(expr, function)?;
+        let (expr, expr_ty) = self.expr(expr, block, function)?;
         let expr_ty = *self.program.types.get_by_left(&expr_ty).unwrap();
         let slot_ty = self.environment[&ident];
         let slot_ty = *self.program.types.get_by_left(&slot_ty).unwrap();
         let ty = expr_ty.unify(slot_ty, &mut self.program, self.arena)?;
         let ty = *self.program.types.get_by_right(ty).unwrap();
 
-        function.declarations.insert(ident, (ty, None));
         let expr = Expr::Assign {
             ident,
             expr: self.arena.allocate(expr),
@@ -397,6 +407,7 @@ impl<'arena> Lowerer<'arena> {
     fn expr(
         &mut self,
         expr: &HirExpr,
+        block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
         match *expr {
@@ -415,20 +426,20 @@ impl<'arena> Lowerer<'arena> {
             HirExpr::Function(func_ref) => {
                 Ok((Expr::Function(func_ref), self.program.signatures[&func_ref]))
             }
-            HirExpr::Block(ref exprs) => self.expr_block(exprs, function),
-            HirExpr::Tuple(ref elements) => self.expr_tuple(elements, function),
+            HirExpr::Block(ref exprs) => self.expr_block(exprs, block, function),
+            HirExpr::Tuple(ref elements) => self.expr_tuple(elements, block, function),
             HirExpr::Constructor {
                 ty,
                 index,
                 ref fields,
-            } => self.expr_constructor(ty, index, fields, function),
-            HirExpr::Array(ref array) => self.expr_array(array, function),
+            } => self.expr_constructor(ty, index, fields, block, function),
+            HirExpr::Array(ref array) => self.expr_array(array, block, function),
             HirExpr::Get {
                 object,
                 object_variant,
                 field,
             } => {
-                let (expr, ty) = self.expr_get(object, object_variant, field, function)?;
+                let (expr, ty) = self.expr_get(object, object_variant, field, block, function)?;
                 Ok((
                     Expr::Get {
                         object: self.arena.allocate(expr.object),
@@ -443,38 +454,27 @@ impl<'arena> Lowerer<'arena> {
                 object_variant,
                 field,
                 value,
-            } => self.expr_set(object, object_variant, field, value, function),
-            HirExpr::Call(callee, ref params) => self.expr_call(callee, params, function),
+            } => self.expr_set(object, object_variant, field, value, block, function),
+            HirExpr::Call(callee, ref params) => self.expr_call(callee, params, block, function),
             HirExpr::ContApplication(callee, ref continuations) => {
-                self.expr_cont_application(callee, continuations, function)
+                self.expr_cont_application(callee, continuations, block, function)
             }
-            HirExpr::Unary(operator, operand) => self.expr_unary(operator, operand, function),
+            HirExpr::Unary(operator, operand) => {
+                self.expr_unary(operator, operand, block, function)
+            }
             HirExpr::Binary(left, operator, right) => {
-                self.expr_binary(left, operator, right, function)
+                self.expr_binary(left, operator, right, block, function)
             }
-            HirExpr::Declare { ident, ty, expr } => self.expr_declare(ident, ty, expr, function),
-            HirExpr::Assign { ident, expr } => self.expr_assign(ident, expr, function),
-            HirExpr::Goto(block_id) => Ok((
-                Expr::Goto(block_id),
-                self.program.insert_type(Type::None, self.arena).0,
-            )),
+            HirExpr::Declare { ident, ty, expr } => {
+                self.expr_declare(ident, ty, expr, block, function)
+            }
+            HirExpr::Assign { ident, expr } => self.expr_assign(ident, expr, block, function),
             HirExpr::Unreachable => Ok((
                 Expr::Unreachable,
                 self.program.insert_type(Type::None, self.arena).0,
             )),
             ref expr => todo!("{expr:#?}"),
         }
-    }
-
-    fn block(
-        &mut self,
-        block: &HirBlock,
-        function: &mut Function<'arena>,
-    ) -> Result<Block<'arena>> {
-        let (expr, _) = self.expr(block.expr, function)?;
-        Ok(Block {
-            expr: self.arena.allocate(expr),
-        })
     }
 
     fn function(
@@ -505,10 +505,19 @@ impl<'arena> Lowerer<'arena> {
             return Ok(lir_function);
         }
 
-        for (&block_id, block) in &function.blocks {
-            let block = self.block(block, &mut lir_function)?;
-            lir_function.blocks.insert(block_id, block);
-        }
+        let mut entry_point = Block::new();
+        let (body, body_ty) =
+            self.expr_block(&function.body, &mut entry_point, &mut lir_function)?;
+        entry_point.exprs.push(self.arena.allocate(body));
+        lir_function
+            .blocks
+            .insert(Function::entry_point(), entry_point);
+        let (_, ty_none) = self.program.insert_type(Type::None, self.arena);
+        self.program.types.get_by_left(&body_ty).unwrap().unify(
+            ty_none,
+            &mut self.program,
+            self.arena,
+        )?;
 
         Ok(lir_function)
     }

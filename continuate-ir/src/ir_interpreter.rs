@@ -1,10 +1,10 @@
 use crate::common::BinaryOp;
-use crate::common::BlockId;
 use crate::common::FuncRef;
 use crate::common::Ident;
 use crate::common::Intrinsic;
 use crate::common::Literal;
 use crate::common::UnaryOp;
+use crate::low_level_ir::BlockId;
 use crate::low_level_ir::Expr;
 use crate::low_level_ir::Function;
 use crate::low_level_ir::Program;
@@ -425,19 +425,6 @@ impl<'arena> Executor<'arena> {
         }
     }
 
-    fn begin_scope(&mut self) {
-        let enclosing = mem::replace(
-            &mut self.environment,
-            Rc::new(RefCell::new(Environment::new())),
-        );
-        self.environment.borrow_mut().enclosing = Some(enclosing);
-    }
-
-    fn end_scope(&mut self) {
-        let enclosing = Rc::clone(self.environment.borrow().enclosing.as_ref().unwrap());
-        self.environment = enclosing;
-    }
-
     fn expr_list(&mut self, exprs: &[&Expr<'arena>]) -> ControlFlow<Vec<ValueRef<'arena>>> {
         let mut values = Vec::with_capacity(exprs.len());
         for &expr in exprs {
@@ -491,16 +478,6 @@ impl<'arena> Executor<'arena> {
                 ControlFlow::Value(self.environment.borrow().get(*ident).unwrap())
             }
             Expr::Function(func_ref) => ControlFlow::value(Value::Function(*func_ref), self.arena),
-            Expr::Block(block) => {
-                self.begin_scope();
-                let (&last, block) = block.split_last().unwrap();
-                for &expr in block {
-                    value!(self.expr(expr));
-                }
-                let val = self.expr(last);
-                self.end_scope();
-                val
-            }
             Expr::Tuple(tuple) => {
                 ControlFlow::value(Value::tuple(value!(self.expr_list(tuple))), self.arena)
             }
@@ -627,9 +604,11 @@ impl<'arena> Executor<'arena> {
         drop(env);
         let mut block = function.blocks.get(&Function::entry_point()).unwrap();
         loop {
-            match self.expr(block.expr) {
-                ControlFlow::Goto(block_id) => block = function.blocks.get(&block_id).unwrap(),
-                ctrl => return ctrl.try_cast().unwrap(),
+            for &expr in &block.exprs {
+                match self.expr(expr) {
+                    ControlFlow::Goto(block_id) => block = function.blocks.get(&block_id).unwrap(),
+                    ctrl => return ctrl.try_cast().unwrap(),
+                }
             }
         }
     }

@@ -2,7 +2,6 @@ mod lowering;
 pub use lowering::lower;
 
 use crate::common::BinaryOp;
-use crate::common::BlockId;
 use crate::common::FuncRef;
 use crate::common::Ident;
 use crate::common::Intrinsic;
@@ -13,12 +12,14 @@ use crate::high_level_ir::Program as HirProgram;
 use crate::lib_std::StdLib;
 
 use std::collections::HashMap;
+use std::fmt;
 use std::hash;
 
 use bimap::BiHashMap;
 
 use continuate_arena::Arena;
 use continuate_arena::ArenaSafe;
+use continuate_arena::ArenaSafeCopy;
 
 use continuate_error::Error;
 
@@ -30,7 +31,6 @@ pub enum Expr<'arena> {
     Literal(Literal),
     Ident(Ident),
     Function(FuncRef),
-    Block(Vec<&'arena Expr<'arena>>),
     Tuple(Vec<&'arena Expr<'arena>>),
     Constructor {
         ty: TypeRef,
@@ -140,10 +140,11 @@ impl Type {
         program: &mut Program<'arena>,
         arena: &'arena Arena<'arena>,
     ) -> Result<&'arena Type, Error> {
+        if self == other {
+            return Ok(self);
+        }
+
         match (self, other) {
-            (Type::Int, Type::Int) | (Type::Float, Type::Float) | (Type::String, Type::String) => {
-                Ok(self)
-            }
             (Type::Array(ty_1, len_1), Type::Array(ty_2, len_2)) if len_1 == len_2 => {
                 let ty_1 = *program.types.get_by_left(ty_1).unwrap();
                 let ty_2 = *program.types.get_by_left(ty_2).unwrap();
@@ -231,9 +232,24 @@ pub enum TypeConstructor {
     Sum(Vec<Vec<TypeRef>>),
 }
 
-#[derive(Debug, ArenaSafe)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ArenaSafeCopy)]
+pub struct BlockId(pub(crate) u64);
+
+impl fmt::Debug for BlockId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "BlockId({})", self.0)
+    }
+}
+
+#[derive(Debug, Default, ArenaSafe)]
 pub struct Block<'arena> {
-    pub expr: &'arena Expr<'arena>,
+    pub exprs: Vec<&'arena Expr<'arena>>,
+}
+
+impl<'arena> Block<'arena> {
+    pub const fn new() -> Block<'arena> {
+        Block { exprs: vec![] }
+    }
 }
 
 #[derive(Debug, ArenaSafe)]

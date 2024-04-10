@@ -33,15 +33,6 @@ impl fmt::Debug for TypeRef {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ArenaSafeCopy)]
-pub struct BlockId(pub(crate) u64);
-
-impl fmt::Debug for BlockId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "BlockId({})", self.0)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, ArenaSafeStatic)]
 pub enum Literal {
     Int(i64),

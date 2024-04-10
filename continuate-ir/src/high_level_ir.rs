@@ -1,5 +1,4 @@
 use crate::common::BinaryOp;
-use crate::common::BlockId;
 use crate::common::FuncRef;
 use crate::common::Ident;
 use crate::common::Intrinsic;
@@ -76,9 +75,8 @@ pub enum Expr<'arena> {
 
     Match {
         scrutinee: &'arena Expr<'arena>,
-        arms: HashMap<Pattern, BlockId>,
+        arms: HashMap<Pattern, &'arena Expr<'arena>>,
     },
-    Goto(BlockId),
 
     Closure {
         func: &'arena Expr<'arena>,
@@ -138,15 +136,10 @@ pub enum TypeConstructor {
 }
 
 #[derive(Debug, ArenaSafe)]
-pub struct Block<'arena> {
-    pub expr: &'arena Expr<'arena>,
-}
-
-#[derive(Debug, ArenaSafe)]
 pub struct Function<'arena> {
     pub params: Vec<(Ident, TypeRef)>,
     pub continuations: HashMap<Ident, TypeRef>,
-    pub blocks: HashMap<BlockId, Block<'arena>>,
+    pub body: Vec<&'arena Expr<'arena>>,
     pub captures: Vec<Ident>,
     pub(crate) intrinsic: Option<Intrinsic>,
     next_ident: u64,
@@ -158,7 +151,7 @@ impl<'arena> Function<'arena> {
         Function {
             params: Vec::new(),
             continuations: HashMap::new(),
-            blocks: HashMap::new(),
+            body: Vec::new(),
             captures: Vec::new(),
             intrinsic: None,
             next_ident: 0,
@@ -170,16 +163,6 @@ impl<'arena> Function<'arena> {
         let ident = Ident(self.next_ident);
         self.next_ident += 1;
         ident
-    }
-
-    pub const fn entry_point() -> BlockId {
-        BlockId(0)
-    }
-
-    pub fn new_block(&mut self) -> BlockId {
-        let block = BlockId(self.next_ident);
-        self.next_block += 1;
-        block
     }
 }
 

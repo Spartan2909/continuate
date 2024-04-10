@@ -3,7 +3,6 @@ use std::iter;
 
 use continuate_ir::common::BinaryOp;
 use continuate_ir::common::Literal;
-use continuate_ir::high_level_ir::Block;
 use continuate_ir::high_level_ir::Expr;
 use continuate_ir::high_level_ir::Function;
 use continuate_ir::high_level_ir::Program;
@@ -36,8 +35,7 @@ fn main() {
         let cont_ref = hir_arena.allocate(Expr::Ident(cont));
         let cont_call = hir_arena.allocate(Expr::Call(cont_ref, vec![sum]));
 
-        let block = Block { expr: cont_call };
-        sum_fn.blocks.insert(Function::entry_point(), block);
+        sum_fn.body.push(cont_call);
 
         let sum_fn_ref = program.function();
         program.functions.insert(sum_fn_ref, sum_fn);
@@ -59,8 +57,7 @@ fn main() {
         ));
         let call = hir_arena.allocate(Expr::Call(application, vec![]));
 
-        let block = Block { expr: call };
-        main_fn.blocks.insert(Function::entry_point(), block);
+        main_fn.body.push(call);
 
         let main_fn_ref = program.entry_point();
         program.functions.insert(main_fn_ref, main_fn);
