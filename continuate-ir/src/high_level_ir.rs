@@ -20,13 +20,23 @@ use itertools::Itertools as _;
 
 #[derive(Debug, ArenaSafe)]
 pub enum Pattern {
-    Ident(Ident),
     Wildcard,
+    Ident(Ident),
     Destructure {
         ty: TypeRef,
         variant: Option<usize>,
-        fields: Vec<(Pattern, Option<Ident>)>,
+        fields: Vec<Pattern>,
     },
+}
+
+impl Pattern {
+    pub const fn as_ident(&self) -> Option<Ident> {
+        if let Pattern::Ident(ident) = self {
+            Some(*ident)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, ArenaSafe)]
@@ -75,7 +85,7 @@ pub enum Expr<'arena> {
 
     Match {
         scrutinee: &'arena Expr<'arena>,
-        arms: HashMap<Pattern, &'arena Expr<'arena>>,
+        arms: Vec<(Pattern, &'arena Expr<'arena>)>,
     },
 
     Closure {

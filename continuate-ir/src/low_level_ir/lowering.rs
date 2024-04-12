@@ -6,11 +6,13 @@ use crate::common::UnaryOp;
 use crate::high_level_ir::Expr as HirExpr;
 use crate::high_level_ir::Function as HirFunction;
 use crate::high_level_ir::FunctionTy as HirFunctionTy;
+use crate::high_level_ir::Pattern;
 use crate::high_level_ir::Program as HirProgram;
 use crate::high_level_ir::Type as HirType;
 use crate::high_level_ir::TypeConstructor as HirTypeConstructor;
 use crate::high_level_ir::UserDefinedType as HirUserDefinedType;
 use crate::low_level_ir::Block;
+use crate::low_level_ir::BlockId;
 use crate::low_level_ir::Expr;
 use crate::low_level_ir::Function;
 use crate::low_level_ir::Program;
@@ -18,7 +20,9 @@ use crate::low_level_ir::Type;
 use crate::low_level_ir::TypeConstructor;
 use crate::low_level_ir::UserDefinedType;
 
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::mem;
 
 use continuate_arena::Arena;
 
@@ -53,11 +57,23 @@ struct ExprGet<'arena> {
     field: usize,
 }
 
+enum ArmData<'arena> {
+    Variant {
+        ty: &'arena Type,
+        variant: usize,
+        exhaustive: bool,
+        block: BlockId,
+    },
+    Otherwise,
+    None,
+}
+
 struct Lowerer<'arena> {
     arena: &'arena Arena<'arena>,
     program: Program<'arena>,
     environment: HashMap<Ident, TypeRef>,
     ty_bool: TypeRef,
+    current_block: BlockId,
 }
 
 impl<'arena> Lowerer<'arena> {
@@ -404,6 +420,181 @@ impl<'arena> Lowerer<'arena> {
         Ok((expr, ty))
     }
 
+    fn match_arm(
+        &mut self,
+        scrutinee: (&'arena Expr<'arena>, TypeRef),
+        arm_pat: &Pattern,
+        arm: &HirExpr,
+        otherwise: BlockId,
+        next_id: BlockId,
+        function: &mut Function<'arena>,
+    ) -> Result<ArmData<'arena>> {
+        let mut arm_block = Block::new();
+        let mut arm_block_id = function.block();
+        let (scrutinee, scrutinee_ty_ref) = scrutinee;
+
+        let arm_data = match *arm_pat {
+            Pattern::Wildcard => {
+                arm_block_id = otherwise;
+                ArmData::Otherwise
+            }
+            Pattern::Ident(ident) => {
+                let binding = Expr::Assign {
+                    ident,
+                    expr: scrutinee,
+                };
+                function
+                    .declarations
+                    .insert(ident, (scrutinee_ty_ref, None));
+                arm_block.exprs.push(self.arena.allocate(binding));
+                arm_block_id = otherwise;
+                ArmData::Otherwise
+            }
+            Pattern::Destructure {
+                ty,
+                variant,
+                ref fields,
+            } => {
+                let ty = *self.program.types.get_by_left(&ty).unwrap();
+                for (field, ident) in fields
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(field, pattern)| Some((field, pattern.as_ident()?)))
+                {
+                    let field_ty = ty.field(variant, field).unwrap();
+                    let get = Expr::Get {
+                        object: scrutinee,
+                        object_variant: variant,
+                        field,
+                    };
+                    let binding = Expr::Assign {
+                        ident,
+                        expr: self.arena.allocate(get),
+                    };
+                    function.declarations.insert(ident, (field_ty, None));
+                    arm_block.exprs.push(self.arena.allocate(binding));
+                }
+                // TODO: Handle sub-destructures.
+                if let Some(variant) = variant {
+                    ArmData::Variant {
+                        ty,
+                        variant,
+                        exhaustive: true,
+                        block: arm_block_id,
+                    }
+                } else {
+                    ArmData::None
+                }
+            }
+        };
+        let (arm, arm_ty) = self.expr(arm, &mut arm_block, function)?;
+        arm_block.exprs.push(self.arena.allocate(arm));
+        let goto = Expr::Goto(next_id);
+        arm_block.exprs.push(self.arena.allocate(goto));
+
+        let arm_ty = *self.program.types.get_by_left(&arm_ty).unwrap();
+        arm_ty.unify(
+            self.program.insert_type(Type::None, self.arena).1,
+            &mut self.program,
+            self.arena,
+        )?;
+
+        function.blocks.insert(arm_block_id, arm_block);
+
+        Ok(arm_data)
+    }
+
+    fn expr_match(
+        &mut self,
+        scrutinee: &HirExpr,
+        arms: &[(Pattern, &HirExpr)],
+        block: &mut Block<'arena>,
+        function: &mut Function<'arena>,
+    ) -> Result<(Expr<'arena>, TypeRef)> {
+        let (scrutinee, scrutinee_ty_ref) = self.expr(scrutinee, block, function)?;
+        let scrutinee = self.arena.allocate(scrutinee);
+        let mut scrutinee_ty = *self.program.types.get_by_left(&scrutinee_ty_ref).unwrap();
+
+        let mut discriminants = Vec::new();
+        let otherwise = function.block();
+        let mut has_wildcard = false;
+
+        let next_id = function.block();
+
+        for (arm_pat, arm) in arms {
+            let arm_data = self.match_arm(
+                (scrutinee, scrutinee_ty_ref),
+                arm_pat,
+                arm,
+                otherwise,
+                next_id,
+                function,
+            )?;
+            match arm_data {
+                ArmData::Otherwise => {
+                    has_wildcard = true;
+                    break;
+                }
+                ArmData::Variant {
+                    ty,
+                    variant,
+                    exhaustive,
+                    block,
+                } => {
+                    scrutinee_ty = scrutinee_ty.unify(ty, &mut self.program, self.arena)?;
+                    discriminants.push((variant, exhaustive, block));
+                }
+                ArmData::None => {}
+            }
+        }
+
+        if let Some(variants) = scrutinee_ty.variants() {
+            let mut exhaustive = true;
+            let mut last = false;
+            for &(discriminant, variant_exhaustive, _) in &discriminants {
+                if discriminant == variants {
+                    last = true;
+                }
+                exhaustive &= variant_exhaustive;
+            }
+            if !(exhaustive && last || has_wildcard) {
+                Err("non-exhaustive match")?;
+            }
+        }
+
+        let current_block = mem::replace(block, Block::new());
+        function.blocks.insert(self.current_block, current_block);
+        self.current_block = next_id;
+
+        let scrutinee = if discriminants.is_empty() {
+            &*scrutinee
+        } else {
+            let discriminant = Expr::Function(self.program.lib_std.fn_discriminant);
+            self.arena.allocate(Expr::Call(
+                self.arena.allocate(discriminant),
+                vec![scrutinee],
+            ))
+        };
+
+        if let Entry::Vacant(entry) = function.blocks.entry(otherwise) {
+            let mut otherwise_block = Block::new();
+            otherwise_block
+                .exprs
+                .push(self.arena.allocate(Expr::Unreachable));
+            entry.insert(otherwise_block);
+        }
+        let expr = Expr::Switch {
+            scrutinee,
+            arms: discriminants
+                .iter()
+                .map(|&(variant, _, block)| (variant as i64, block))
+                .collect(),
+            otherwise,
+        };
+
+        Ok((expr, self.program.insert_type(Type::None, self.arena).0))
+    }
+
     fn expr(
         &mut self,
         expr: &HirExpr,
@@ -469,6 +660,10 @@ impl<'arena> Lowerer<'arena> {
                 self.expr_declare(ident, ty, expr, block, function)
             }
             HirExpr::Assign { ident, expr } => self.expr_assign(ident, expr, block, function),
+            HirExpr::Match {
+                scrutinee,
+                ref arms,
+            } => self.expr_match(scrutinee, arms, block, function),
             HirExpr::Unreachable => Ok((
                 Expr::Unreachable,
                 self.program.insert_type(Type::None, self.arena).0,
@@ -505,13 +700,12 @@ impl<'arena> Lowerer<'arena> {
             return Ok(lir_function);
         }
 
-        let mut entry_point = Block::new();
-        let (body, body_ty) =
-            self.expr_block(&function.body, &mut entry_point, &mut lir_function)?;
-        entry_point.exprs.push(self.arena.allocate(body));
-        lir_function
-            .blocks
-            .insert(Function::entry_point(), entry_point);
+        self.current_block = Function::entry_point();
+
+        let mut block = Block::new();
+        let (body, body_ty) = self.expr_block(&function.body, &mut block, &mut lir_function)?;
+        block.exprs.push(self.arena.allocate(body));
+        lir_function.blocks.insert(self.current_block, block);
         let (_, ty_none) = self.program.insert_type(Type::None, self.arena);
         self.program.types.get_by_left(&body_ty).unwrap().unify(
             ty_none,
@@ -528,6 +722,7 @@ impl<'arena> Lowerer<'arena> {
             program: Program::new(program, arena),
             environment: HashMap::new(),
             ty_bool: program.lib_std().ty_bool,
+            current_block: Function::entry_point(),
         };
 
         for (&type_ref, &ty) in &program.types {

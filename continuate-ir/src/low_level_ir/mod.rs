@@ -134,6 +134,7 @@ impl Type {
         }
     }
 
+    /// Ensure that `self` fits in `other`.
     pub(crate) fn unify<'arena>(
         &'arena self,
         other: &'arena Type,
@@ -214,10 +215,25 @@ impl Type {
                 Ok(program.insert_type(ty, arena).1)
             }
             (Type::UserDefined(u1), Type::UserDefined(u2)) if u1 == u2 => Ok(self),
-            (Type::Unknown, _) => Ok(other),
+            (Type::Unknown | Type::None, _) => Ok(other),
             (_, Type::Unknown) => Ok(self),
             _ => Err(format!("expected {other:?}, found {self:?}").into()),
         }
+    }
+
+    pub(crate) fn field(&self, variant: Option<usize>, field: usize) -> Option<TypeRef> {
+        let user_defined = self.as_user_defined()?;
+        match (variant, &user_defined.constructor) {
+            (None, TypeConstructor::Product(fields)) => fields.get(field).copied(),
+            (Some(variant), TypeConstructor::Sum(variants)) => {
+                variants.get(variant)?.get(field).copied()
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn variants(&self) -> Option<usize> {
+        Some(self.as_user_defined()?.constructor.as_sum()?.len())
     }
 }
 
@@ -230,6 +246,16 @@ pub struct UserDefinedType {
 pub enum TypeConstructor {
     Product(Vec<TypeRef>),
     Sum(Vec<Vec<TypeRef>>),
+}
+
+impl TypeConstructor {
+    pub const fn as_sum(&self) -> Option<&Vec<Vec<TypeRef>>> {
+        if let TypeConstructor::Sum(variants) = self {
+            Some(variants)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ArenaSafeCopy)]
@@ -286,7 +312,7 @@ impl<'arena> Function<'arena> {
         BlockId(0)
     }
 
-    pub fn new_block(&mut self) -> BlockId {
+    pub fn block(&mut self) -> BlockId {
         let block = BlockId(self.next_ident);
         self.next_block += 1;
         block
