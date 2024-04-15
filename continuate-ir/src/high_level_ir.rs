@@ -18,7 +18,7 @@ use continuate_arena::ArenaSafe;
 
 use itertools::Itertools as _;
 
-#[derive(Debug, ArenaSafe)]
+#[derive(Debug, PartialEq, ArenaSafe)]
 pub enum Pattern {
     Wildcard,
     Ident(Ident),
