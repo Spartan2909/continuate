@@ -71,7 +71,7 @@ pub enum Expr<'arena> {
     Goto(BlockId),
 
     Closure {
-        func: &'arena Expr<'arena>,
+        func_ref: FuncRef,
         captures: HashMap<Ident, TypeRef>,
     },
 
@@ -284,6 +284,7 @@ pub struct Function<'arena> {
     pub continuations: HashMap<Ident, TypeRef>,
     pub declarations: HashMap<Ident, (TypeRef, Option<Literal>)>,
     pub blocks: HashMap<BlockId, Block<'arena>>,
+    pub captures: HashMap<Ident, TypeRef>,
     pub(crate) intrinsic: Option<Intrinsic>,
     next_ident: u64,
     next_block: u64,
@@ -296,6 +297,7 @@ impl<'arena> Function<'arena> {
             continuations: HashMap::new(),
             declarations: HashMap::new(),
             blocks: HashMap::new(),
+            captures: HashMap::new(),
             intrinsic: None,
             next_ident: 0,
             next_block: 1,

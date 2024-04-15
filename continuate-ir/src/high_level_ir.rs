@@ -89,7 +89,7 @@ pub enum Expr<'arena> {
     },
 
     Closure {
-        func: &'arena Expr<'arena>,
+        func: FuncRef,
     },
 
     Unreachable,

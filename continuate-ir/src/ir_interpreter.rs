@@ -457,8 +457,7 @@ impl<'arena> Executor<'arena> {
         ControlFlow::value(result.unwrap(), self.arena)
     }
 
-    fn closure(&mut self, func: &Expr<'arena>) -> ControlFlow<ValueRef<'arena>> {
-        let func_ref = value!(self.expr(func)).as_fn().unwrap();
+    fn closure(&mut self, func_ref: FuncRef) -> ControlFlow<ValueRef<'arena>> {
         let mut new_env = Environment::new();
         new_env.enclosing = Some(Rc::clone(&self.environment));
         let old_env = mem::replace(&mut *self.environment.borrow_mut(), new_env);
@@ -472,24 +471,22 @@ impl<'arena> Executor<'arena> {
     }
 
     fn expr(&mut self, expr: &Expr<'arena>) -> ControlFlow<ValueRef<'arena>> {
-        match expr {
-            Expr::Literal(lit) => ControlFlow::value(lit.clone().into(), self.arena),
-            Expr::Ident(ident) => {
-                ControlFlow::Value(self.environment.borrow().get(*ident).unwrap())
-            }
-            Expr::Function(func_ref) => ControlFlow::value(Value::Function(*func_ref), self.arena),
-            Expr::Tuple(tuple) => {
+        match *expr {
+            Expr::Literal(ref lit) => ControlFlow::value(lit.clone().into(), self.arena),
+            Expr::Ident(ident) => ControlFlow::Value(self.environment.borrow().get(ident).unwrap()),
+            Expr::Function(func_ref) => ControlFlow::value(Value::Function(func_ref), self.arena),
+            Expr::Tuple(ref tuple) => {
                 ControlFlow::value(Value::tuple(value!(self.expr_list(tuple))), self.arena)
             }
             Expr::Constructor {
                 ty: _,
                 index,
-                fields,
+                ref fields,
             } => ControlFlow::value(
-                Value::user_defined(*index, value!(self.expr_list(fields))),
+                Value::user_defined(index, value!(self.expr_list(fields))),
                 self.arena,
             ),
-            Expr::Array(arr) => {
+            Expr::Array(ref arr) => {
                 ControlFlow::value(Value::array(value!(self.expr_list(arr))), self.arena)
             }
             Expr::Get {
@@ -498,7 +495,7 @@ impl<'arena> Executor<'arena> {
                 field,
             } => {
                 let object = value!(self.expr(object));
-                ControlFlow::Value(object.get(*field).unwrap())
+                ControlFlow::Value(object.get(field).unwrap())
             }
             Expr::Set {
                 object,
@@ -508,19 +505,19 @@ impl<'arena> Executor<'arena> {
             } => {
                 let object = value!(self.expr(object));
                 let value = value!(self.expr(value));
-                object.set(*field, value);
+                object.set(field, value);
                 ControlFlow::Value(value)
             }
-            Expr::Call(callee, params) => {
+            Expr::Call(callee, ref params) => {
                 let callee = value!(self.expr(callee));
                 let params = value!(self.expr_list(params));
                 callee.call(params, HashMap::new(), self).cast()
             }
-            Expr::ContApplication(func, continuations) => {
+            Expr::ContApplication(func, ref continuations) => {
                 let func = value!(self.expr(func));
                 let mut evaluated_continuations = HashMap::with_capacity(continuations.len());
-                for (index, continuation) in continuations {
-                    evaluated_continuations.insert(*index, value!(self.expr(continuation)));
+                for (&index, &continuation) in continuations {
+                    evaluated_continuations.insert(index, value!(self.expr(continuation)));
                 }
                 ControlFlow::value(
                     func.apply_continuations(evaluated_continuations),
@@ -529,29 +526,32 @@ impl<'arena> Executor<'arena> {
             }
             Expr::Unary(op, operand) => {
                 let value = value!(self.expr(operand));
-                match *op {
+                match op {
                     UnaryOp::Neg => {
                         ControlFlow::value(Value::Int(-value.as_int().unwrap()), self.arena)
                     }
                 }
             }
-            Expr::Binary(left, op, right) => self.binary_op(left, right, *op),
+            Expr::Binary(left, op, right) => self.binary_op(left, right, op),
             Expr::Assign { ident, expr } => {
                 let value = value!(self.expr(expr));
-                self.environment.borrow_mut().set(*ident, value);
+                self.environment.borrow_mut().set(ident, value);
                 ControlFlow::Value(value)
             }
             Expr::Switch {
                 scrutinee,
-                arms,
+                ref arms,
                 otherwise,
             } => {
                 let scrutinee = value!(self.expr(scrutinee)).as_int().unwrap();
-                let block_id = arms.get(&scrutinee).copied().unwrap_or(*otherwise);
+                let block_id = arms.get(&scrutinee).copied().unwrap_or(otherwise);
                 ControlFlow::Goto(block_id)
             }
-            Expr::Goto(block_id) => ControlFlow::Goto(*block_id),
-            Expr::Closure { func, captures: _ } => self.closure(func),
+            Expr::Goto(block_id) => ControlFlow::Goto(block_id),
+            Expr::Closure {
+                func_ref,
+                captures: _,
+            } => self.closure(func_ref),
             Expr::Unreachable => unreachable!(),
         }
     }

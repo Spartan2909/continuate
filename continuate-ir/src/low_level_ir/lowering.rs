@@ -1,4 +1,5 @@
 use crate::common::BinaryOp;
+use crate::common::FuncRef;
 use crate::common::Ident;
 use crate::common::Literal;
 use crate::common::TypeRef;
@@ -76,15 +77,16 @@ struct MatchVariant {
     block: BlockId,
 }
 
-struct Lowerer<'arena> {
+struct Lowerer<'a, 'arena> {
     arena: &'arena Arena<'arena>,
     program: Program<'arena>,
     environment: HashMap<Ident, TypeRef>,
     ty_bool: TypeRef,
     current_block: BlockId,
+    hir_program: &'a HirProgram<'a>,
 }
 
-impl<'arena> Lowerer<'arena> {
+impl<'a, 'arena> Lowerer<'a, 'arena> {
     fn expr_list(
         &mut self,
         exprs: &[&HirExpr],
@@ -658,6 +660,24 @@ impl<'arena> Lowerer<'arena> {
         Ok((expr, self.program.insert_type(Type::None, self.arena).0))
     }
 
+    fn expr_closure(&mut self, func_ref: FuncRef) -> Result<(Expr<'arena>, TypeRef)> {
+        let func = self.hir_program.functions[&func_ref];
+        let captures: HashMap<_, _> = func
+            .captures
+            .iter()
+            .map(|&ident| (ident, self.environment[&ident]))
+            .collect();
+
+        let func = self.function(func, captures.clone())?;
+        self.program
+            .functions
+            .insert(func_ref, self.arena.allocate(func));
+
+        let expr = Expr::Closure { func_ref, captures };
+        let ty = self.program.signatures[&func_ref];
+        Ok((expr, ty))
+    }
+
     fn expr(
         &mut self,
         expr: &HirExpr,
@@ -727,18 +747,18 @@ impl<'arena> Lowerer<'arena> {
                 scrutinee,
                 ref arms,
             } => self.expr_match(scrutinee, arms, block, function),
+            HirExpr::Closure { func } => self.expr_closure(func),
             HirExpr::Unreachable => Ok((
                 Expr::Unreachable,
                 self.program.insert_type(Type::None, self.arena).0,
             )),
-            ref expr => todo!("{expr:#?}"),
         }
     }
 
     fn function(
         &mut self,
         function: &HirFunction,
-        environment: &HashMap<Ident, TypeRef>,
+        captures: HashMap<Ident, TypeRef>,
     ) -> Result<Function<'arena>> {
         let mut lir_function = Function::new();
         lir_function.params.clone_from(&function.params);
@@ -748,7 +768,9 @@ impl<'arena> Lowerer<'arena> {
 
         lir_function.next_block = function.next_block;
 
-        self.environment.clone_from(environment);
+        self.environment.clone_from(&captures);
+        lir_function.captures = captures;
+
         for (&param, &ty) in lir_function
             .params
             .iter()
@@ -779,13 +801,14 @@ impl<'arena> Lowerer<'arena> {
         Ok(lir_function)
     }
 
-    fn lower(arena: &'arena Arena<'arena>, program: &HirProgram) -> Result<Program<'arena>> {
+    fn lower(arena: &'arena Arena<'arena>, program: &'a HirProgram<'a>) -> Result<Program<'arena>> {
         let mut lowerer = Lowerer {
             arena,
             program: Program::new(program, arena),
             environment: HashMap::new(),
             ty_bool: program.lib_std().ty_bool,
             current_block: Function::entry_point(),
+            hir_program: program,
         };
 
         for (&type_ref, &ty) in &program.types {
@@ -801,7 +824,7 @@ impl<'arena> Lowerer<'arena> {
             }
             let function = lowerer
                 .arena
-                .allocate(lowerer.function(function, &HashMap::new())?);
+                .allocate(lowerer.function(function, HashMap::new())?);
             lowerer.program.functions.insert(func_ref, function);
         }
 
@@ -812,8 +835,8 @@ impl<'arena> Lowerer<'arena> {
 /// ## Errors
 ///
 /// Returns an error if there is a type error in the program.
-pub fn lower<'arena>(
-    program: &HirProgram,
+pub fn lower<'a, 'arena>(
+    program: &'a HirProgram<'a>,
     arena: &'arena Arena<'arena>,
 ) -> Result<Program<'arena>> {
     Lowerer::lower(arena, program)
