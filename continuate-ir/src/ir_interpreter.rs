@@ -10,6 +10,7 @@ use crate::low_level_ir::Function;
 use crate::low_level_ir::Program;
 
 use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::iter;
 use std::mem;
@@ -19,7 +20,7 @@ use std::rc::Rc;
 use continuate_arena::Arena;
 use continuate_arena::ArenaSafe;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Value<'arena> {
     Int(i64),
     Float(f64),
@@ -204,6 +205,22 @@ impl<'arena> Value<'arena> {
     }
 }
 
+impl<'arena> PartialOrd for Value<'arena> {
+    /// ## Panics
+    /// 
+    /// May panic if any [`RefCell`]s in `self` or `other` are mutably borrowed.
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (Value::Int(i1), Value::Int(i2)) => i1.partial_cmp(i2),
+            (Value::Float(f1), Value::Float(f2)) => f1.partial_cmp(f2),
+            (Value::String(s1), Value::String(s2)) => s1.partial_cmp(s2),
+            (Value::Array(arr1), Value::Array(arr2)) => arr1.partial_cmp(arr2),
+            (Value::Tuple(t1), Value::Tuple(t2)) => t1.partial_cmp(t2),
+            _ => None,
+        }
+    }
+}
+
 impl<'arena> ops::Add for &Value<'arena> {
     type Output = Option<Value<'arena>>;
 
@@ -360,7 +377,7 @@ impl<'arena> ControlFlow<ValueRef<'arena>> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Environment<'arena> {
     enclosing: Option<SharedEnvironment<'arena>>,
     values: HashMap<Ident, ValueRef<'arena>>,
@@ -441,20 +458,37 @@ impl<'arena> Executor<'arena> {
     ) -> ControlFlow<ValueRef<'arena>> {
         let left = value!(self.expr(left));
         let right = value!(self.expr(right));
-        let result = match op {
-            BinaryOp::Add => left + right,
-            BinaryOp::Sub => left - right,
-            BinaryOp::Mul => left * right,
-            BinaryOp::Div => left / right,
-            BinaryOp::Rem => left % right,
-            BinaryOp::Eq
-            | BinaryOp::Ne
-            | BinaryOp::Lt
-            | BinaryOp::Le
-            | BinaryOp::Gt
-            | BinaryOp::Ge => todo!(),
+        let result = if op.is_arithmetic() {
+            let result = match op {
+                BinaryOp::Add => left + right,
+                BinaryOp::Sub => left - right,
+                BinaryOp::Mul => left * right,
+                BinaryOp::Div => left / right,
+                BinaryOp::Rem => left % right,
+                _ => unreachable!(),
+            };
+
+            &*self.arena.allocate(result.unwrap())
+        } else {
+            let ord = left.partial_cmp(right);
+            let cmp = match op {
+                BinaryOp::Eq => Ordering::is_eq,
+                BinaryOp::Ne => Ordering::is_ne,
+                BinaryOp::Lt => Ordering::is_lt,
+                BinaryOp::Le => Ordering::is_le,
+                BinaryOp::Gt => Ordering::is_gt,
+                BinaryOp::Ge => Ordering::is_ge,
+                _ => unreachable!(),
+            };
+            let result = ord.map_or(false, cmp);
+
+            if result {
+                self.program.lib_std.b_true
+            } else {
+                self.program.lib_std.b_false
+            }
         };
-        ControlFlow::value(result.unwrap(), self.arena)
+        ControlFlow::Value(result)
     }
 
     fn closure(&mut self, func_ref: FuncRef) -> ControlFlow<ValueRef<'arena>> {

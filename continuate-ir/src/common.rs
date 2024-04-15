@@ -60,6 +60,13 @@ pub enum BinaryOp {
     Ge,
 }
 
+impl BinaryOp {
+    pub const fn is_arithmetic(self) -> bool {
+        use BinaryOp as Op;
+        matches!(self, Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Rem)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ArenaSafeCopy)]
 pub(crate) enum Intrinsic {
     Discriminant,
