@@ -1,12 +1,12 @@
 mod handle_self;
 use handle_self::handle_self_ty;
-use proc_macro2::Span;
-use syn::Lifetime;
 
 use std::collections::HashSet;
 use std::iter;
 
 use proc_macro::TokenStream;
+
+use proc_macro2::Span;
 
 use quote::quote;
 
@@ -17,6 +17,7 @@ use syn::Data;
 use syn::DeriveInput;
 use syn::Field;
 use syn::Fields;
+use syn::Lifetime;
 use syn::Path;
 use syn::PredicateType;
 use syn::Token;
