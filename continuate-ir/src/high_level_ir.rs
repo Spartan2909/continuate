@@ -119,7 +119,7 @@ pub enum Type {
     Int,
     Float,
     String,
-    Array(TypeRef, u32),
+    Array(TypeRef, u64),
     Tuple(Vec<TypeRef>),
     Function(FunctionTy),
     UserDefined(UserDefinedType),

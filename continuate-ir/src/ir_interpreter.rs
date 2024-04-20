@@ -207,7 +207,7 @@ impl<'arena> Value<'arena> {
 
 impl<'arena> PartialOrd for Value<'arena> {
     /// ## Panics
-    /// 
+    ///
     /// May panic if any [`RefCell`]s in `self` or `other` are mutably borrowed.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {
