@@ -50,53 +50,6 @@ impl<'arena> Value<'arena> {
         }
     }
 
-    /// ## Panics
-    ///
-    /// Panics if `self` is `Value::Closure`.
-    pub(crate) fn clone_to<'a>(&self, arena: &'a Arena<'a>) -> Value<'a> {
-        match *self {
-            Value::Int(i) => Value::Int(i),
-            Value::Float(f) => Value::Float(f),
-            Value::String(ref s) => Value::String(s.clone()),
-            Value::Array(ref array) => Value::Array(RefCell::new(
-                array
-                    .borrow()
-                    .iter()
-                    .map(|value| &*arena.allocate(value.clone_to(arena)))
-                    .collect(),
-            )),
-            Value::Tuple(ref tuple) => Value::Tuple(RefCell::new(
-                tuple
-                    .borrow()
-                    .iter()
-                    .map(|value| &*arena.allocate(value.clone_to(arena)))
-                    .collect(),
-            )),
-            Value::Function(func) => Value::Function(func),
-            Value::ContinuedFunction(func, ref continuations) => Value::ContinuedFunction(
-                arena.allocate(func.clone_to(arena)),
-                continuations
-                    .iter()
-                    .map(|(&ident, value)| (ident, &*arena.allocate(value.clone_to(arena))))
-                    .collect(),
-            ),
-            Value::Closure { .. } => unimplemented!(),
-            Value::UserDefined {
-                discriminant,
-                ref fields,
-            } => Value::UserDefined {
-                discriminant,
-                fields: RefCell::new(
-                    fields
-                        .borrow()
-                        .iter()
-                        .map(|value| &*arena.allocate(value.clone_to(arena)))
-                        .collect(),
-                ),
-            },
-        }
-    }
-
     fn get(&self, index: usize) -> Option<ValueRef<'arena>> {
         match self {
             Value::Array(values)
@@ -426,6 +379,8 @@ struct Executor<'arena> {
     arena: &'arena Arena<'arena>,
     environment: SharedEnvironment<'arena>,
     func_ref: FuncRef,
+    b_true: ValueRef<'arena>,
+    b_false: ValueRef<'arena>,
 }
 
 impl<'arena> Executor<'arena> {
@@ -439,6 +394,14 @@ impl<'arena> Executor<'arena> {
             arena,
             environment: Rc::new(RefCell::new(Environment::new())),
             func_ref,
+            b_true: arena.allocate(Value::UserDefined {
+                discriminant: Some(1),
+                fields: RefCell::new(vec![]),
+            }),
+            b_false: arena.allocate(Value::UserDefined {
+                discriminant: Some(0),
+                fields: RefCell::new(vec![]),
+            }),
         }
     }
 
@@ -483,9 +446,9 @@ impl<'arena> Executor<'arena> {
             let result = ord.map_or(false, cmp);
 
             if result {
-                self.program.lib_std.b_true
+                self.b_true
             } else {
-                self.program.lib_std.b_false
+                self.b_false
             }
         };
         ControlFlow::Value(result)

@@ -332,18 +332,18 @@ pub struct Program<'arena> {
     pub functions: HashMap<FuncRef, &'arena Function<'arena>>,
     pub signatures: HashMap<FuncRef, TypeRef>,
     pub types: BiHashMap<TypeRef, &'arena Type>,
-    pub(crate) lib_std: StdLib<'arena>,
+    pub(crate) lib_std: StdLib,
     next_function: u64,
     next_ty: u64,
 }
 
 impl<'arena> Program<'arena> {
-    pub fn new(program: &HirProgram, arena: &'arena Arena<'arena>) -> Program<'arena> {
+    pub fn new(program: &HirProgram) -> Program<'arena> {
         Program {
             functions: HashMap::new(),
             signatures: HashMap::new(),
             types: BiHashMap::new(),
-            lib_std: program.lib_std().clone_to(arena),
+            lib_std: *program.lib_std(),
             next_function: program.next_function,
             next_ty: program.next_ty,
         }

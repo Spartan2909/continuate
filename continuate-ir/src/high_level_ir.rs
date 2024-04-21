@@ -189,7 +189,7 @@ pub struct Program<'arena> {
     pub types: BiHashMap<TypeRef, &'arena Type>,
     pub(crate) next_function: u64,
     pub(crate) next_ty: u64,
-    lib_std: Option<StdLib<'arena>>,
+    lib_std: Option<StdLib>,
 }
 
 impl<'arena> Program<'arena> {
@@ -207,7 +207,7 @@ impl<'arena> Program<'arena> {
     }
 
     #[allow(clippy::missing_panics_doc)] // Will not panic.
-    pub fn lib_std(&self) -> &StdLib<'arena> {
+    pub fn lib_std(&self) -> &StdLib {
         self.lib_std.as_ref().unwrap()
     }
 

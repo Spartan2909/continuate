@@ -804,7 +804,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
     fn lower(arena: &'arena Arena<'arena>, program: &'a HirProgram<'a>) -> Result<Program<'arena>> {
         let mut lowerer = Lowerer {
             arena,
-            program: Program::new(program, arena),
+            program: Program::new(program),
             environment: HashMap::new(),
             ty_bool: program.lib_std().ty_bool,
             current_block: Function::entry_point(),

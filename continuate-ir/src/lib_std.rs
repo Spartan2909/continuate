@@ -10,27 +10,22 @@ use crate::high_level_ir::Program;
 use crate::high_level_ir::Type;
 use crate::high_level_ir::TypeConstructor;
 use crate::high_level_ir::UserDefinedType;
-use crate::ir_interpreter::Value;
-use crate::ir_interpreter::ValueRef;
 
 use continuate_arena::Arena;
 
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
-pub struct StdLib<'arena> {
+pub struct StdLib {
     pub ty_bool: TypeRef,
     pub ty_int: TypeRef,
     pub ty_float: TypeRef,
     pub ty_string: TypeRef,
 
-    pub b_true: ValueRef<'arena>,
-    pub b_false: ValueRef<'arena>,
-
     pub fn_termination: FuncRef,
     pub fn_discriminant: FuncRef,
 }
 
-impl<'arena> StdLib<'arena> {
+impl StdLib {
     pub const fn ty_for(&self, literal: &Literal) -> TypeRef {
         match literal {
             Literal::Int(_) => self.ty_int,
@@ -38,25 +33,12 @@ impl<'arena> StdLib<'arena> {
             Literal::String(_) => self.ty_string,
         }
     }
-
-    pub(crate) fn clone_to<'a>(&self, arena: &'a Arena<'a>) -> StdLib<'a> {
-        StdLib {
-            ty_bool: self.ty_bool,
-            ty_int: self.ty_int,
-            ty_float: self.ty_float,
-            ty_string: self.ty_string,
-            b_true: arena.allocate(self.b_true.clone_to(arena)),
-            b_false: arena.allocate(self.b_false.clone_to(arena)),
-            fn_termination: self.fn_termination,
-            fn_discriminant: self.fn_discriminant,
-        }
-    }
 }
 
 pub(crate) fn standard_library<'arena>(
     program: &mut Program<'arena>,
     arena: &'arena Arena<'arena>,
-) -> StdLib<'arena> {
+) -> StdLib {
     let ty_bool = UserDefinedType {
         constructor: TypeConstructor::Sum(vec![vec![], vec![]]),
     };
@@ -75,9 +57,6 @@ pub(crate) fn standard_library<'arena>(
     let ty_string = arena.allocate(Type::String);
     let ty_string_ref = program.ty();
     program.types.insert(ty_string_ref, ty_string);
-
-    let b_true = arena.allocate(Value::user_defined(Some(1), vec![]));
-    let b_false = arena.allocate(Value::user_defined(Some(0), vec![]));
 
     let fn_termination = arena.allocate(Function::new());
     let param = Ident(0);
@@ -107,8 +86,6 @@ pub(crate) fn standard_library<'arena>(
         ty_int: ty_int_ref,
         ty_float: ty_float_ref,
         ty_string: ty_string_ref,
-        b_true,
-        b_false,
         fn_termination: fn_termination_ref,
         fn_discriminant: fn_discriminant_ref,
     }
