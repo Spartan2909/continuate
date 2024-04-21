@@ -154,10 +154,11 @@ pub struct Function<'arena> {
     pub(crate) intrinsic: Option<Intrinsic>,
     next_ident: u64,
     pub(crate) next_block: u64,
+    pub name: String,
 }
 
 impl<'arena> Function<'arena> {
-    pub fn new() -> Function<'arena> {
+    pub fn new(name: String) -> Function<'arena> {
         Function {
             params: Vec::new(),
             continuations: HashMap::new(),
@@ -166,6 +167,7 @@ impl<'arena> Function<'arena> {
             intrinsic: None,
             next_ident: 0,
             next_block: 1,
+            name,
         }
     }
 
@@ -173,12 +175,6 @@ impl<'arena> Function<'arena> {
         let ident = Ident(self.next_ident);
         self.next_ident += 1;
         ident
-    }
-}
-
-impl<'arena> Default for Function<'arena> {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

@@ -760,7 +760,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         function: &HirFunction,
         captures: HashMap<Ident, TypeRef>,
     ) -> Result<Function<'arena>> {
-        let mut lir_function = Function::new();
+        let mut lir_function = Function::new(function.name.clone());
         lir_function.params.clone_from(&function.params);
         lir_function
             .continuations

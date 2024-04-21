@@ -24,7 +24,7 @@ fn main() {
         let int_fn = Type::function(vec![std_lib.ty_int], HashMap::new());
         let int_fn_ref = program.insert_type(int_fn, &hir_arena);
 
-        let sum_fn = hir_arena.allocate(Function::new());
+        let sum_fn = hir_arena.allocate(Function::new("sum".to_string()));
         let cont = sum_fn.ident();
         sum_fn.continuations.insert(cont, int_fn_ref);
 
@@ -45,7 +45,7 @@ fn main() {
 
         program.signatures.insert(sum_fn_ref, sum_fn_ty);
 
-        let main_fn = hir_arena.allocate(Function::new());
+        let main_fn = hir_arena.allocate(Function::new("main".to_string()));
         let termination_cont = main_fn.ident();
         main_fn.continuations.insert(termination_cont, int_fn_ref);
 

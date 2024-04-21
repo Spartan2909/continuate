@@ -58,7 +58,7 @@ pub(crate) fn standard_library<'arena>(
     let ty_string_ref = program.ty();
     program.types.insert(ty_string_ref, ty_string);
 
-    let fn_termination = arena.allocate(Function::new());
+    let fn_termination = arena.allocate(Function::new("termination".to_string()));
     let param = Ident(0);
     fn_termination.params.push((param, ty_int_ref));
     fn_termination.intrinsic = Some(Intrinsic::Terminate);
@@ -69,7 +69,7 @@ pub(crate) fn standard_library<'arena>(
     let int_fn = Type::function(vec![ty_int_ref], HashMap::new());
     let int_fn_ref = program.insert_type(int_fn, arena);
 
-    let fn_discriminant = arena.allocate(Function::new());
+    let fn_discriminant = arena.allocate(Function::new("discriminant".to_string()));
     let param = Ident(0);
     fn_discriminant.params.push((param, ty_bool_ref)); // TODO: Should be generic.
     let cont = Ident(1);
