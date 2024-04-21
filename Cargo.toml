@@ -1,6 +1,14 @@
+[package]
+name = "continuate"
+version.workspace = true
+edition = "2021"
+
+[dependencies]
+continuate-ir = { version = "0.1.0", path = "./continuate-ir" }
+continuate-arena = { version = "0.1.0", path = "./continuate-arena" }
+
 [workspace]
-members = ["continuate-arena", "continuate-arena-macros", "continuate-cli", "continuate-ir", "continuate-error"]
-default-members = ["continuate-cli"]
+members = ["continuate-arena", "continuate-arena-macros", "continuate-ir", "continuate-error"]
 resolver = "2"
 package.version = "0.1.0"
 
