@@ -88,7 +88,7 @@ impl<'a, T> Slice<'a, T> {
 
     #[allow(clippy::missing_panics_doc)]
     #[inline]
-    pub fn allocate_slice<'b, A: Allocator + 'b>(slice: &[T], alloc: &A) -> Slice<'b, T>
+    pub fn allocate_slice<'b, A: Allocator + 'b>(slice: &[T], alloc: &'b A) -> Slice<'b, T>
     where
         T: Copy,
     {
@@ -153,6 +153,15 @@ impl<'a, T> IntoIterator for Slice<'a, T> {
     }
 }
 
+impl<'a, T> ops::Index<usize> for Slice<'a, T> {
+    type Output = T;
+
+    #[inline]
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.as_slice()[index]
+    }
+}
+
 /// The layout of a primitive type, a product type, or a single variant of a sum type.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ArenaSafeCopy)]
@@ -210,6 +219,15 @@ impl<'a> TyLayout<'a> {
     pub const fn as_single(&self) -> Option<&SingleLayout<'a>> {
         if let TyLayout::Single(layout) = self {
             Some(layout)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    pub const fn as_sum(&self) -> Option<Slice<'a, SingleLayout<'a>>> {
+        if let TyLayout::Sum { layouts, .. } = *self {
+            Some(layouts)
         } else {
             None
         }
