@@ -39,7 +39,11 @@ pub enum Expr<'arena> {
         index: Option<usize>,
         fields: Vec<&'arena Expr<'arena>>,
     },
-    Array(Vec<&'arena Expr<'arena>>),
+    Array {
+        ty: TypeRef,
+        values: Vec<&'arena Expr<'arena>>,
+        value_ty: TypeRef,
+    },
 
     Get {
         object: &'arena Expr<'arena>,

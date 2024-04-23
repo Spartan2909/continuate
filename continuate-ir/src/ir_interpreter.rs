@@ -483,9 +483,11 @@ impl<'arena> Executor<'arena> {
                 Value::user_defined(index, value!(self.expr_list(fields))),
                 self.arena,
             ),
-            Expr::Array(ref arr) => {
-                ControlFlow::value(Value::array(value!(self.expr_list(arr))), self.arena)
-            }
+            Expr::Array {
+                ty: _,
+                ref values,
+                value_ty: _,
+            } => ControlFlow::value(Value::array(value!(self.expr_list(values))), self.arena),
             Expr::Get {
                 object,
                 object_ty: _,

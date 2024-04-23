@@ -181,17 +181,28 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
         let array = self.expr_list(array, block, function)?;
-        let mut array_ty = self.program.insert_type(Type::Unknown, self.arena).1;
+        let mut value_ty = self.program.insert_type(Type::Unknown, self.arena).1;
         for (_, ty) in &array {
             let ty = *self.program.types.get_by_left(ty).unwrap();
-            array_ty = array_ty.unify(ty, &mut self.program, self.arena)?;
+            value_ty = value_ty.unify(ty, &mut self.program, self.arena)?;
         }
-        let array_ty = *self.program.types.get_by_right(array_ty).unwrap();
+        let value_ty = *self.program.types.get_by_right(value_ty).unwrap();
+        let array_ty = self
+            .program
+            .insert_type(Type::Array(value_ty, array.len() as u64), self.arena)
+            .0;
         let array = array
             .into_iter()
             .map(|(expr, _)| &*self.arena.allocate(expr))
             .collect();
-        Ok((Expr::Array(array), array_ty))
+        Ok((
+            Expr::Array {
+                ty: array_ty,
+                values: array,
+                value_ty,
+            },
+            array_ty,
+        ))
     }
 
     fn expr_get(
