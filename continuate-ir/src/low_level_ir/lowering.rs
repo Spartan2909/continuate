@@ -58,7 +58,7 @@ fn lower_ty(ty: &HirType) -> Type {
 
 struct ExprGet<'arena> {
     object: Expr<'arena>,
-    object_variant: Option<usize>,
+    object_ty: TypeRef,
     field: usize,
 }
 
@@ -108,7 +108,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let mut exprs: Vec<_> = self.expr_list(exprs, block, function)?;
         let (last_expr, block_ty) = exprs.pop().unwrap_or_else(|| {
             let ty = self.program.insert_type(Type::Tuple(vec![]), self.arena).0;
-            (Expr::Tuple(vec![]), ty)
+            (Expr::Tuple { ty, values: vec![] }, ty)
         });
         let exprs = exprs.into_iter().map(|(expr, _)| self.arena.allocate(expr));
         for expr in exprs {
@@ -124,14 +124,16 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
         let elements = self.expr_list(elements, block, function)?;
+
         let types = elements.iter().map(|(_, ty)| *ty).collect();
+        let ty = Type::Tuple(types);
+        let ty = self.program.insert_type(ty, self.arena).0;
+
         let values = elements
             .into_iter()
             .map(|(expr, _)| &*self.arena.allocate(expr))
             .collect();
-        let expr = Expr::Tuple(values);
-        let ty = Type::Tuple(types);
-        let ty = self.program.insert_type(ty, self.arena).0;
+        let expr = Expr::Tuple { ty, values };
         Ok((expr, ty))
     }
 
@@ -195,7 +197,6 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
     fn expr_get(
         &mut self,
         object: &HirExpr,
-        object_variant: Option<usize>,
         field: usize,
         block: &mut Block<'arena>,
         function: &mut Function<'arena>,
@@ -205,32 +206,29 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let user_defined = user_defined
             .as_user_defined()
             .ok_or(format!("cannot access field of {user_defined:?}"))?;
-        let field_ty = match (&user_defined.constructor, object_variant) {
-            (TypeConstructor::Product(ty_fields), None) => ty_fields[field],
-            (TypeConstructor::Sum(variants), Some(index)) => variants[index][field],
-            _ => unreachable!(),
+        let TypeConstructor::Product(ty_fields) = &user_defined.constructor else {
+            return Err("cannot access field of sum".into());
         };
         let expr = ExprGet {
             object,
-            object_variant,
+            object_ty,
             field,
         };
-        Ok((expr, field_ty))
+        Ok((expr, ty_fields[field]))
     }
 
     fn expr_set(
         &mut self,
         object: &HirExpr,
-        object_variant: Option<usize>,
         field: usize,
         value: &HirExpr,
         block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
-        let (expr, field_ty) = self.expr_get(object, object_variant, field, block, function)?;
+        let (expr, field_ty) = self.expr_get(object, field, block, function)?;
         let ExprGet {
             object,
-            object_variant,
+            object_ty,
             field,
         } = expr;
 
@@ -242,7 +240,8 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let ty_ref = *self.program.types.get_by_right(ty).unwrap();
         let expr = Expr::Set {
             object: self.arena.allocate(object),
-            object_variant,
+            object_ty,
+            object_variant: None,
             field,
             value: self.arena.allocate(value),
         };
@@ -479,6 +478,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                 {
                     let get = Expr::Get {
                         object: scrutinee,
+                        object_ty: scrutinee_ty_ref,
                         object_variant: variant,
                         field,
                     };
@@ -708,16 +708,13 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                 ref fields,
             } => self.expr_constructor(ty, index, fields, block, function),
             HirExpr::Array(ref array) => self.expr_array(array, block, function),
-            HirExpr::Get {
-                object,
-                object_variant,
-                field,
-            } => {
-                let (expr, ty) = self.expr_get(object, object_variant, field, block, function)?;
+            HirExpr::Get { object, field } => {
+                let (expr, ty) = self.expr_get(object, field, block, function)?;
                 Ok((
                     Expr::Get {
                         object: self.arena.allocate(expr.object),
-                        object_variant: expr.object_variant,
+                        object_ty: expr.object_ty,
+                        object_variant: None,
                         field: expr.field,
                     },
                     ty,
@@ -725,10 +722,9 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             }
             HirExpr::Set {
                 object,
-                object_variant,
                 field,
                 value,
-            } => self.expr_set(object, object_variant, field, value, block, function),
+            } => self.expr_set(object, field, value, block, function),
             HirExpr::Call(callee, ref params) => self.expr_call(callee, params, block, function),
             HirExpr::ContApplication(callee, ref continuations) => {
                 self.expr_cont_application(callee, continuations, block, function)
@@ -765,8 +761,6 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         lir_function
             .continuations
             .clone_from(&function.continuations);
-
-        lir_function.next_block = function.next_block;
 
         self.environment.clone_from(&captures);
         lir_function.captures = captures;

@@ -4,7 +4,13 @@ use continuate_arena::ArenaSafeCopy;
 use continuate_arena::ArenaSafeStatic;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ArenaSafeCopy)]
-pub struct Ident(pub(crate) u64);
+pub struct Ident(pub(crate) u32);
+
+impl From<Ident> for u32 {
+    fn from(value: Ident) -> Self {
+        value.0
+    }
+}
 
 impl fmt::Debug for Ident {
     #[inline]

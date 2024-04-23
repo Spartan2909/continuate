@@ -40,7 +40,6 @@ impl Pattern {
 }
 
 #[derive(Debug, ArenaSafe)]
-#[non_exhaustive]
 pub enum Expr<'arena> {
     Literal(Literal),
     Ident(Ident),
@@ -56,12 +55,10 @@ pub enum Expr<'arena> {
 
     Get {
         object: &'arena Expr<'arena>,
-        object_variant: Option<usize>,
         field: usize,
     },
     Set {
         object: &'arena Expr<'arena>,
-        object_variant: Option<usize>,
         field: usize,
         value: &'arena Expr<'arena>,
     },
@@ -152,8 +149,7 @@ pub struct Function<'arena> {
     pub body: Vec<&'arena Expr<'arena>>,
     pub captures: Vec<Ident>,
     pub(crate) intrinsic: Option<Intrinsic>,
-    next_ident: u64,
-    pub(crate) next_block: u64,
+    next_ident: u32,
     pub name: String,
 }
 
@@ -166,7 +162,6 @@ impl<'arena> Function<'arena> {
             captures: Vec::new(),
             intrinsic: None,
             next_ident: 0,
-            next_block: 1,
             name,
         }
     }
@@ -186,10 +181,11 @@ pub struct Program<'arena> {
     pub(crate) next_function: u64,
     pub(crate) next_ty: u64,
     lib_std: Option<StdLib>,
+    pub name: String,
 }
 
 impl<'arena> Program<'arena> {
-    pub fn new(arena: &'arena Arena<'arena>) -> Program<'arena> {
+    pub fn new(name: String, arena: &'arena Arena<'arena>) -> Program<'arena> {
         let mut program = Program {
             functions: HashMap::new(),
             signatures: HashMap::new(),
@@ -197,6 +193,7 @@ impl<'arena> Program<'arena> {
             next_function: 1,
             next_ty: 0,
             lib_std: None,
+            name,
         };
         program.lib_std = Some(lib_std::standard_library(&mut program, arena));
         program

@@ -17,7 +17,7 @@ fn main() {
 
     let program = {
         let hir_arena = Arena::new();
-        let mut program = Program::new(&hir_arena);
+        let mut program = Program::new("test".to_string(), &hir_arena);
 
         let std_lib = program.lib_std();
 

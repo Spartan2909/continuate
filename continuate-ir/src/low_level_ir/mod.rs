@@ -26,12 +26,14 @@ use continuate_error::Error;
 use itertools::Itertools as _;
 
 #[derive(Debug, ArenaSafe)]
-#[non_exhaustive]
 pub enum Expr<'arena> {
     Literal(Literal),
     Ident(Ident),
     Function(FuncRef),
-    Tuple(Vec<&'arena Expr<'arena>>),
+    Tuple {
+        ty: TypeRef,
+        values: Vec<&'arena Expr<'arena>>,
+    },
     Constructor {
         ty: TypeRef,
         index: Option<usize>,
@@ -41,11 +43,13 @@ pub enum Expr<'arena> {
 
     Get {
         object: &'arena Expr<'arena>,
+        object_ty: TypeRef,
         object_variant: Option<usize>,
         field: usize,
     },
     Set {
         object: &'arena Expr<'arena>,
+        object_ty: TypeRef,
         object_variant: Option<usize>,
         field: usize,
         value: &'arena Expr<'arena>,
@@ -286,13 +290,13 @@ pub struct Function<'arena> {
     pub blocks: HashMap<BlockId, Block<'arena>>,
     pub captures: HashMap<Ident, TypeRef>,
     pub(crate) intrinsic: Option<Intrinsic>,
-    next_ident: u64,
+    next_ident: u32,
     next_block: u64,
     pub name: String,
 }
 
 impl<'arena> Function<'arena> {
-    pub fn new(name: String,) -> Function<'arena> {
+    pub fn new(name: String) -> Function<'arena> {
         Function {
             params: Vec::new(),
             continuations: HashMap::new(),
@@ -317,7 +321,7 @@ impl<'arena> Function<'arena> {
     }
 
     pub fn block(&mut self) -> BlockId {
-        let block = BlockId(self.next_ident);
+        let block = BlockId(self.next_block);
         self.next_block += 1;
         block
     }
@@ -328,9 +332,10 @@ pub struct Program<'arena> {
     pub functions: HashMap<FuncRef, &'arena Function<'arena>>,
     pub signatures: HashMap<FuncRef, TypeRef>,
     pub types: BiHashMap<TypeRef, &'arena Type>,
-    pub(crate) lib_std: StdLib,
+    pub lib_std: StdLib,
     next_function: u64,
     next_ty: u64,
+    pub name: String,
 }
 
 impl<'arena> Program<'arena> {
@@ -342,6 +347,7 @@ impl<'arena> Program<'arena> {
             lib_std: *program.lib_std(),
             next_function: program.next_function,
             next_ty: program.next_ty,
+            name: program.name.clone(),
         }
     }
 

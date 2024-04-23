@@ -472,8 +472,8 @@ impl<'arena> Executor<'arena> {
             Expr::Literal(ref lit) => ControlFlow::value(lit.clone().into(), self.arena),
             Expr::Ident(ident) => ControlFlow::Value(self.environment.borrow().get(ident).unwrap()),
             Expr::Function(func_ref) => ControlFlow::value(Value::Function(func_ref), self.arena),
-            Expr::Tuple(ref tuple) => {
-                ControlFlow::value(Value::tuple(value!(self.expr_list(tuple))), self.arena)
+            Expr::Tuple { ty: _, ref values } => {
+                ControlFlow::value(Value::tuple(value!(self.expr_list(values))), self.arena)
             }
             Expr::Constructor {
                 ty: _,
@@ -488,6 +488,7 @@ impl<'arena> Executor<'arena> {
             }
             Expr::Get {
                 object,
+                object_ty: _,
                 object_variant: _,
                 field,
             } => {
@@ -496,6 +497,7 @@ impl<'arena> Executor<'arena> {
             }
             Expr::Set {
                 object,
+                object_ty: _,
                 object_variant: _,
                 field,
                 value,
