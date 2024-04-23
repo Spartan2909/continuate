@@ -315,7 +315,10 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         let mut gc_pointer_locations = Vec::with_capacity(types.len());
         for &ty in types {
             let (field_size, field_align, ptr) = self.ty_ref_size_align_ptr(ty);
-            size += align - size % align;
+            let misalignment = size % align;
+            if misalignment != 0 {
+                size += align - misalignment;
+            }
             field_locations.push(size);
             if ptr {
                 gc_pointer_locations.push(size);
