@@ -3,7 +3,7 @@ use std::fmt;
 use continuate_arena::ArenaSafeCopy;
 use continuate_arena::ArenaSafeStatic;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ArenaSafeCopy)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, ArenaSafeCopy)]
 pub struct Ident(pub(crate) u32);
 
 impl From<Ident> for u32 {
@@ -19,7 +19,7 @@ impl fmt::Debug for Ident {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ArenaSafeCopy)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, ArenaSafeCopy)]
 pub struct FuncRef(pub(crate) u64);
 
 impl fmt::Debug for FuncRef {
@@ -29,7 +29,7 @@ impl fmt::Debug for FuncRef {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ArenaSafeCopy)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, ArenaSafeCopy)]
 pub struct TypeRef(pub(crate) u64);
 
 impl fmt::Debug for TypeRef {

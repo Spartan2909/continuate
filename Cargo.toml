@@ -4,11 +4,12 @@ version.workspace = true
 edition = "2021"
 
 [dependencies]
+continuate-backend = { version = "0.1.0", path = "./continuate-backend" }
 continuate-ir = { version = "0.1.0", path = "./continuate-ir" }
 continuate-arena = { version = "0.1.0", path = "./continuate-arena" }
 
 [workspace]
-members = ["continuate-arena", "continuate-arena-macros", "continuate-ir", "continuate-error"]
+members = ["continuate-arena", "continuate-arena-macros", "continuate-ir", "continuate-error", "continuate-backend", "continuate-rt-common"]
 resolver = "2"
 package.version = "0.1.0"
 
