@@ -3,9 +3,12 @@ use std::mem;
 
 use continuate_arena::Arena;
 
+use continuate_ir::common::BinaryOp;
 use continuate_ir::common::FuncRef;
+use continuate_ir::common::Ident;
 use continuate_ir::common::Literal;
 use continuate_ir::common::TypeRef;
+use continuate_ir::common::UnaryOp;
 use continuate_ir::low_level_ir::BlockId;
 use continuate_ir::low_level_ir::Expr;
 use continuate_ir::low_level_ir::Function as LirFunction;
@@ -18,12 +21,16 @@ use continuate_rt_common::SingleLayout;
 use continuate_rt_common::Slice;
 use continuate_rt_common::TyLayout;
 
+use cranelift::codegen::ir;
+use cranelift::codegen::ir::condcodes::FloatCC;
+use cranelift::codegen::ir::condcodes::IntCC;
 use cranelift::codegen::ir::entities::Value;
 use cranelift::codegen::ir::types;
 use cranelift::codegen::ir::AbiParam;
 use cranelift::codegen::ir::Block;
 use cranelift::codegen::ir::Function;
 use cranelift::codegen::ir::InstBuilder;
+use cranelift::codegen::ir::MemFlags;
 use cranelift::codegen::ir::Signature;
 use cranelift::codegen::ir::StackSlotData;
 use cranelift::codegen::ir::StackSlotKind;
@@ -36,6 +43,7 @@ use cranelift::codegen::verify_function;
 use cranelift::codegen::Context;
 use cranelift::frontend::FunctionBuilder;
 use cranelift::frontend::FunctionBuilderContext;
+use cranelift::frontend::Switch;
 use cranelift::frontend::Variable;
 
 use cranelift_module::default_libcall_names;
@@ -82,6 +90,17 @@ const fn u64_as_endianness(value: u64, endianness: Endianness) -> [u8; 8] {
         Endianness::Big => value.to_be_bytes(),
         Endianness::Little => value.to_le_bytes(),
     }
+}
+
+macro_rules! match_ty {
+    { ($scrutinee:expr)
+        $( $ty:expr $( , $alternative:expr )* => $expr:expr ),* $(,)?
+    } => {
+        match $scrutinee {
+            $( _scrutinee if _scrutinee == $ty $( || _scrutinee == $alternative )* => $expr, )*
+            _ => unreachable!(),
+        }
+    };
 }
 
 struct Compiler<'arena, 'a> {
@@ -136,6 +155,14 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
             types::I128
         } else {
             self.ptr_ty()
+        }
+    }
+
+    fn cranelift_endianness(&self) -> ir::Endianness {
+        use ir::Endianness as E;
+        match self.triple.endianness().unwrap() {
+            Endianness::Big => E::Big,
+            Endianness::Little => E::Little,
         }
     }
 
@@ -198,15 +225,14 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         builder.ins().func_addr(self.ptr_ty(), func_ref)
     }
 
-    fn expr_tuple(
+    fn compound_ty(
         &mut self,
         ty: TypeRef,
+        layout: &SingleLayout,
         values: &[&Expr],
         builder: &mut FunctionBuilder,
         block_map: &HashMap<BlockId, Block>,
     ) -> Value {
-        let layout = self.ty_layouts[&ty].0;
-        let layout = layout.as_single().unwrap();
         let stack_slot_data = StackSlotData {
             kind: StackSlotKind::ExplicitSlot,
             size: layout.size.try_into().unwrap(),
@@ -231,6 +257,294 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         dest_ptr
     }
 
+    fn expr_tuple(
+        &mut self,
+        ty: TypeRef,
+        values: &[&Expr],
+        builder: &mut FunctionBuilder,
+        block_map: &HashMap<BlockId, Block>,
+    ) -> Value {
+        let layout = self.ty_layouts[&ty].0.as_single().unwrap();
+        self.compound_ty(ty, layout, values, builder, block_map)
+    }
+
+    fn expr_constructor(
+        &mut self,
+        ty: TypeRef,
+        index: Option<usize>,
+        fields: &[&Expr],
+        builder: &mut FunctionBuilder,
+        block_map: &HashMap<BlockId, Block>,
+    ) -> Value {
+        let layout = self.ty_layouts[&ty].0;
+        let layout = if let Some(index) = index {
+            &layout.as_sum().unwrap()[index]
+        } else {
+            layout.as_single().unwrap()
+        };
+        self.compound_ty(ty, layout, fields, builder, block_map)
+    }
+
+    fn expr_array(
+        &mut self,
+        ty: TypeRef,
+        values: &[&Expr],
+        value_ty: TypeRef,
+        builder: &mut FunctionBuilder,
+        block_map: &HashMap<BlockId, Block>,
+    ) -> Value {
+        let (value_size, _, _) = self.ty_ref_size_align_ptr(value_ty);
+        let size = value_size * values.len() as u64;
+
+        let stack_slot_data = StackSlotData {
+            kind: StackSlotKind::ExplicitSlot,
+            size: size.try_into().unwrap(),
+        };
+        let stack_slot = builder.create_sized_stack_slot(stack_slot_data);
+
+        let mut offset = 0;
+        let value_size = i32::try_from(value_size).unwrap();
+        for &value in values {
+            let value = self.expr(value, builder, block_map);
+            builder.ins().stack_store(value, stack_slot, offset);
+            offset += value_size;
+        }
+
+        let dest_ptr = self.alloc_gc(ty, None, builder);
+
+        let src_ptr = builder.ins().stack_addr(self.ptr_ty(), stack_slot, 0);
+
+        let size = builder.ins().iconst(self.ptr_ty(), size as i64);
+
+        builder.call_memcpy(self.module.target_config(), dest_ptr, src_ptr, size);
+
+        dest_ptr
+    }
+
+    fn field_information(
+        &self,
+        object_ty: TypeRef,
+        object_variant: Option<usize>,
+        field: usize,
+    ) -> (&'arena SingleLayout<'arena>, TypeRef) {
+        let constructor = &self
+            .program
+            .types
+            .get_by_left(&object_ty)
+            .unwrap()
+            .as_user_defined()
+            .unwrap()
+            .constructor;
+        match (self.ty_layouts[&object_ty].0, object_variant, constructor) {
+            (TyLayout::Single(layout), None, TypeConstructor::Product(fields)) => {
+                (layout, fields[field])
+            }
+            (TyLayout::Sum { layouts, .. }, Some(variant), TypeConstructor::Sum(variants)) => {
+                (&layouts[variant], variants[variant][field])
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn expr_get(
+        &mut self,
+        object: &Expr,
+        object_ty: TypeRef,
+        object_variant: Option<usize>,
+        field: usize,
+        builder: &mut FunctionBuilder,
+        block_map: &HashMap<BlockId, Block>,
+    ) -> Value {
+        let object = self.expr(object, builder, block_map);
+        let (layout, field_ty) = self.field_information(object_ty, object_variant, field);
+        let field_ty = self.ty_for(field_ty);
+        builder.ins().load(
+            field_ty,
+            MemFlags::new()
+                .with_endianness(self.cranelift_endianness())
+                .with_aligned()
+                .with_heap()
+                .with_notrap(),
+            object,
+            layout.field_locations[field] as i32,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn expr_set(
+        &mut self,
+        object: &Expr,
+        object_ty: TypeRef,
+        object_variant: Option<usize>,
+        field: usize,
+        value: &Expr,
+        builder: &mut FunctionBuilder,
+        block_map: &HashMap<BlockId, Block>,
+    ) -> Value {
+        let object = self.expr(object, builder, block_map);
+        let layout = self.field_information(object_ty, object_variant, field).0;
+        let value = self.expr(value, builder, block_map);
+        builder.ins().store(
+            MemFlags::new()
+                .with_endianness(self.cranelift_endianness())
+                .with_aligned()
+                .with_heap()
+                .with_notrap(),
+            value,
+            object,
+            layout.field_locations[field] as i32,
+        );
+        value
+    }
+
+    fn expr_unary(
+        &mut self,
+        operator: UnaryOp,
+        operand: &Expr,
+        operand_ty: TypeRef,
+        builder: &mut FunctionBuilder,
+        block_map: &HashMap<BlockId, Block>,
+    ) -> Value {
+        let operand = self.expr(operand, builder, block_map);
+        let operand_ty = self.ty_for(operand_ty);
+        match operator {
+            UnaryOp::Neg if operand_ty == types::F64 => builder.ins().ineg(operand),
+            UnaryOp::Neg if operand_ty == types::I64 => builder.ins().fneg(operand),
+            UnaryOp::Neg => unreachable!(),
+        }
+    }
+
+    #[allow(clippy::cognitive_complexity)]
+    #[allow(clippy::too_many_arguments)]
+    fn expr_binary(
+        &mut self,
+        left: &Expr,
+        left_ty: TypeRef,
+        operator: BinaryOp,
+        right: &Expr,
+        right_ty: TypeRef,
+        builder: &mut FunctionBuilder,
+        block_map: &HashMap<BlockId, Block>,
+    ) -> Value {
+        debug_assert_eq!(left_ty, right_ty);
+        let left = self.expr(left, builder, block_map);
+        let left_ty = self.ty_for(left_ty);
+        let right = self.expr(right, builder, block_map);
+        match operator {
+            BinaryOp::Add => match_ty! { (left_ty)
+                types::I64 => builder.ins().iadd(left, right),
+                types::F64 => builder.ins().fadd(left, right),
+            },
+            BinaryOp::Sub => match_ty! { (left_ty)
+                types::I64 => builder.ins().isub(left, right),
+                types::F64 => builder.ins().isub(left, right),
+            },
+            BinaryOp::Mul => match_ty! { (left_ty)
+                types::I64 => builder.ins().imul(left, right),
+                types::F64 => builder.ins().fmul(left, right),
+            },
+            BinaryOp::Div => match_ty! { (left_ty)
+                types::I64 => builder.ins().sdiv(left, right),
+                types::F64 => builder.ins().fdiv(left, right),
+            },
+            BinaryOp::Rem => match_ty! { (left_ty)
+                types::I64 => builder.ins().srem(left, right),
+                types::F64 => builder.ins().srem(left, right),
+            },
+            BinaryOp::Eq => match_ty! { (left_ty)
+                types::I64, self.fat_ptr_ty() => builder.ins().icmp(IntCC::Equal, left, right),
+                types::F64 => builder.ins().fcmp(FloatCC::Equal, left, right),
+            },
+            BinaryOp::Ne => match_ty! { (left_ty)
+                types::I64, self.fat_ptr_ty() => builder.ins().icmp(IntCC::NotEqual, left, right),
+                types::F64 => builder.ins().fcmp(FloatCC::NotEqual, left, right),
+            },
+            BinaryOp::Lt => match_ty! { (left_ty)
+                types::I64, self.fat_ptr_ty() => builder.ins().icmp(IntCC::SignedLessThan, left, right),
+                types::F64 => builder.ins().fcmp(FloatCC::LessThan, left, right),
+            },
+            BinaryOp::Le => match_ty! { (left_ty)
+                types::I64, self.fat_ptr_ty() => builder.ins().icmp(IntCC::SignedLessThanOrEqual, left, right),
+                types::F64 => builder.ins().fcmp(FloatCC::LessThanOrEqual, left, right),
+            },
+            BinaryOp::Gt => match_ty! { (left_ty)
+                types::I64, self.fat_ptr_ty() => builder.ins().icmp(IntCC::SignedGreaterThan, left, right),
+                types::F64 => builder.ins().fcmp(FloatCC::GreaterThan, left, right),
+            },
+            BinaryOp::Ge => match_ty! { (left_ty)
+                types::I64, self.fat_ptr_ty() => builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, left, right),
+                types::F64 => builder.ins().fcmp(FloatCC::GreaterThanOrEqual, left, right),
+            },
+        }
+    }
+
+    fn expr_assign(
+        &mut self,
+        ident: Ident,
+        expr: &Expr,
+        builder: &mut FunctionBuilder,
+        block_map: &HashMap<BlockId, Block>,
+    ) -> Value {
+        let value = self.expr(expr, builder, block_map);
+        builder.def_var(Variable::from_u32(ident.into()), value);
+        value
+    }
+
+    fn expr_switch(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &HashMap<i64, BlockId>,
+        otherwise: BlockId,
+        builder: &mut FunctionBuilder,
+        block_map: &HashMap<BlockId, Block>,
+    ) -> Value {
+        let scrutinee = self.expr(scrutinee, builder, block_map);
+        let mut switch = Switch::new();
+        for (&val, &block_id) in arms {
+            switch.set_entry(val as u128, block_map[&block_id]);
+        }
+        switch.emit(builder, scrutinee, block_map[&otherwise]);
+        builder.ins().iconst(types::I8, 0)
+    }
+
+    fn expr_goto(
+        block_id: BlockId,
+        builder: &mut FunctionBuilder,
+        block_map: &HashMap<BlockId, Block>,
+    ) -> Value {
+        builder.switch_to_block(block_map[&block_id]);
+        builder.ins().iconst(types::I8, 0)
+    }
+
+    fn expr_discriminant(
+        &mut self,
+        value: &Expr,
+        value_ty: TypeRef,
+        builder: &mut FunctionBuilder,
+        block_map: &HashMap<BlockId, Block>,
+    ) -> Value {
+        let value = self.expr(value, builder, block_map);
+        if matches!(
+            self.program.types.get_by_left(&value_ty).unwrap(),
+            LirType::UserDefined(UserDefinedType {
+                constructor: TypeConstructor::Sum(_)
+            })
+        ) {
+            builder.ins().load(
+                self.ptr_ty(),
+                MemFlags::new()
+                    .with_endianness(self.cranelift_endianness())
+                    .with_aligned()
+                    .with_heap()
+                    .with_notrap(),
+                value,
+                -(self.ptr_ty().bytes() as i32),
+            )
+        } else {
+            builder.ins().iconst(self.ptr_ty(), 0)
+        }
+    }
+
     fn expr(
         &mut self,
         expr: &Expr,
@@ -244,6 +558,59 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
             Expr::Ident(ident) => builder.use_var(Variable::from_u32(ident.into())),
             Expr::Function(func_ref) => self.expr_function(func_ref, builder),
             Expr::Tuple { ty, ref values } => self.expr_tuple(ty, values, builder, block_map),
+            Expr::Constructor {
+                ty,
+                index,
+                ref fields,
+            } => self.expr_constructor(ty, index, fields, builder, block_map),
+            Expr::Array {
+                ty,
+                ref values,
+                value_ty,
+            } => self.expr_array(ty, values, value_ty, builder, block_map),
+            Expr::Get {
+                object,
+                object_ty,
+                object_variant,
+                field,
+            } => self.expr_get(object, object_ty, object_variant, field, builder, block_map),
+            Expr::Set {
+                object,
+                object_ty,
+                object_variant,
+                field,
+                value,
+            } => self.expr_set(
+                object,
+                object_ty,
+                object_variant,
+                field,
+                value,
+                builder,
+                block_map,
+            ),
+            Expr::Unary {
+                operator,
+                operand,
+                operand_ty,
+            } => self.expr_unary(operator, operand, operand_ty, builder, block_map),
+            Expr::Binary {
+                left,
+                left_ty,
+                operator,
+                right,
+                right_ty,
+            } => self.expr_binary(left, left_ty, operator, right, right_ty, builder, block_map),
+            Expr::Assign { ident, expr } => self.expr_assign(ident, expr, builder, block_map),
+            Expr::Switch {
+                scrutinee,
+                ref arms,
+                otherwise,
+            } => self.expr_switch(scrutinee, arms, otherwise, builder, block_map),
+            Expr::Goto(block_id) => Self::expr_goto(block_id, builder, block_map),
+            Expr::Discriminant { value, value_ty } => {
+                self.expr_discriminant(value, value_ty, builder, block_map)
+            }
             _ => todo!(),
         }
     }
