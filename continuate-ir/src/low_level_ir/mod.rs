@@ -79,6 +79,8 @@ pub enum Expr<'arena> {
         captures: HashMap<Ident, TypeRef>,
     },
 
+    Discriminant(&'arena Expr<'arena>),
+
     Unreachable,
 }
 

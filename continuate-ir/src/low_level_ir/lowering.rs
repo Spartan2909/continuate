@@ -508,9 +508,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                                 },
                         } => {
                             switch_ty.unify(field_ty, &mut self.program, self.arena)?;
-                            let discriminant = Expr::Function(self.program.lib_std.fn_discriminant);
-                            let discriminant =
-                                Expr::Call(self.arena.allocate(discriminant), vec![get]);
+                            let discriminant = Expr::Discriminant(get);
                             let arms = iter::once((variant as i64, switch_arm_id));
                             let switch = Expr::Switch {
                                 scrutinee: self.arena.allocate(discriminant),
@@ -628,11 +626,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let scrutinee = if discriminants.is_empty() {
             &*scrutinee
         } else {
-            let discriminant = Expr::Function(self.program.lib_std.fn_discriminant);
-            self.arena.allocate(Expr::Call(
-                self.arena.allocate(discriminant),
-                vec![scrutinee],
-            ))
+            self.arena.allocate(Expr::Discriminant(scrutinee))
         };
 
         if let Entry::Vacant(entry) = function.blocks.entry(otherwise) {

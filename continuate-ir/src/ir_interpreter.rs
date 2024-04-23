@@ -551,6 +551,10 @@ impl<'arena> Executor<'arena> {
                 func_ref,
                 captures: _,
             } => self.closure(func_ref),
+            Expr::Discriminant(expr) => {
+                let value = value!(self.expr(expr));
+                ControlFlow::value(Value::Int(value.discriminant()), self.arena)
+            }
             Expr::Unreachable => unreachable!(),
         }
     }
