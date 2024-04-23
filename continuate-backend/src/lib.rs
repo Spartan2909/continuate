@@ -9,13 +9,13 @@ use continuate_ir::common::Ident;
 use continuate_ir::common::Literal;
 use continuate_ir::common::TypeRef;
 use continuate_ir::common::UnaryOp;
-use continuate_ir::low_level_ir::BlockId;
-use continuate_ir::low_level_ir::Expr;
-use continuate_ir::low_level_ir::Function as LirFunction;
-use continuate_ir::low_level_ir::Program;
-use continuate_ir::low_level_ir::Type as LirType;
-use continuate_ir::low_level_ir::TypeConstructor;
-use continuate_ir::low_level_ir::UserDefinedType;
+use continuate_ir::mid_level_ir::BlockId;
+use continuate_ir::mid_level_ir::Expr;
+use continuate_ir::mid_level_ir::Function as MirFunction;
+use continuate_ir::mid_level_ir::Program;
+use continuate_ir::mid_level_ir::Type as MirType;
+use continuate_ir::mid_level_ir::TypeConstructor;
+use continuate_ir::mid_level_ir::UserDefinedType;
 
 use continuate_rt_common::SingleLayout;
 use continuate_rt_common::Slice;
@@ -526,7 +526,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         let value = self.expr(value, builder, block_map);
         if matches!(
             self.program.types.get_by_left(&value_ty).unwrap(),
-            LirType::UserDefined(UserDefinedType {
+            MirType::UserDefined(UserDefinedType {
                 constructor: TypeConstructor::Sum(_)
             })
         ) {
@@ -617,7 +617,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
 
     fn function(
         &mut self,
-        lir_function: &LirFunction,
+        lir_function: &MirFunction,
         func_ref: FuncRef,
         func_ctx: &mut FunctionBuilderContext,
     ) {
@@ -652,7 +652,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
             .map(|&id| (id, builder.create_block()))
             .collect();
 
-        builder.append_block_params_for_function_params(block_map[&LirFunction::entry_point()]);
+        builder.append_block_params_for_function_params(block_map[&MirFunction::entry_point()]);
 
         for (&block_id, block) in &lir_function.blocks {
             builder.switch_to_block(block_map[&block_id]);
@@ -704,14 +704,14 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
     fn ty_ref_size_align_ptr(&self, ty: TypeRef) -> (u64, u64, bool) {
         match **self.program.types.get_by_left(&ty).unwrap() {
             _ if ty == self.program.lib_std.ty_bool => (1, 1, false),
-            LirType::Int | LirType::Float => (8, 8, false),
-            LirType::Array(_, _)
-            | LirType::Tuple(_)
-            | LirType::Function(_)
-            | LirType::UserDefined(_) => (8, 8, true),
-            LirType::String => (16, 8, true),
-            LirType::Unknown => unreachable!(),
-            LirType::None => (0, 1, false),
+            MirType::Int | MirType::Float => (8, 8, false),
+            MirType::Array(_, _)
+            | MirType::Tuple(_)
+            | MirType::Function(_)
+            | MirType::UserDefined(_) => (8, 8, true),
+            MirType::String => (16, 8, true),
+            MirType::Unknown => unreachable!(),
+            MirType::None => (0, 1, false),
         }
     }
 
@@ -900,11 +900,11 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         let ty = *self.program.types.get_by_left(&ty_ref).unwrap();
         let layout: TyLayout<'arena> = match *ty {
             _ if ty_ref == self.program.lib_std.ty_bool => SingleLayout::primitive(1, 1).into(),
-            LirType::Int | LirType::Float | LirType::Function(_) => {
+            MirType::Int | MirType::Float | MirType::Function(_) => {
                 SingleLayout::primitive(8, 8).into()
             }
-            LirType::String => SingleLayout::primitive(16, 8).into(),
-            LirType::Array(elem_ty, len) => {
+            MirType::String => SingleLayout::primitive(16, 8).into(),
+            MirType::Array(elem_ty, len) => {
                 let (elem_size, elem_align, ptr) = self.ty_ref_size_align_ptr(elem_ty);
                 let field_locations: Vec<_> =
                     (0..elem_size * len).step_by(elem_size as usize).collect();
@@ -921,11 +921,11 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
                 }
                 .into()
             }
-            LirType::Tuple(ref types)
-            | LirType::UserDefined(UserDefinedType {
+            MirType::Tuple(ref types)
+            | MirType::UserDefined(UserDefinedType {
                 constructor: TypeConstructor::Product(ref types),
             }) => self.compund_ty_layout(types).into(),
-            LirType::UserDefined(UserDefinedType {
+            MirType::UserDefined(UserDefinedType {
                 constructor: TypeConstructor::Sum(ref variants),
             }) => {
                 let layouts: Vec<_> = variants
@@ -943,8 +943,8 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
                     align,
                 }
             }
-            LirType::Unknown => unreachable!(),
-            LirType::None => SingleLayout::primitive(0, 1).into(),
+            MirType::Unknown => unreachable!(),
+            MirType::None => SingleLayout::primitive(0, 1).into(),
         };
 
         let global_id = self.declare_ty_layout_global(&layout);

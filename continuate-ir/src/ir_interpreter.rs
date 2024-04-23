@@ -4,10 +4,10 @@ use crate::common::Ident;
 use crate::common::Intrinsic;
 use crate::common::Literal;
 use crate::common::UnaryOp;
-use crate::low_level_ir::BlockId;
-use crate::low_level_ir::Expr;
-use crate::low_level_ir::Function;
-use crate::low_level_ir::Program;
+use crate::mid_level_ir::BlockId;
+use crate::mid_level_ir::Expr;
+use crate::mid_level_ir::Function;
+use crate::mid_level_ir::Program;
 
 use std::cell::RefCell;
 use std::cmp::Ordering;

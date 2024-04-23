@@ -8,7 +8,7 @@ use continuate_ir::high_level_ir::Function;
 use continuate_ir::high_level_ir::Program;
 use continuate_ir::high_level_ir::Type;
 use continuate_ir::ir_interpreter;
-use continuate_ir::low_level_ir;
+use continuate_ir::mid_level_ir;
 
 use continuate_arena::Arena;
 
@@ -62,7 +62,7 @@ fn main() {
         let main_fn_ref = program.entry_point();
         program.functions.insert(main_fn_ref, main_fn);
 
-        low_level_ir::lower(&program, &lir_arena)
+        mid_level_ir::lower(&program, &lir_arena)
     };
 
     dbg!(ir_interpreter::run(program.unwrap(), &lir_arena));
