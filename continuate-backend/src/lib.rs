@@ -132,6 +132,8 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
             types::F64
         } else if ty == self.program.lib_std.ty_bool {
             types::I8
+        } else if ty == self.program.lib_std.ty_string {
+            types::I128
         } else {
             self.ptr_ty()
         }
