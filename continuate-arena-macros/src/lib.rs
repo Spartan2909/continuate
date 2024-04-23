@@ -28,6 +28,7 @@ use syn::TypeParamBound;
 use syn::WhereClause;
 use syn::WherePredicate;
 
+/// Derive `ArenaSafe` for a type whose fields are `ArenaSafe` and which doesn't implement [`Drop`].
 #[proc_macro_derive(ArenaSafe)]
 pub fn derive_arena_safe(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -59,6 +60,7 @@ pub fn derive_arena_safe(input: TokenStream) -> TokenStream {
     }.into()
 }
 
+/// Derive `ArenaSafe` for a `Copy` type.
 #[proc_macro_derive(ArenaSafeCopy)]
 pub fn derive_arena_safe_copy(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -81,6 +83,7 @@ pub fn derive_arena_safe_copy(input: TokenStream) -> TokenStream {
     }.into()
 }
 
+/// Derive `ArenaSafe` for a `'static` type.
 #[proc_macro_derive(ArenaSafeStatic)]
 pub fn derive_arena_safe_static(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
