@@ -108,7 +108,7 @@ impl<'arena> Arena<'arena> {
     }
 
     #[inline(always)]
-    fn allocate_raw(&'arena self, layout: Layout) -> Result<NonNull<()>, AllocError> {
+    fn allocate_raw(&self, layout: Layout) -> Result<NonNull<()>, AllocError> {
         assert!(layout.align() <= START_CAPACITY);
 
         // SAFETY: This is the only access to `*self.chunks`.
@@ -183,7 +183,7 @@ trait Any {}
 impl<T: ?Sized> Any for T {}
 
 // SAFETY: All returned pointers are valid.
-unsafe impl<'arena> Allocator for &'arena Arena<'arena> {
+unsafe impl<'arena> Allocator for Arena<'arena> {
     #[inline]
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         let data: NonNull<u8> = self.allocate_raw(layout)?.cast();
@@ -201,7 +201,7 @@ unsafe impl<'arena> Allocator for &'arena Arena<'arena> {
         old_layout: Layout,
         new_layout: Layout,
     ) -> Result<NonNull<[u8]>, AllocError> {
-        let new_ptr = self.allocate(new_layout)?;
+        let new_ptr = Allocator::allocate(self, new_layout)?;
 
         // SAFETY: `new_layout.size()` >= `old_layout.size()`, and `allocate` returns a valid
         // pointer.
@@ -240,7 +240,7 @@ unsafe impl<'arena> Allocator for &'arena Arena<'arena> {
         if ptr.as_ptr() as usize & (new_layout.align() - 1) == 0 {
             Ok(NonNull::slice_from_raw_parts(ptr, old_layout.size()))
         } else {
-            let new_ptr = self.allocate(new_layout)?;
+            let new_ptr = Allocator::allocate(self, new_layout)?;
             // SAFETY: `new_layout.size()` <= `old_layout.size()`, and `allocate` returns a valid
             // pointer.
             unsafe {

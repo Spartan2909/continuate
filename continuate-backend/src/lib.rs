@@ -326,8 +326,8 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         SingleLayout {
             size,
             align,
-            field_locations: Slice::allocate_slice(&field_locations, &self.arena),
-            gc_pointer_locations: Slice::allocate_slice(&gc_pointer_locations, &self.arena),
+            field_locations: Slice::allocate_slice(&field_locations, self.arena),
+            gc_pointer_locations: Slice::allocate_slice(&gc_pointer_locations, self.arena),
         }
     }
 
@@ -538,7 +538,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
                 let (elem_size, elem_align, ptr) = self.ty_ref_size_align_ptr(elem_ty);
                 let field_locations: Vec<_> =
                     (0..elem_size * len).step_by(elem_size as usize).collect();
-                let field_locations = Slice::allocate_slice(&field_locations, &self.arena);
+                let field_locations = Slice::allocate_slice(&field_locations, self.arena);
                 SingleLayout {
                     size: elem_align * len,
                     align: elem_align,
@@ -568,7 +568,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
                     .fold(1, |align, layout| align.max(layout.align));
 
                 TyLayout::Sum {
-                    layouts: Slice::allocate_slice(&layouts, &self.arena),
+                    layouts: Slice::allocate_slice(&layouts, self.arena),
                     size,
                     align,
                 }
