@@ -343,7 +343,11 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         }
     }
 
-    fn declare_const(&mut self, contents: Box<[u8]>, align: Option<u64>) -> DataId {
+    fn declare_const(&mut self, contents: Box<[u8]>, align: Option<u64>) -> Option<DataId> {
+        if contents.is_empty() {
+            return None;
+        }
+
         let global = self.module.declare_anonymous_data(false, false).unwrap();
         self.data_description.clear();
         self.data_description.define(contents);
@@ -352,7 +356,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
             .define_data(global, &self.data_description)
             .unwrap();
 
-        global
+        Some(global)
     }
 
     fn int_as_target_usize<T: Into<u64>>(&self, i: T, sink: &mut Vec<u8>) {
@@ -391,9 +395,22 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         ptr
     }
 
+    fn dangling_static_ptr(&mut self, align: Option<u64>) -> DataId {
+        let ptr = self.module.declare_anonymous_data(false, false).unwrap();
+        self.data_description.clear();
+        let mut contents = Vec::with_capacity(self.ptr_ty().bytes() as usize);
+        self.int_as_target_usize(align.unwrap_or(1), &mut contents);
+        self.data_description.define(contents.into_boxed_slice());
+        self.module
+            .define_data(ptr, &self.data_description)
+            .unwrap();
+        ptr
+    }
+
     fn declare_static(&mut self, contents: Box<[u8]>, align: Option<u64>) -> DataId {
         let global = self.declare_const(contents, align);
-        self.pointer_to_global(global, align)
+        let dangling = self.dangling_static_ptr(align);
+        global.map_or(dangling, |global| self.pointer_to_global(global, align))
     }
 
     fn append_single_layout_global(
@@ -418,7 +435,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
 
         (
             (mem::offset_of!(SingleLayout, gc_pointer_locations) + offset) as u32,
-            gc_pointer_locations,
+            gc_pointer_locations.unwrap_or_else(|| self.dangling_static_ptr(Some(8))),
         )
     }
 
