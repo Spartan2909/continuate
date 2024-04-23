@@ -62,9 +62,19 @@ pub enum Expr<'arena> {
     Call(&'arena Expr<'arena>, Vec<&'arena Expr<'arena>>),
     ContApplication(&'arena Expr<'arena>, HashMap<Ident, &'arena Expr<'arena>>),
 
-    Unary(UnaryOp, &'arena Expr<'arena>),
+    Unary {
+        operator: UnaryOp,
+        operand: &'arena Expr<'arena>,
+        operand_ty: TypeRef,
+    },
 
-    Binary(&'arena Expr<'arena>, BinaryOp, &'arena Expr<'arena>),
+    Binary {
+        left: &'arena Expr<'arena>,
+        left_ty: TypeRef,
+        operator: BinaryOp,
+        right: &'arena Expr<'arena>,
+        right_ty: TypeRef,
+    },
 
     Assign {
         ident: Ident,
@@ -83,7 +93,10 @@ pub enum Expr<'arena> {
         captures: HashMap<Ident, TypeRef>,
     },
 
-    Discriminant(&'arena Expr<'arena>),
+    Discriminant {
+        value: &'arena Expr<'arena>,
+        value_ty: TypeRef,
+    },
 
     Unreachable,
 }

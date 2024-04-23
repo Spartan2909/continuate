@@ -350,7 +350,11 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             (UnaryOp::Neg, Type::Int | Type::Float) => input_ty_ref,
             _ => Err(format!("cannot apply {operator:?} to {input_ty:?}"))?,
         };
-        let expr = Expr::Unary(operator, self.arena.allocate(operand));
+        let expr = Expr::Unary {
+            operator,
+            operand: self.arena.allocate(operand),
+            operand_ty: input_ty_ref,
+        };
         Ok((expr, output_ty))
     }
 
@@ -379,9 +383,9 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                 r @ (Type::Int | Type::Float),
             ) if l == r => left_ty_ref,
             (
-                l @ (Type::Int | Type::Float),
+                l @ (Type::Int | Type::Float | Type::String),
                 BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge,
-                r @ (Type::Int | Type::Float),
+                r @ (Type::Int | Type::Float | Type::String),
             ) if l == r => self.ty_bool,
             (l, BinaryOp::Eq | BinaryOp::Ne, r) if l == r => self.ty_bool,
             _ => Err(format!(
@@ -389,11 +393,13 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             ))?,
         };
 
-        let expr = Expr::Binary(
-            self.arena.allocate(left),
+        let expr = Expr::Binary {
+            left: self.arena.allocate(left),
+            left_ty: left_ty_ref,
             operator,
-            self.arena.allocate(right),
-        );
+            right: self.arena.allocate(right),
+            right_ty: right_ty_ref,
+        };
         Ok((expr, output_ty))
     }
 
@@ -519,7 +525,10 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                                 },
                         } => {
                             switch_ty.unify(field_ty, &mut self.program, self.arena)?;
-                            let discriminant = Expr::Discriminant(get);
+                            let discriminant = Expr::Discriminant {
+                                value: get,
+                                value_ty: field_ty_ref,
+                            };
                             let arms = iter::once((variant as i64, switch_arm_id));
                             let switch = Expr::Switch {
                                 scrutinee: self.arena.allocate(discriminant),
@@ -637,7 +646,10 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let scrutinee = if discriminants.is_empty() {
             &*scrutinee
         } else {
-            self.arena.allocate(Expr::Discriminant(scrutinee))
+            self.arena.allocate(Expr::Discriminant {
+                value: scrutinee,
+                value_ty: scrutinee_ty_ref,
+            })
         };
 
         if let Entry::Vacant(entry) = function.blocks.entry(otherwise) {

@@ -413,6 +413,22 @@ impl<'arena> Executor<'arena> {
         ControlFlow::Value(values)
     }
 
+    fn cont_application(
+        &mut self,
+        func: &Expr<'arena>,
+        continuations: &HashMap<Ident, &Expr<'arena>>,
+    ) -> ControlFlow<ValueRef<'arena>> {
+        let func = value!(self.expr(func));
+        let mut evaluated_continuations = HashMap::with_capacity(continuations.len());
+        for (&index, &continuation) in continuations {
+            evaluated_continuations.insert(index, value!(self.expr(continuation)));
+        }
+        ControlFlow::value(
+            func.apply_continuations(evaluated_continuations),
+            self.arena,
+        )
+    }
+
     fn binary_op(
         &mut self,
         left: &Expr<'arena>,
@@ -515,25 +531,27 @@ impl<'arena> Executor<'arena> {
                 callee.call(params, HashMap::new(), self).cast()
             }
             Expr::ContApplication(func, ref continuations) => {
-                let func = value!(self.expr(func));
-                let mut evaluated_continuations = HashMap::with_capacity(continuations.len());
-                for (&index, &continuation) in continuations {
-                    evaluated_continuations.insert(index, value!(self.expr(continuation)));
-                }
-                ControlFlow::value(
-                    func.apply_continuations(evaluated_continuations),
-                    self.arena,
-                )
+                self.cont_application(func, continuations)
             }
-            Expr::Unary(op, operand) => {
+            Expr::Unary {
+                operator,
+                operand,
+                operand_ty: _,
+            } => {
                 let value = value!(self.expr(operand));
-                match op {
+                match operator {
                     UnaryOp::Neg => {
                         ControlFlow::value(Value::Int(-value.as_int().unwrap()), self.arena)
                     }
                 }
             }
-            Expr::Binary(left, op, right) => self.binary_op(left, right, op),
+            Expr::Binary {
+                left,
+                left_ty: _,
+                operator,
+                right,
+                right_ty: _,
+            } => self.binary_op(left, right, operator),
             Expr::Assign { ident, expr } => {
                 let value = value!(self.expr(expr));
                 self.environment.borrow_mut().set(ident, value);
@@ -553,8 +571,8 @@ impl<'arena> Executor<'arena> {
                 func_ref,
                 captures: _,
             } => self.closure(func_ref),
-            Expr::Discriminant(expr) => {
-                let value = value!(self.expr(expr));
+            Expr::Discriminant { value, value_ty: _ } => {
+                let value = value!(self.expr(value));
                 ControlFlow::value(Value::Int(value.discriminant()), self.arena)
             }
             Expr::Unreachable => unreachable!(),
