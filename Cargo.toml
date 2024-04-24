@@ -8,6 +8,9 @@ continuate-backend = { version = "0.1.0", path = "./continuate-backend" }
 continuate-ir = { version = "0.1.0", path = "./continuate-ir" }
 continuate-arena = { version = "0.1.0", path = "./continuate-arena" }
 
+[lints]
+workspace = true
+
 [workspace]
 members = ["continuate-arena", "continuate-arena-macros", "continuate-ir", "continuate-error", "continuate-backend", "continuate-rt-common"]
 resolver = "2"
