@@ -39,8 +39,10 @@ use cranelift::codegen::ir::TrapCode;
 use cranelift::codegen::ir::Type;
 use cranelift::codegen::ir::UserFuncName;
 use cranelift::codegen::isa;
+use cranelift::codegen::isa::CallConv;
 use cranelift::codegen::settings;
 use cranelift::codegen::settings::Flags;
+use cranelift::codegen::settings::FlagsOrIsa;
 use cranelift::codegen::verify_function;
 use cranelift::codegen::Context;
 use cranelift::frontend::FunctionBuilder;
@@ -414,6 +416,51 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         Some(value)
     }
 
+    fn simple_callee<'b>(callee: &Expr<'b>) -> Option<(FuncRef, HashMap<Ident, &'b Expr<'b>>)> {
+        match *callee {
+            Expr::Function(func_ref) => Some((func_ref, HashMap::new())),
+            Expr::ContApplication(callee, ref continuations) => {
+                let (func_ref, mut new_continuations) = Self::simple_callee(callee)?;
+                new_continuations.extend(continuations);
+                Some((func_ref, new_continuations))
+            }
+            ref x => {
+                dbg!(x);
+                None
+            },
+        }
+    }
+
+    fn expr_call(
+        &mut self,
+        callee: &Expr,
+        params: &[&Expr],
+        builder: &mut FunctionBuilder,
+        block_map: &HashMap<BlockId, Block>,
+    ) -> Option<Value> {
+        let Some((func_ref, continuations)) = Self::simple_callee(callee) else {
+            todo!()
+        };
+        let func_id = self.functions[&func_ref].0;
+        let func = self.module.declare_func_in_func(func_id, builder.func);
+
+        let params: Option<Vec<_>> = params
+            .iter()
+            .map(|&expr| self.expr(expr, builder, block_map))
+            .collect();
+        let mut params = params?;
+
+        let continuations: Option<Vec<_>> = continuations
+            .into_iter()
+            .sorted_unstable_by_key(|&(ident, _)| ident)
+            .map(|(_, expr)| self.expr(expr, builder, block_map))
+            .collect();
+        params.append(&mut continuations?);
+
+        builder.ins().return_call(func, &params);
+        None
+    }
+
     fn expr_unary(
         &mut self,
         operator: UnaryOp,
@@ -571,7 +618,8 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
                 let exit = self
                     .module
                     .declare_func_in_func(self.runtime.exit, builder.func);
-                builder.ins().return_call(exit, &[value]);
+                builder.ins().call(exit, &[value]);
+                builder.ins().trap(TrapCode::UnreachableCodeReached);
                 None
             }
         }
@@ -623,6 +671,8 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
                 builder,
                 block_map,
             ),
+            Expr::Call(callee, ref params) => self.expr_call(callee, params, builder, block_map),
+            Expr::ContApplication(_, _) => todo!(),
             Expr::Unary {
                 operator,
                 operand,
@@ -642,6 +692,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
                 otherwise,
             } => self.expr_switch(scrutinee, arms, otherwise, builder, block_map),
             Expr::Goto(block_id) => Self::expr_goto(block_id, builder, block_map),
+            Expr::Closure { .. } => todo!(),
             Expr::Intrinsic {
                 intrinsic,
                 value,
@@ -651,7 +702,6 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
                 builder.ins().trap(TrapCode::UnreachableCodeReached);
                 None
             }
-            _ => todo!(),
         }
     }
 
