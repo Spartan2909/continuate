@@ -155,6 +155,10 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         Type::int(self.ptr_ty().bits() as u16).unwrap()
     }
 
+    fn c_int_ty(&self) -> Type {
+        Type::int(self.triple.data_model().unwrap().int_size().bits().into()).unwrap()
+    }
+
     fn ty_for(&self, ty: TypeRef) -> Type {
         if ty == self.program.lib_std.ty_int {
             types::I64
@@ -988,7 +992,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
             .insert(ty_ref, (self.arena.allocate(layout), global_id));
     }
 
-    fn compile(mut self) -> ObjectProduct {
+    fn compile(mut self, binary: bool) -> ObjectProduct {
         let types: Vec<_> = self.program.types.left_values().copied().collect();
         for ty in types {
             self.calc_ty_layout(ty);
@@ -1016,7 +1020,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
 
             let id = self
                 .module
-                .declare_function(&function.name, Linkage::Export, &sig)
+                .declare_function(&function.name, Linkage::Local, &sig)
                 .unwrap();
             self.functions.insert(func_ref, (id, sig));
         }
@@ -1031,12 +1035,46 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         for (func_ref, function) in functions {
             self.function(function, func_ref, &mut func_ctx);
         }
+
+        if binary {
+            let c_int = self.c_int_ty();
+
+            let mut signature = self.module.make_signature();
+            signature.returns.push(AbiParam::new(c_int));
+
+            let main = self
+                .module
+                .declare_function("main", Linkage::Export, &signature)
+                .unwrap();
+            let mut function = Function::with_name_signature(UserFuncName::default(), signature);
+            let mut builder = FunctionBuilder::new(&mut function, &mut func_ctx);
+
+            let block = builder.create_block();
+            builder.switch_to_block(block);
+            builder.seal_block(block);
+
+            let entry_point = self.functions[&self.program.entry_point()].0;
+            let entry_point = self.module.declare_func_in_func(entry_point, builder.func);
+            builder.ins().call(entry_point, &[]);
+
+            let rval = builder.ins().iconst(c_int, 0);
+            builder.ins().return_(&[rval]);
+
+            builder.finalize();
+
+            self.context.clear();
+            self.context.func = function;
+            self.module
+                .define_function(main, &mut self.context)
+                .unwrap();
+        }
+
         self.module.finish()
     }
 }
 
 #[allow(clippy::missing_panics_doc)]
-pub fn compile(program: Program) -> ObjectProduct {
+pub fn compile(program: Program, binary: bool) -> ObjectProduct {
     let isa = isa::lookup(target_lexicon::HOST)
         .unwrap()
         .finish(Flags::new(settings::builder()))
@@ -1046,5 +1084,5 @@ pub fn compile(program: Program) -> ObjectProduct {
     );
 
     let arena = Arena::new();
-    Compiler::new(program, module, &arena).compile()
+    Compiler::new(program, module, &arena).compile(binary)
 }
