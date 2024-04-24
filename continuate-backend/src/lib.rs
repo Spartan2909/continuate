@@ -645,8 +645,6 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         func_ref: FuncRef,
         func_ctx: &mut FunctionBuilderContext,
     ) {
-        self.context.clear();
-
         let params: Vec<_> = lir_function
             .params
             .iter()
@@ -694,6 +692,8 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
             panic!("{errors}");
         }
 
+        self.context.clear();
+        self.context.func = function;
         self.module
             .define_function(func_id, &mut self.context)
             .unwrap();
