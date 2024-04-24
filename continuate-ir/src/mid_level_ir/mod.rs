@@ -334,6 +334,26 @@ impl<'arena> Function<'arena> {
         ident
     }
 
+    pub fn type_of_var(&self, var: Ident) -> Option<TypeRef> {
+        self.continuations
+            .get(&var)
+            .or_else(|| self.declarations.get(&var).map(|(ty, _)| ty))
+            .or_else(|| {
+                self.params
+                    .iter()
+                    .find(|&&(ident, _)| ident == var)
+                    .map(|(_, var)| var)
+            })
+            .copied()
+    }
+
+    pub fn ty(&self) -> FunctionTy {
+        FunctionTy {
+            params: self.params.iter().map(|&(_, ty)| ty).collect(),
+            continuations: self.continuations.clone(),
+        }
+    }
+
     pub const fn entry_point() -> BlockId {
         BlockId(0)
     }
