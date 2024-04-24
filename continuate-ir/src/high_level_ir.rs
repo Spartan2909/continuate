@@ -89,6 +89,11 @@ pub enum Expr<'arena> {
         func: FuncRef,
     },
 
+    Intrinsic {
+        intrinsic: Intrinsic,
+        value: &'arena Expr<'arena>,
+    },
+
     Unreachable,
 }
 
@@ -148,7 +153,6 @@ pub struct Function<'arena> {
     pub continuations: HashMap<Ident, TypeRef>,
     pub body: Vec<&'arena Expr<'arena>>,
     pub captures: Vec<Ident>,
-    pub(crate) intrinsic: Option<Intrinsic>,
     next_ident: u32,
     pub name: String,
 }
@@ -160,7 +164,6 @@ impl<'arena> Function<'arena> {
             continuations: HashMap::new(),
             body: Vec::new(),
             captures: Vec::new(),
-            intrinsic: None,
             next_ident: 0,
             name,
         }

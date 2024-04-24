@@ -6,6 +6,7 @@ use continuate_arena::Arena;
 use continuate_ir::common::BinaryOp;
 use continuate_ir::common::FuncRef;
 use continuate_ir::common::Ident;
+use continuate_ir::common::Intrinsic;
 use continuate_ir::common::Literal;
 use continuate_ir::common::TypeRef;
 use continuate_ir::common::UnaryOp;
@@ -34,6 +35,7 @@ use cranelift::codegen::ir::MemFlags;
 use cranelift::codegen::ir::Signature;
 use cranelift::codegen::ir::StackSlotData;
 use cranelift::codegen::ir::StackSlotKind;
+use cranelift::codegen::ir::TrapCode;
 use cranelift::codegen::ir::Type;
 use cranelift::codegen::ir::UserFuncName;
 use cranelift::codegen::isa;
@@ -232,7 +234,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         values: &[&Expr],
         builder: &mut FunctionBuilder,
         block_map: &HashMap<BlockId, Block>,
-    ) -> Value {
+    ) -> Option<Value> {
         let stack_slot_data = StackSlotData {
             kind: StackSlotKind::ExplicitSlot,
             size: layout.size.try_into().unwrap(),
@@ -240,7 +242,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         let stack_slot = builder.create_sized_stack_slot(stack_slot_data);
 
         for (&field_location, &field) in layout.field_locations.iter().zip(values) {
-            let field = self.expr(field, builder, block_map);
+            let field = self.expr(field, builder, block_map)?;
             builder
                 .ins()
                 .stack_store(field, stack_slot, i32::try_from(field_location).unwrap());
@@ -254,7 +256,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
 
         builder.call_memcpy(self.module.target_config(), dest_ptr, src_ptr, size);
 
-        dest_ptr
+        Some(dest_ptr)
     }
 
     fn expr_tuple(
@@ -263,7 +265,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         values: &[&Expr],
         builder: &mut FunctionBuilder,
         block_map: &HashMap<BlockId, Block>,
-    ) -> Value {
+    ) -> Option<Value> {
         let layout = self.ty_layouts[&ty].0.as_single().unwrap();
         self.compound_ty(ty, layout, values, builder, block_map)
     }
@@ -275,7 +277,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         fields: &[&Expr],
         builder: &mut FunctionBuilder,
         block_map: &HashMap<BlockId, Block>,
-    ) -> Value {
+    ) -> Option<Value> {
         let layout = self.ty_layouts[&ty].0;
         let layout = if let Some(index) = index {
             &layout.as_sum().unwrap()[index]
@@ -292,7 +294,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         value_ty: TypeRef,
         builder: &mut FunctionBuilder,
         block_map: &HashMap<BlockId, Block>,
-    ) -> Value {
+    ) -> Option<Value> {
         let (value_size, _, _) = self.ty_ref_size_align_ptr(value_ty);
         let size = value_size * values.len() as u64;
 
@@ -305,7 +307,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         let mut offset = 0;
         let value_size = i32::try_from(value_size).unwrap();
         for &value in values {
-            let value = self.expr(value, builder, block_map);
+            let value = self.expr(value, builder, block_map)?;
             builder.ins().stack_store(value, stack_slot, offset);
             offset += value_size;
         }
@@ -318,7 +320,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
 
         builder.call_memcpy(self.module.target_config(), dest_ptr, src_ptr, size);
 
-        dest_ptr
+        Some(dest_ptr)
     }
 
     fn field_information(
@@ -354,19 +356,21 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         field: usize,
         builder: &mut FunctionBuilder,
         block_map: &HashMap<BlockId, Block>,
-    ) -> Value {
-        let object = self.expr(object, builder, block_map);
+    ) -> Option<Value> {
+        let object = self.expr(object, builder, block_map)?;
         let (layout, field_ty) = self.field_information(object_ty, object_variant, field);
         let field_ty = self.ty_for(field_ty);
-        builder.ins().load(
-            field_ty,
-            MemFlags::new()
-                .with_endianness(self.cranelift_endianness())
-                .with_aligned()
-                .with_heap()
-                .with_notrap(),
-            object,
-            layout.field_locations[field] as i32,
+        Some(
+            builder.ins().load(
+                field_ty,
+                MemFlags::new()
+                    .with_endianness(self.cranelift_endianness())
+                    .with_aligned()
+                    .with_heap()
+                    .with_notrap(),
+                object,
+                layout.field_locations[field] as i32,
+            ),
         )
     }
 
@@ -380,10 +384,10 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         value: &Expr,
         builder: &mut FunctionBuilder,
         block_map: &HashMap<BlockId, Block>,
-    ) -> Value {
-        let object = self.expr(object, builder, block_map);
+    ) -> Option<Value> {
+        let object = self.expr(object, builder, block_map)?;
         let layout = self.field_information(object_ty, object_variant, field).0;
-        let value = self.expr(value, builder, block_map);
+        let value = self.expr(value, builder, block_map)?;
         builder.ins().store(
             MemFlags::new()
                 .with_endianness(self.cranelift_endianness())
@@ -394,7 +398,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
             object,
             layout.field_locations[field] as i32,
         );
-        value
+        Some(value)
     }
 
     fn expr_unary(
@@ -404,12 +408,12 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         operand_ty: TypeRef,
         builder: &mut FunctionBuilder,
         block_map: &HashMap<BlockId, Block>,
-    ) -> Value {
-        let operand = self.expr(operand, builder, block_map);
+    ) -> Option<Value> {
+        let operand = self.expr(operand, builder, block_map)?;
         let operand_ty = self.ty_for(operand_ty);
         match operator {
-            UnaryOp::Neg if operand_ty == types::F64 => builder.ins().ineg(operand),
-            UnaryOp::Neg if operand_ty == types::I64 => builder.ins().fneg(operand),
+            UnaryOp::Neg if operand_ty == types::F64 => Some(builder.ins().ineg(operand)),
+            UnaryOp::Neg if operand_ty == types::I64 => Some(builder.ins().fneg(operand)),
             UnaryOp::Neg => unreachable!(),
         }
     }
@@ -425,12 +429,12 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         right_ty: TypeRef,
         builder: &mut FunctionBuilder,
         block_map: &HashMap<BlockId, Block>,
-    ) -> Value {
+    ) -> Option<Value> {
         debug_assert_eq!(left_ty, right_ty);
-        let left = self.expr(left, builder, block_map);
+        let left = self.expr(left, builder, block_map)?;
         let left_ty = self.ty_for(left_ty);
-        let right = self.expr(right, builder, block_map);
-        match operator {
+        let right = self.expr(right, builder, block_map)?;
+        let value = match operator {
             BinaryOp::Add => match_ty! { (left_ty)
                 types::I64 => builder.ins().iadd(left, right),
                 types::F64 => builder.ins().fadd(left, right),
@@ -475,7 +479,8 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
                 types::I64, self.fat_ptr_ty() => builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, left, right),
                 types::F64 => builder.ins().fcmp(FloatCC::GreaterThanOrEqual, left, right),
             },
-        }
+        };
+        Some(value)
     }
 
     fn expr_assign(
@@ -484,10 +489,10 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         expr: &Expr,
         builder: &mut FunctionBuilder,
         block_map: &HashMap<BlockId, Block>,
-    ) -> Value {
-        let value = self.expr(expr, builder, block_map);
+    ) -> Option<Value> {
+        let value = self.expr(expr, builder, block_map)?;
         builder.def_var(Variable::from_u32(ident.into()), value);
-        value
+        Some(value)
     }
 
     fn expr_switch(
@@ -497,51 +502,62 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         otherwise: BlockId,
         builder: &mut FunctionBuilder,
         block_map: &HashMap<BlockId, Block>,
-    ) -> Value {
-        let scrutinee = self.expr(scrutinee, builder, block_map);
+    ) -> Option<Value> {
+        let scrutinee = self.expr(scrutinee, builder, block_map)?;
         let mut switch = Switch::new();
         for (&val, &block_id) in arms {
             switch.set_entry(val as u128, block_map[&block_id]);
         }
         switch.emit(builder, scrutinee, block_map[&otherwise]);
-        builder.ins().iconst(types::I8, 0)
+        None
     }
 
     fn expr_goto(
         block_id: BlockId,
         builder: &mut FunctionBuilder,
         block_map: &HashMap<BlockId, Block>,
-    ) -> Value {
+    ) -> Option<Value> {
         builder.switch_to_block(block_map[&block_id]);
-        builder.ins().iconst(types::I8, 0)
+        None
     }
 
-    fn expr_discriminant(
+    fn expr_intrinsic(
         &mut self,
+        intrinsic: Intrinsic,
         value: &Expr,
         value_ty: TypeRef,
         builder: &mut FunctionBuilder,
         block_map: &HashMap<BlockId, Block>,
-    ) -> Value {
-        let value = self.expr(value, builder, block_map);
-        if matches!(
-            self.program.types.get_by_left(&value_ty).unwrap(),
-            MirType::UserDefined(UserDefinedType {
-                constructor: TypeConstructor::Sum(_)
-            })
-        ) {
-            builder.ins().load(
-                self.ptr_ty(),
-                MemFlags::new()
-                    .with_endianness(self.cranelift_endianness())
-                    .with_aligned()
-                    .with_heap()
-                    .with_notrap(),
-                value,
-                -(self.ptr_ty().bytes() as i32),
-            )
-        } else {
-            builder.ins().iconst(self.ptr_ty(), 0)
+    ) -> Option<Value> {
+        let value = self.expr(value, builder, block_map)?;
+        match intrinsic {
+            Intrinsic::Discriminant => {
+                if matches!(
+                    self.program.types.get_by_left(&value_ty).unwrap(),
+                    MirType::UserDefined(UserDefinedType {
+                        constructor: TypeConstructor::Sum(_)
+                    })
+                ) {
+                    Some(
+                        builder.ins().load(
+                            self.ptr_ty(),
+                            MemFlags::new()
+                                .with_endianness(self.cranelift_endianness())
+                                .with_aligned()
+                                .with_heap()
+                                .with_notrap(),
+                            value,
+                            -(self.ptr_ty().bytes() as i32),
+                        ),
+                    )
+                } else {
+                    Some(builder.ins().iconst(self.ptr_ty(), 0))
+                }
+            }
+            Intrinsic::Terminate => {
+                builder.ins().trap(TrapCode::User(0));
+                None
+            }
         }
     }
 
@@ -550,13 +566,15 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         expr: &Expr,
         builder: &mut FunctionBuilder,
         block_map: &HashMap<BlockId, Block>,
-    ) -> Value {
+    ) -> Option<Value> {
         match *expr {
-            Expr::Literal(Literal::Int(n)) => builder.ins().iconst(types::I64, n),
-            Expr::Literal(Literal::Float(n)) => builder.ins().f64const(n),
-            Expr::Literal(Literal::String(ref string)) => self.expr_literal_string(string, builder),
-            Expr::Ident(ident) => builder.use_var(Variable::from_u32(ident.into())),
-            Expr::Function(func_ref) => self.expr_function(func_ref, builder),
+            Expr::Literal(Literal::Int(n)) => Some(builder.ins().iconst(types::I64, n)),
+            Expr::Literal(Literal::Float(n)) => Some(builder.ins().f64const(n)),
+            Expr::Literal(Literal::String(ref string)) => {
+                Some(self.expr_literal_string(string, builder))
+            }
+            Expr::Ident(ident) => Some(builder.use_var(Variable::from_u32(ident.into()))),
+            Expr::Function(func_ref) => Some(self.expr_function(func_ref, builder)),
             Expr::Tuple { ty, ref values } => self.expr_tuple(ty, values, builder, block_map),
             Expr::Constructor {
                 ty,
@@ -608,8 +626,14 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
                 otherwise,
             } => self.expr_switch(scrutinee, arms, otherwise, builder, block_map),
             Expr::Goto(block_id) => Self::expr_goto(block_id, builder, block_map),
-            Expr::Discriminant { value, value_ty } => {
-                self.expr_discriminant(value, value_ty, builder, block_map)
+            Expr::Intrinsic {
+                intrinsic,
+                value,
+                value_ty,
+            } => self.expr_intrinsic(intrinsic, value, value_ty, builder, block_map),
+            Expr::Unreachable => {
+                builder.ins().trap(TrapCode::UnreachableCodeReached);
+                None
             }
             _ => todo!(),
         }

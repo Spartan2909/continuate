@@ -32,6 +32,7 @@ pedantic = { level = "warn", priority = -1 }
 cast_possible_truncation = "allow"
 cast_possible_wrap = "allow"
 cast_sign_loss = "allow"
+dbg_macro = "warn"
 inline_always = "allow"
 multiple_unsafe_ops_per_block = "deny"
 must_use_candidate = "allow"

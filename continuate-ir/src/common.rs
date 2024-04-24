@@ -74,7 +74,7 @@ impl BinaryOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ArenaSafeCopy)]
-pub(crate) enum Intrinsic {
+pub enum Intrinsic {
     Discriminant,
     Terminate,
 }

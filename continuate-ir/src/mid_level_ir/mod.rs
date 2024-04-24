@@ -93,7 +93,8 @@ pub enum Expr<'arena> {
         captures: HashMap<Ident, TypeRef>,
     },
 
-    Discriminant {
+    Intrinsic {
+        intrinsic: Intrinsic,
         value: &'arena Expr<'arena>,
         value_ty: TypeRef,
     },
@@ -308,7 +309,6 @@ pub struct Function<'arena> {
     pub declarations: HashMap<Ident, (TypeRef, Option<Literal>)>,
     pub blocks: HashMap<BlockId, Block<'arena>>,
     pub captures: HashMap<Ident, TypeRef>,
-    pub(crate) intrinsic: Option<Intrinsic>,
     next_ident: u32,
     next_block: u64,
     pub name: String,
@@ -322,7 +322,6 @@ impl<'arena> Function<'arena> {
             declarations: HashMap::new(),
             blocks: HashMap::new(),
             captures: HashMap::new(),
-            intrinsic: None,
             next_ident: 0,
             next_block: 1,
             name,

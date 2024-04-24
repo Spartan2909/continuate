@@ -5,6 +5,7 @@ use crate::common::Ident;
 use crate::common::Intrinsic;
 use crate::common::Literal;
 use crate::common::TypeRef;
+use crate::high_level_ir::Expr;
 use crate::high_level_ir::Function;
 use crate::high_level_ir::Program;
 use crate::high_level_ir::Type;
@@ -61,7 +62,10 @@ pub(crate) fn standard_library<'arena>(
     let fn_termination = arena.allocate(Function::new("termination".to_string()));
     let param = Ident(0);
     fn_termination.params.push((param, ty_int_ref));
-    fn_termination.intrinsic = Some(Intrinsic::Terminate);
+    fn_termination.body.push(arena.allocate(Expr::Intrinsic {
+        intrinsic: Intrinsic::Terminate,
+        value: arena.allocate(Expr::Ident(param)),
+    }));
 
     let fn_termination_ref = program.function();
     program.functions.insert(fn_termination_ref, fn_termination);
@@ -74,7 +78,22 @@ pub(crate) fn standard_library<'arena>(
     fn_discriminant.params.push((param, ty_bool_ref)); // TODO: Should be generic.
     let cont = Ident(1);
     fn_discriminant.continuations.insert(cont, int_fn_ref);
-    fn_discriminant.intrinsic = Some(Intrinsic::Discriminant);
+    let intrinsic = Expr::Intrinsic {
+        intrinsic: Intrinsic::Discriminant,
+        value: arena.allocate(Expr::Ident(param)),
+    };
+    let discriminant = Ident(2);
+    let declare = Expr::Declare {
+        ident: discriminant,
+        ty: ty_int_ref,
+        expr: arena.allocate(intrinsic),
+    };
+    fn_discriminant.body.push(arena.allocate(declare));
+    let cont_call = Expr::Call(
+        arena.allocate(Expr::Ident(cont)),
+        vec![arena.allocate(Expr::Ident(discriminant))],
+    );
+    fn_discriminant.body.push(arena.allocate(cont_call));
 
     let fn_discriminant_ref = program.function();
     program

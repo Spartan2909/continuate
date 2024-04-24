@@ -1,6 +1,7 @@
 use crate::common::BinaryOp;
 use crate::common::FuncRef;
 use crate::common::Ident;
+use crate::common::Intrinsic;
 use crate::common::Literal;
 use crate::common::TypeRef;
 use crate::common::UnaryOp;
@@ -418,6 +419,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let ty = *self.program.types.get_by_right(ty).unwrap();
 
         function.declarations.insert(ident, (ty, None));
+        self.environment.insert(ident, ty);
         let expr = Expr::Assign {
             ident,
             expr: self.arena.allocate(expr),
@@ -444,6 +446,22 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             expr: self.arena.allocate(expr),
         };
         Ok((expr, ty))
+    }
+
+    fn order_patterns(fields: &[Pattern]) -> impl Iterator<Item = (usize, &Pattern)> {
+        fields
+            .iter()
+            .enumerate()
+            .sorted_unstable_by(|&(_, l), &(_, r)| {
+                #[allow(clippy::match_same_arms)] // Arm order matters
+                match (l, r) {
+                    (x, y) if x == y => Ordering::Equal,
+                    (Pattern::Wildcard, _) => Ordering::Less,
+                    (Pattern::Ident(_), Pattern::Wildcard) => Ordering::Greater,
+                    (Pattern::Ident(_), _) => Ordering::Less,
+                    (Pattern::Destructure { .. }, _) => Ordering::Greater,
+                }
+            })
     }
 
     fn pattern(
@@ -478,21 +496,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             } => {
                 let ty = *self.program.types.get_by_left(&ty).unwrap();
                 let mut exhaustive = true;
-                for (field, pattern) in
-                    fields
-                        .iter()
-                        .enumerate()
-                        .sorted_unstable_by(|&(_, l), &(_, r)| {
-                            #[allow(clippy::match_same_arms)] // Arm order matters
-                            match (l, r) {
-                                (x, y) if x == y => Ordering::Equal,
-                                (Pattern::Wildcard, _) => Ordering::Less,
-                                (Pattern::Ident(_), Pattern::Wildcard) => Ordering::Greater,
-                                (Pattern::Ident(_), _) => Ordering::Less,
-                                (Pattern::Destructure { .. }, _) => Ordering::Greater,
-                            }
-                        })
-                {
+                for (field, pattern) in Self::order_patterns(fields) {
                     let get = Expr::Get {
                         object: scrutinee,
                         object_ty: scrutinee_ty_ref,
@@ -525,7 +529,8 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                                 },
                         } => {
                             switch_ty.unify(field_ty, &mut self.program, self.arena)?;
-                            let discriminant = Expr::Discriminant {
+                            let discriminant = Expr::Intrinsic {
+                                intrinsic: Intrinsic::Discriminant,
                                 value: get,
                                 value_ty: field_ty_ref,
                             };
@@ -646,7 +651,8 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let scrutinee = if discriminants.is_empty() {
             &*scrutinee
         } else {
-            self.arena.allocate(Expr::Discriminant {
+            self.arena.allocate(Expr::Intrinsic {
+                intrinsic: Intrinsic::Discriminant,
                 value: scrutinee,
                 value_ty: scrutinee_ty_ref,
             })
@@ -693,6 +699,28 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let expr = Expr::Closure { func_ref, captures };
         let ty = self.program.signatures[&func_ref];
         Ok((expr, ty))
+    }
+
+    fn expr_intrinsic(
+        &mut self,
+        intrinsic: Intrinsic,
+        value: &HirExpr,
+        block: &mut Block<'arena>,
+        function: &mut Function<'arena>,
+    ) -> Result<(Expr<'arena>, TypeRef)> {
+        let (value, value_ty) = self.expr(value, block, function)?;
+        let output_ty = match intrinsic {
+            Intrinsic::Discriminant => self.program.lib_std.ty_int,
+            Intrinsic::Terminate => self.program.insert_type(Type::None, self.arena).0,
+        };
+        Ok((
+            Expr::Intrinsic {
+                intrinsic,
+                value: self.arena.allocate(value),
+                value_ty,
+            },
+            output_ty,
+        ))
     }
 
     fn expr(
@@ -761,6 +789,9 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                 ref arms,
             } => self.expr_match(scrutinee, arms, block, function),
             HirExpr::Closure { func } => self.expr_closure(func),
+            HirExpr::Intrinsic { intrinsic, value } => {
+                self.expr_intrinsic(intrinsic, value, block, function)
+            }
             HirExpr::Unreachable => Ok((
                 Expr::Unreachable,
                 self.program.insert_type(Type::None, self.arena).0,
@@ -789,11 +820,6 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             .chain(&lir_function.continuations)
         {
             self.environment.insert(param, ty);
-        }
-
-        if let Some(intrinsic) = function.intrinsic {
-            lir_function.intrinsic = Some(intrinsic);
-            return Ok(lir_function);
         }
 
         self.current_block = Function::entry_point();

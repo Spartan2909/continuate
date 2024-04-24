@@ -571,9 +571,13 @@ impl<'arena> Executor<'arena> {
                 func_ref,
                 captures: _,
             } => self.closure(func_ref),
-            Expr::Discriminant { value, value_ty: _ } => {
+            Expr::Intrinsic {
+                intrinsic,
+                value,
+                value_ty: _,
+            } => {
                 let value = value!(self.expr(value));
-                ControlFlow::value(Value::Int(value.discriminant()), self.arena)
+                self.intrinsic(intrinsic, value)
             }
             Expr::Unreachable => unreachable!(),
         }
@@ -582,23 +586,15 @@ impl<'arena> Executor<'arena> {
     fn intrinsic(
         &mut self,
         intrinsic: Intrinsic,
-        params: &HashMap<Ident, ValueRef<'arena>>,
-    ) -> ControlFlow<Void> {
+        value: ValueRef<'arena>,
+    ) -> ControlFlow<ValueRef<'arena>> {
         match intrinsic {
             Intrinsic::Discriminant => {
-                let discriminant = params[&Ident(0)].discriminant();
-                let continuation = params[&Ident(1)];
-                continuation
-                    .call(
-                        vec![self.arena.allocate(Value::Int(discriminant))],
-                        HashMap::new(),
-                        self,
-                    )
-                    .try_cast()
-                    .unwrap()
+                let discriminant = value.discriminant();
+                ControlFlow::value(Value::Int(discriminant), self.arena)
             }
             Intrinsic::Terminate => {
-                let exit_code = params[&Ident(0)].as_int().unwrap();
+                let exit_code = value.as_int().unwrap();
                 ControlFlow::Terminate(exit_code)
             }
         }
@@ -611,10 +607,6 @@ impl<'arena> Executor<'arena> {
         params: HashMap<Ident, ValueRef<'arena>>,
         enclosing_environment: Option<SharedEnvironment<'arena>>,
     ) -> ControlFlow<Void> {
-        if let Some(intrinsic) = function.intrinsic {
-            return self.intrinsic(intrinsic, &params);
-        }
-
         self.func_ref = func_ref;
 
         let mut env = self.environment.borrow_mut();
