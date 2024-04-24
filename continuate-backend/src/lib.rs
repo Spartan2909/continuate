@@ -68,6 +68,9 @@ use target_lexicon::Triple;
 struct Runtime {
     /// `fn(ty_layout: &'static TyLayout<'static>, variant: usize) -> *mut ()`
     alloc_gc: FuncId,
+
+    /// `fn(i64)`
+    exit: FuncId,
 }
 
 impl Runtime {
@@ -83,7 +86,13 @@ impl Runtime {
             .declare_function("@rt_alloc_gc", Linkage::Import, &alloc_gc_sig)
             .unwrap();
 
-        Runtime { alloc_gc }
+        let mut exit_sig = module.make_signature();
+        exit_sig.params.push(AbiParam::new(types::I64));
+        let exit = module
+            .declare_function("@rt_exit", Linkage::Import, &exit_sig)
+            .unwrap();
+
+        Runtime { alloc_gc, exit }
     }
 }
 
@@ -555,7 +564,10 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
                 }
             }
             Intrinsic::Terminate => {
-                builder.ins().trap(TrapCode::User(0));
+                let exit = self
+                    .module
+                    .declare_func_in_func(self.runtime.exit, builder.func);
+                builder.ins().return_call(exit, &[value]);
                 None
             }
         }
