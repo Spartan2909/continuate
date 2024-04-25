@@ -1,0 +1,13 @@
+[package]
+name = "continuate-rt"
+edition = "2021"
+version.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+continuate-rt-common = { version = "0.1.0", path = "../continuate-rt-common" }
+
+[lints]
+workspace = true
