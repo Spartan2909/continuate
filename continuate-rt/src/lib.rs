@@ -20,6 +20,6 @@ pub extern "C" fn alloc_gc(layout: &TyLayout, variant: usize) -> NonNull<()> {
 }
 
 #[export_name = "@rt_exit"]
-pub extern "C-unwind" fn rt_exit(code: i64) {
+pub extern "C-unwind" fn exit(code: i64) {
     panic!("{code}");
 }
