@@ -11,6 +11,7 @@ cranelift = "0.106.2"
 cranelift-module = "0.106.2"
 cranelift-object = "0.106.2"
 itertools = "0.12.1"
+log = "0.4.21"
 target-lexicon = "0.12.14"
 
 [lints]

@@ -14,6 +14,10 @@ use continuate_ir::mid_level_ir;
 
 use continuate_arena::Arena;
 
+use log::LevelFilter;
+
+use simple_logger::SimpleLogger;
+
 #[cfg(windows)]
 fn link_command() -> process::Command {
     let mut command = process::Command::new("lld-link");
@@ -31,6 +35,13 @@ fn link_command() -> process::Command {
 }
 
 fn main() {
+    SimpleLogger::new()
+        .with_level(LevelFilter::Info)
+        .with_colors(true)
+        .without_timestamps()
+        .init()
+        .unwrap();
+
     let lir_arena = Arena::new();
 
     let program = {

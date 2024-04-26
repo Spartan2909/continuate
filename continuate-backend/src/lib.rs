@@ -66,6 +66,9 @@ use cranelift_object::ObjectProduct;
 
 use itertools::Itertools as _;
 
+use log::warn;
+
+use target_lexicon::CallingConvention;
 use target_lexicon::Endianness;
 use target_lexicon::PointerWidth;
 use target_lexicon::Triple;
@@ -886,7 +889,12 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
     }
 
     fn c_int_ty(&self) -> Type {
-        Type::int(self.triple.data_model().unwrap().int_size().bits().into()).unwrap()
+        if self.triple.default_calling_convention() == Ok(CallingConvention::AppleAarch64) {
+            warn!("Apple ARM support is potentially incomplete");
+            types::I32
+        } else {
+            Type::int(self.triple.data_model().unwrap().int_size().bits().into()).unwrap()
+        }
     }
 
     fn function(
