@@ -280,6 +280,7 @@ struct FunctionCompiler<'arena, 'function, 'builder> {
     builder: &'function mut FunctionBuilder<'builder>,
     block_map: &'function HashMap<BlockId, Block>,
     mir_function: &'function MirFunction<'function>,
+    params: &'function [(Ident, Type)],
 }
 
 impl<'arena, 'function, 'builder> FunctionCompiler<'arena, 'function, 'builder> {
@@ -329,6 +330,14 @@ impl<'arena, 'function, 'builder> FunctionCompiler<'arena, 'function, 'builder> 
         debug_assert_eq!(values.len(), 1);
 
         values[0]
+    }
+
+    fn expr_literal(&mut self, literal: &Literal) -> Value {
+        match *literal {
+            Literal::Int(n) => self.builder.ins().iconst(types::I64, n),
+            Literal::Float(n) => self.builder.ins().f64const(n),
+            Literal::String(ref string) => self.expr_literal_string(string),
+        }
     }
 
     fn expr_literal_string(&mut self, string: &str) -> Value {
@@ -531,25 +540,25 @@ impl<'arena, 'function, 'builder> FunctionCompiler<'arena, 'function, 'builder> 
         Some(value)
     }
 
-    fn simple_callee<'a>(callee: &Expr<'a>) -> Option<(Callable, HashMap<Ident, &'a Expr<'a>>)> {
+    fn simple_callee<'a, 'b>(
+        callee: &'b Expr<'a>,
+    ) -> Result<(Callable, HashMap<Ident, &'a Expr<'a>>), &'b Expr<'a>> {
         match *callee {
-            Expr::Ident(ident) => Some((Callable::Variable(ident), HashMap::new())),
-            Expr::Function(func_ref) => Some((Callable::FuncRef(func_ref), HashMap::new())),
+            Expr::Ident(ident) => Ok((Callable::Variable(ident), HashMap::new())),
+            Expr::Function(func_ref) => Ok((Callable::FuncRef(func_ref), HashMap::new())),
             Expr::ContApplication(callee, ref continuations) => {
                 let (callable, mut new_continuations) = Self::simple_callee(callee)?;
                 new_continuations.extend(continuations);
-                Some((callable, new_continuations))
+                Ok((callable, new_continuations))
             }
-            ref x => {
-                dbg!(x);
-                None
-            }
+            _ => Err(callee),
         }
     }
 
     fn expr_call(&mut self, callee: &Expr, params: &[&Expr]) -> Option<Value> {
-        let Some((callable, continuations)) = Self::simple_callee(callee) else {
-            todo!()
+        let (callable, continuations) = match Self::simple_callee(callee) {
+            Ok(callee) => callee,
+            Err(expr) => todo!("{expr:?} is not a supported callee"),
         };
 
         let params: Option<Vec<_>> = params.iter().map(|&expr| self.expr(expr)).collect();
@@ -744,9 +753,7 @@ impl<'arena, 'function, 'builder> FunctionCompiler<'arena, 'function, 'builder> 
 
     fn expr(&mut self, expr: &Expr) -> Option<Value> {
         match *expr {
-            Expr::Literal(Literal::Int(n)) => Some(self.builder.ins().iconst(types::I64, n)),
-            Expr::Literal(Literal::Float(n)) => Some(self.builder.ins().f64const(n)),
-            Expr::Literal(Literal::String(ref string)) => Some(self.expr_literal_string(string)),
+            Expr::Literal(ref literal) => Some(self.expr_literal(literal)),
             Expr::Ident(ident) => Some(self.builder.use_var(Variable::from_u32(ident.into()))),
             Expr::Function(func_ref) => Some(self.expr_function(func_ref)),
             Expr::Tuple { ty, ref values } => self.expr_tuple(ty, values),
@@ -809,6 +816,32 @@ impl<'arena, 'function, 'builder> FunctionCompiler<'arena, 'function, 'builder> 
 
     /// This method does not finalise or verify the function, or define it in the module.
     fn compile(mut self) {
+        for &(param, param_ty) in self.params {
+            self.builder
+                .declare_var(Variable::from_u32(param.into()), param_ty);
+        }
+
+        let entry_point = self.block_map[&MirFunction::entry_point()];
+        self.builder.append_block_params_for_function_params(entry_point);
+        self.builder.switch_to_block(entry_point);
+        for (i, &(param, _)) in self.params.iter().enumerate() {
+            let param_value = self.builder.block_params(entry_point)[i];
+            self.builder.def_var(Variable::from_u32(param.into()), param_value);
+        }
+
+        for (&var, &(var_ty, ref initialiser)) in &self.mir_function.declarations {
+            self.builder.declare_var(
+                Variable::from_u32(var.into()),
+                ty_for(var_ty, self.triple, &self.program.lib_std),
+            );
+
+            if let Some(initialiser) = initialiser {
+                let value = self.expr_literal(initialiser);
+
+                self.builder.def_var(Variable::from_u32(var.into()), value);
+            }
+        }
+
         for (&block_id, block) in &self.mir_function.blocks {
             self.builder.switch_to_block(self.block_map[&block_id]);
 
@@ -881,34 +914,11 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         let mut function = Function::with_name_signature(UserFuncName::default(), sig.clone());
         let mut builder = FunctionBuilder::new(&mut function, func_ctx);
 
-        for &(param, param_ty) in &params {
-            builder.declare_var(Variable::from_u32(param.into()), param_ty);
-        }
-
-        for (&var, &(var_ty, ref initialiser)) in &mir_function.declarations {
-            if initialiser.is_some() {
-                todo!("variable initialisers are not yet supported");
-            }
-
-            builder.declare_var(
-                Variable::from_u32(var.into()),
-                ty_for(var_ty, &self.triple, &self.program.lib_std),
-            );
-        }
-
         let block_map: HashMap<_, _> = mir_function
             .blocks
             .keys()
             .map(|&id| (id, builder.create_block()))
             .collect();
-
-        let entry_point = block_map[&MirFunction::entry_point()];
-        builder.append_block_params_for_function_params(entry_point);
-        builder.switch_to_block(entry_point);
-        for (i, &(param, _)) in params.iter().enumerate() {
-            let param_value = builder.block_params(entry_point)[i];
-            builder.def_var(Variable::from_u32(param.into()), param_value);
-        }
 
         let function_compiler = FunctionCompiler {
             program: &self.program,
@@ -921,6 +931,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
             builder: &mut builder,
             block_map: &block_map,
             mir_function,
+            params: &params,
         };
 
         function_compiler.compile();
