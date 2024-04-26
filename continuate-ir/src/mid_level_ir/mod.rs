@@ -371,7 +371,7 @@ pub struct Program<'arena> {
     pub signatures: HashMap<FuncRef, TypeRef>,
     pub types: BiHashMap<TypeRef, &'arena Type>,
     pub lib_std: StdLib,
-    next_function: u64,
+    next_function: u32,
     next_ty: u64,
     pub name: String,
 }

@@ -39,6 +39,7 @@ use cranelift::codegen::ir::StackSlotData;
 use cranelift::codegen::ir::StackSlotKind;
 use cranelift::codegen::ir::TrapCode;
 use cranelift::codegen::ir::Type;
+use cranelift::codegen::ir::UserExternalName;
 use cranelift::codegen::ir::UserFuncName;
 use cranelift::codegen::isa;
 use cranelift::codegen::isa::CallConv;
@@ -921,7 +922,8 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
 
         let (func_id, ref sig) = self.functions[&func_ref];
 
-        let mut function = Function::with_name_signature(UserFuncName::default(), sig.clone());
+        let name = UserFuncName::User(UserExternalName::new(2, func_ref.into()));
+        let mut function = Function::with_name_signature(name, sig.clone());
         let mut builder = FunctionBuilder::new(&mut function, func_ctx);
 
         let block_map: HashMap<_, _> = mir_function
@@ -1243,7 +1245,8 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
                 .module
                 .declare_function("main", Linkage::Export, &signature)
                 .unwrap();
-            let mut function = Function::with_name_signature(UserFuncName::default(), signature);
+            let name = UserFuncName::User(UserExternalName::new(1, 0));
+            let mut function = Function::with_name_signature(name, signature);
             let mut builder = FunctionBuilder::new(&mut function, &mut func_ctx);
 
             let block = builder.create_block();

@@ -20,7 +20,13 @@ impl fmt::Debug for Ident {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, ArenaSafeCopy)]
-pub struct FuncRef(pub(crate) u64);
+pub struct FuncRef(pub(crate) u32);
+
+impl From<FuncRef> for u32 {
+    fn from(value: FuncRef) -> Self {
+        value.0
+    }
+}
 
 impl fmt::Debug for FuncRef {
     #[inline]
