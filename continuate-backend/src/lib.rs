@@ -825,11 +825,13 @@ impl<'arena, 'function, 'builder> FunctionCompiler<'arena, 'function, 'builder> 
         }
 
         let entry_point = self.block_map[&MirFunction::entry_point()];
-        self.builder.append_block_params_for_function_params(entry_point);
+        self.builder
+            .append_block_params_for_function_params(entry_point);
         self.builder.switch_to_block(entry_point);
         for (i, &(param, _)) in self.params.iter().enumerate() {
             let param_value = self.builder.block_params(entry_point)[i];
-            self.builder.def_var(Variable::from_u32(param.into()), param_value);
+            self.builder
+                .def_var(Variable::from_u32(param.into()), param_value);
         }
 
         for (&var, &(var_ty, ref initialiser)) in &self.mir_function.declarations {
