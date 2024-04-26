@@ -88,13 +88,13 @@ impl Runtime {
             .extend([ptr_ty, ptr_ty].into_iter().map(AbiParam::new));
         alloc_gc_sig.returns.push(AbiParam::new(ptr_ty));
         let alloc_gc = module
-            .declare_function("@rt_alloc_gc", Linkage::Import, &alloc_gc_sig)
+            .declare_function("cont_rt_alloc_gc", Linkage::Import, &alloc_gc_sig)
             .unwrap();
 
         let mut exit_sig = module.make_signature();
         exit_sig.params.push(AbiParam::new(types::I64));
         let exit = module
-            .declare_function("@rt_exit", Linkage::Import, &exit_sig)
+            .declare_function("cont_rt_exit", Linkage::Import, &exit_sig)
             .unwrap();
 
         Runtime { alloc_gc, exit }
@@ -902,7 +902,13 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
             .map(|&id| (id, builder.create_block()))
             .collect();
 
-        builder.append_block_params_for_function_params(block_map[&MirFunction::entry_point()]);
+        let entry_point = block_map[&MirFunction::entry_point()];
+        builder.append_block_params_for_function_params(entry_point);
+        builder.switch_to_block(entry_point);
+        for (i, &(param, _)) in params.iter().enumerate() {
+            let param_value = builder.block_params(entry_point)[i];
+            builder.def_var(Variable::from_u32(param.into()), param_value);
+        }
 
         let function_compiler = FunctionCompiler {
             program: &self.program,
@@ -932,6 +938,10 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         }
 
         self.context.clear();
+        #[cfg(debug_assertions)]
+        {
+            self.context.want_disasm = true;
+        }
         self.context.func = function;
         self.module
             .define_function(func_id, &mut self.context)
