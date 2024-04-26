@@ -7,9 +7,9 @@ version.workspace = true
 continuate-arena = { version = "0.1.0", path = "../continuate-arena" }
 continuate-ir = { version = "0.1.0", path = "../continuate-ir" }
 continuate-rt-common = { version = "0.1.0", path = "../continuate-rt-common" }
-cranelift = "0.106.2"
-cranelift-module = "0.106.2"
-cranelift-object = "0.106.2"
+cranelift = "0.107.0"
+cranelift-module = "0.107.0"
+cranelift-object = "0.107.0"
 itertools = "0.12.1"
 log = "0.4.21"
 target-lexicon = "0.12.14"

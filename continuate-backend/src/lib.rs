@@ -30,6 +30,7 @@ use cranelift::codegen::ir::condcodes::IntCC;
 use cranelift::codegen::ir::entities::Value;
 use cranelift::codegen::ir::types;
 use cranelift::codegen::ir::AbiParam;
+use cranelift::codegen::ir::AliasRegion;
 use cranelift::codegen::ir::Block;
 use cranelift::codegen::ir::Function;
 use cranelift::codegen::ir::InstBuilder;
@@ -511,7 +512,7 @@ impl<'arena, 'function, 'builder> FunctionCompiler<'arena, 'function, 'builder> 
                 MemFlags::new()
                     .with_endianness(endianness)
                     .with_aligned()
-                    .with_heap()
+                    .with_alias_region(Some(AliasRegion::Heap))
                     .with_notrap(),
                 object,
                 layout.field_locations[field] as i32,
@@ -535,7 +536,7 @@ impl<'arena, 'function, 'builder> FunctionCompiler<'arena, 'function, 'builder> 
             MemFlags::new()
                 .with_endianness(endianness)
                 .with_aligned()
-                .with_heap()
+                .with_alias_region(Some(AliasRegion::Heap))
                 .with_notrap(),
             value,
             object,
@@ -734,7 +735,7 @@ impl<'arena, 'function, 'builder> FunctionCompiler<'arena, 'function, 'builder> 
                             MemFlags::new()
                                 .with_endianness(endianness)
                                 .with_aligned()
-                                .with_heap()
+                                .with_alias_region(Some(AliasRegion::Heap))
                                 .with_notrap(),
                             value,
                             -(ptr_ty(self.triple).bytes() as i32),
