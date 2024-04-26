@@ -18,6 +18,13 @@ use log::LevelFilter;
 
 use simple_logger::SimpleLogger;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn link_command() -> process::Command {
+    let mut command = process::Command::new("cc");
+    command.args(["./out/object.o", "./target/debug/libcontinuate_rt.a"]);
+    command
+}
+
 #[cfg(windows)]
 fn link_command() -> process::Command {
     let mut command = process::Command::new("lld-link");
