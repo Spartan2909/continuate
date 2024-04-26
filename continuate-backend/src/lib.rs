@@ -1279,6 +1279,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
 pub fn compile(program: Program, binary: bool) -> ObjectProduct {
     let mut flags = settings::builder();
     flags.enable("preserve_frame_pointers").unwrap();
+    flags.enable("is_pic").unwrap();
     let isa = isa::lookup(target_lexicon::HOST)
         .unwrap()
         .finish(Flags::new(flags))
