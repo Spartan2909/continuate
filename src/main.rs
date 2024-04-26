@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::iter;
 use std::process;
+use std::process::Stdio;
 
 use continuate_ir::common::BinaryOp;
 use continuate_ir::common::Literal;
@@ -12,6 +13,22 @@ use continuate_ir::high_level_ir::Type;
 use continuate_ir::mid_level_ir;
 
 use continuate_arena::Arena;
+
+#[cfg(windows)]
+fn link_command() -> process::Command {
+    let mut command = process::Command::new("lld-link");
+    command.args([
+        "./target/debug/continuate_rt.lib",
+        "./out/object.o",
+        "libcmt.lib",
+        "Ws2_32.lib",
+        "Synchronization.lib",
+        "Userenv.lib",
+        "ntdll.lib",
+        "/out:./out/result.exe",
+    ]);
+    command
+}
 
 fn main() {
     let lir_arena = Arena::new();
@@ -71,11 +88,9 @@ fn main() {
     fs::create_dir_all("./out").unwrap();
     fs::write("./out/object.o", object).unwrap();
 
-    process::Command::new("lld-link")
-        .args([
-            "./out/object.o",
-            "./out/continuate_rt.lib",
-        ])
+    link_command()
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
         .output()
         .unwrap();
 }
