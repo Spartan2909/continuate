@@ -1,10 +1,46 @@
+use std::cmp;
 use std::fmt;
+use std::hash;
 
 use continuate_arena::ArenaSafeCopy;
 use continuate_arena::ArenaSafeStatic;
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, ArenaSafeCopy)]
-pub struct Ident(pub(crate) u32);
+use continuate_error::Span;
+
+#[derive(Clone, Copy, ArenaSafeCopy)]
+pub struct Ident(pub(crate) u32, Span);
+
+impl Ident {
+    pub(crate) const fn new(value: u32) -> Ident {
+        Ident(value, Span::dummy())
+    }
+}
+
+impl PartialEq for Ident {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for Ident {}
+
+impl PartialOrd for Ident {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Ident {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+
+impl hash::Hash for Ident {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
 
 impl From<Ident> for u32 {
     fn from(value: Ident) -> Self {

@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 continuate-arena = { version = "0.1.0", path = "./continuate-arena" }
 continuate-backend = { version = "0.1.0", path = "./continuate-backend" }
+continuate-frontend = { version = "0.1.0", path = "./continuate-frontend" }
 continuate-ir = { version = "0.1.0", path = "./continuate-ir" }
 log = "0.4.21"
 simple_logger = { version = "4.3.3", features = ["colored"] }
@@ -14,9 +15,21 @@ simple_logger = { version = "4.3.3", features = ["colored"] }
 workspace = true
 
 [workspace]
-members = ["continuate-arena", "continuate-arena-macros", "continuate-ir", "continuate-error", "continuate-backend", "continuate-rt-common", "continuate-rt"]
+members = [
+    "continuate-arena",
+    "continuate-arena-macros",
+    "continuate-backend",
+    "continuate-error",
+    "continuate-frontend",
+    "continuate-ir",
+    "continuate-rt",
+    "continuate-rt-common",
+]
 resolver = "2"
 package.version = "0.1.0"
+
+[workspace.dependencies]
+chumsky = { version = "1.0.0-alpha.7", features = ["nightly"] }
 
 [profile.dev.package."*"]
 opt-level = 3

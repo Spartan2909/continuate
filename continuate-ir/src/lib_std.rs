@@ -60,7 +60,7 @@ pub(crate) fn standard_library<'arena>(
     program.types.insert(ty_string_ref, ty_string);
 
     let fn_termination = arena.allocate(Function::new("termination".to_string()));
-    let param = Ident(0);
+    let param = Ident::new(0);
     fn_termination.params.push((param, ty_int_ref));
     fn_termination.body.push(arena.allocate(Expr::Intrinsic {
         intrinsic: Intrinsic::Terminate,
@@ -74,15 +74,15 @@ pub(crate) fn standard_library<'arena>(
     let int_fn_ref = program.insert_type(int_fn, arena);
 
     let fn_discriminant = arena.allocate(Function::new("discriminant".to_string()));
-    let param = Ident(0);
+    let param = Ident::new(0);
     fn_discriminant.params.push((param, ty_bool_ref)); // TODO: Should be generic.
-    let cont = Ident(1);
+    let cont = Ident::new(1);
     fn_discriminant.continuations.insert(cont, int_fn_ref);
     let intrinsic = Expr::Intrinsic {
         intrinsic: Intrinsic::Discriminant,
         value: arena.allocate(Expr::Ident(param)),
     };
-    let discriminant = Ident(2);
+    let discriminant = Ident::new(2);
     let declare = Expr::Declare {
         ident: discriminant,
         ty: ty_int_ref,

@@ -3,5 +3,10 @@ name = "continuate-error"
 version.workspace = true
 edition = "2021"
 
+[dependencies]
+ariadne = { version = "0.4.1", features = ["auto-color"] }
+chumsky = { workspace = true }
+strum = { version = "0.26.2", features = ["derive"] }
+
 [lints]
 workspace = true

@@ -329,7 +329,7 @@ impl<'arena> Function<'arena> {
     }
 
     pub fn ident(&mut self) -> Ident {
-        let ident = Ident(self.next_ident);
+        let ident = Ident::new(self.next_ident);
         self.next_ident += 1;
         ident
     }

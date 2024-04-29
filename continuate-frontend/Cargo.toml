@@ -1,0 +1,11 @@
+[package]
+name = "continuate-frontend"
+edition = "2021"
+version.workspace = true
+
+[dependencies]
+chumsky = { workspace = true }
+continuate-error = { version = "0.1.0", path = "../continuate-error" }
+
+[lints]
+workspace = true
