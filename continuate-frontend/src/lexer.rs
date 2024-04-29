@@ -518,6 +518,7 @@ impl<'a> Lexer<'a> {
                 delimiter.kind.end().to_string(),
                 delimiter.span,
             ));
+            tokens.push(TokenTree::Error(delimiter.span));
         }
 
         (tokens, self.errors)
