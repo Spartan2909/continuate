@@ -104,7 +104,9 @@ fn main() {
             callee,
             iter::once((cont, cont_ref)).collect(),
         ));
-        main_fn.body.push(Expr::Call(application, vec![three, seven]));
+        main_fn
+            .body
+            .push(Expr::Call(application, vec![three, seven]));
 
         let main_fn_ref = program.entry_point();
         program.functions.insert(main_fn_ref, main_fn);
