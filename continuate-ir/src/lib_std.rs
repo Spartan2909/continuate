@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use crate::common::FuncRef;
-use crate::common::Ident;
 use crate::common::Intrinsic;
 use crate::common::Literal;
 use crate::common::TypeRef;
@@ -59,13 +58,13 @@ pub(crate) fn standard_library<'arena>(
     let ty_string_ref = program.ty();
     program.types.insert(ty_string_ref, ty_string);
 
-    let fn_termination = arena.allocate(Function::new("termination".to_string()));
-    let param = Ident::new(0);
+    let mut fn_termination = Function::new("termination".to_string());
+    let param = fn_termination.ident();
     fn_termination.params.push((param, ty_int_ref));
-    fn_termination.body.push(arena.allocate(Expr::Intrinsic {
+    fn_termination.body.push(Expr::Intrinsic {
         intrinsic: Intrinsic::Terminate,
         value: arena.allocate(Expr::Ident(param)),
-    }));
+    });
 
     let fn_termination_ref = program.function();
     program.functions.insert(fn_termination_ref, fn_termination);
@@ -73,27 +72,27 @@ pub(crate) fn standard_library<'arena>(
     let int_fn = Type::function(vec![ty_int_ref], HashMap::new());
     let int_fn_ref = program.insert_type(int_fn, arena);
 
-    let fn_discriminant = arena.allocate(Function::new("discriminant".to_string()));
-    let param = Ident::new(0);
+    let mut fn_discriminant = Function::new("discriminant".to_string());
+    let param = fn_discriminant.ident();
     fn_discriminant.params.push((param, ty_bool_ref)); // TODO: Should be generic.
-    let cont = Ident::new(1);
+    let cont = fn_discriminant.ident();
     fn_discriminant.continuations.insert(cont, int_fn_ref);
     let intrinsic = Expr::Intrinsic {
         intrinsic: Intrinsic::Discriminant,
         value: arena.allocate(Expr::Ident(param)),
     };
-    let discriminant = Ident::new(2);
+    let discriminant = fn_discriminant.ident();
     let declare = Expr::Declare {
         ident: discriminant,
         ty: ty_int_ref,
         expr: arena.allocate(intrinsic),
     };
-    fn_discriminant.body.push(arena.allocate(declare));
+    fn_discriminant.body.push(declare);
     let cont_call = Expr::Call(
         arena.allocate(Expr::Ident(cont)),
-        vec![arena.allocate(Expr::Ident(discriminant))],
+        vec![Expr::Ident(discriminant)],
     );
-    fn_discriminant.body.push(arena.allocate(cont_call));
+    fn_discriminant.body.push(cont_call);
 
     let fn_discriminant_ref = program.function();
     program

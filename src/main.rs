@@ -66,7 +66,7 @@ fn main() {
         let int_fn = Type::function(vec![ty_int], HashMap::new());
         let int_fn_ref = program.insert_type(int_fn, &hir_arena);
 
-        let sum_fn = hir_arena.allocate(Function::new("test::sum".to_string()));
+        let mut sum_fn = Function::new("test::sum".to_string());
         let cont = sum_fn.ident();
         let param_1 = sum_fn.ident();
         let param_2 = sum_fn.ident();
@@ -75,12 +75,10 @@ fn main() {
 
         let l = hir_arena.allocate(Expr::Ident(param_1));
         let r = hir_arena.allocate(Expr::Ident(param_2));
-        let sum = hir_arena.allocate(Expr::Binary(l, BinaryOp::Add, r));
+        let sum = Expr::Binary(l, BinaryOp::Add, r);
 
         let cont_ref = hir_arena.allocate(Expr::Ident(cont));
-        let cont_call = hir_arena.allocate(Expr::Call(cont_ref, vec![sum]));
-
-        sum_fn.body.push(cont_call);
+        sum_fn.body.push(Expr::Call(cont_ref, vec![sum]));
 
         let sum_fn_ref = program.function();
         program.functions.insert(sum_fn_ref, sum_fn);
@@ -93,22 +91,20 @@ fn main() {
 
         program.signatures.insert(sum_fn_ref, sum_fn_ty);
 
-        let main_fn = hir_arena.allocate(Function::new("test::main".to_string()));
+        let mut main_fn = Function::new("test::main".to_string());
         let termination_cont = main_fn.ident();
         main_fn.continuations.insert(termination_cont, int_fn_ref);
 
-        let three = hir_arena.allocate(Expr::Literal(Literal::Int(3)));
-        let seven = hir_arena.allocate(Expr::Literal(Literal::Int(7)));
+        let three = Expr::Literal(Literal::Int(3));
+        let seven = Expr::Literal(Literal::Int(7));
 
         let callee = hir_arena.allocate(Expr::Function(sum_fn_ref));
-        let cont_ref = hir_arena.allocate(Expr::Ident(termination_cont));
+        let cont_ref = Expr::Ident(termination_cont);
         let application = hir_arena.allocate(Expr::ContApplication(
             callee,
-            iter::once((cont, &*cont_ref)).collect(),
+            iter::once((cont, cont_ref)).collect(),
         ));
-        let call = hir_arena.allocate(Expr::Call(application, vec![three, seven]));
-
-        main_fn.body.push(call);
+        main_fn.body.push(Expr::Call(application, vec![three, seven]));
 
         let main_fn_ref = program.entry_point();
         program.functions.insert(main_fn_ref, main_fn);

@@ -44,7 +44,7 @@ pub enum Expr<'arena> {
     },
     NamedConstructor {
         path: Path,
-        fields: Vec<(Ident, &'arena Expr<'arena>)>,
+        fields: Vec<(Ident, Expr<'arena>)>,
         brace_span: Span,
     },
     Array {

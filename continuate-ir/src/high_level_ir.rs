@@ -44,14 +44,14 @@ pub enum Expr<'arena> {
     Literal(Literal),
     Ident(Ident),
     Function(FuncRef),
-    Block(Vec<&'arena Expr<'arena>>),
-    Tuple(Vec<&'arena Expr<'arena>>),
+    Block(Vec<Expr<'arena>>),
+    Tuple(Vec<Expr<'arena>>),
     Constructor {
         ty: TypeRef,
         index: Option<usize>,
-        fields: Vec<&'arena Expr<'arena>>,
+        fields: Vec<Expr<'arena>>,
     },
-    Array(Vec<&'arena Expr<'arena>>),
+    Array(Vec<Expr<'arena>>),
 
     Get {
         object: &'arena Expr<'arena>,
@@ -63,8 +63,8 @@ pub enum Expr<'arena> {
         value: &'arena Expr<'arena>,
     },
 
-    Call(&'arena Expr<'arena>, Vec<&'arena Expr<'arena>>),
-    ContApplication(&'arena Expr<'arena>, HashMap<Ident, &'arena Expr<'arena>>),
+    Call(&'arena Expr<'arena>, Vec<Expr<'arena>>),
+    ContApplication(&'arena Expr<'arena>, HashMap<Ident, Expr<'arena>>),
 
     Unary(UnaryOp, &'arena Expr<'arena>),
 
@@ -82,7 +82,7 @@ pub enum Expr<'arena> {
 
     Match {
         scrutinee: &'arena Expr<'arena>,
-        arms: Vec<(Pattern, &'arena Expr<'arena>)>,
+        arms: Vec<(Pattern, Expr<'arena>)>,
     },
 
     Closure {
@@ -151,7 +151,7 @@ pub enum TypeConstructor {
 pub struct Function<'arena> {
     pub params: Vec<(Ident, TypeRef)>,
     pub continuations: HashMap<Ident, TypeRef>,
-    pub body: Vec<&'arena Expr<'arena>>,
+    pub body: Vec<Expr<'arena>>,
     pub captures: Vec<Ident>,
     next_ident: u32,
     pub name: String,
@@ -178,7 +178,7 @@ impl<'arena> Function<'arena> {
 
 #[derive(Debug)]
 pub struct Program<'arena> {
-    pub functions: HashMap<FuncRef, &'arena Function<'arena>>,
+    pub functions: HashMap<FuncRef, Function<'arena>>,
     pub signatures: HashMap<FuncRef, TypeRef>,
     pub types: BiHashMap<TypeRef, &'arena Type>,
     pub(crate) next_function: u32,

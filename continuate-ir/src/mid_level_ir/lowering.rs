@@ -90,7 +90,7 @@ struct Lowerer<'a, 'arena> {
 impl<'a, 'arena> Lowerer<'a, 'arena> {
     fn expr_list(
         &mut self,
-        exprs: &[&HirExpr],
+        exprs: &[HirExpr],
         block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<Vec<(Expr<'arena>, TypeRef)>> {
@@ -102,7 +102,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
     fn expr_block(
         &mut self,
-        exprs: &[&HirExpr],
+        exprs: &[HirExpr],
         block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
@@ -120,7 +120,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
     fn expr_tuple(
         &mut self,
-        elements: &[&HirExpr],
+        elements: &[HirExpr],
         block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
@@ -142,7 +142,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         &mut self,
         ty: TypeRef,
         index: Option<usize>,
-        fields: &[&HirExpr],
+        fields: &[HirExpr],
         block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
@@ -177,7 +177,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
     fn expr_array(
         &mut self,
-        array: &[&HirExpr],
+        array: &[HirExpr],
         block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
@@ -263,7 +263,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
     fn expr_call(
         &mut self,
         callee: &HirExpr,
-        params: &[&HirExpr],
+        params: &[HirExpr],
         block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
@@ -300,7 +300,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
     fn expr_cont_application(
         &mut self,
         callee: &HirExpr,
-        continuations: &HashMap<Ident, &HirExpr>,
+        continuations: &HashMap<Ident, HirExpr>,
         block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
@@ -312,7 +312,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
         let mut outstanding_continuations = callee_ty.continuations.clone();
         let mut new_continuations = HashMap::with_capacity(continuations.len());
-        for (&ident, &expr) in continuations {
+        for (&ident, expr) in continuations {
             let (expr, ty) = self.expr(expr, block, function)?;
             let expr = &*self.arena.allocate(expr);
 
@@ -566,7 +566,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
     fn expr_match(
         &mut self,
         scrutinee: &HirExpr,
-        arms: &[(Pattern, &HirExpr)],
+        arms: &[(Pattern, HirExpr)],
         block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Result<(Expr<'arena>, TypeRef)> {
@@ -684,7 +684,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
     }
 
     fn expr_closure(&mut self, func_ref: FuncRef) -> Result<(Expr<'arena>, TypeRef)> {
-        let func = self.hir_program.functions[&func_ref];
+        let func = &self.hir_program.functions[&func_ref];
         let captures: HashMap<_, _> = func
             .captures
             .iter()
@@ -855,7 +855,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
         lowerer.program.signatures.clone_from(&program.signatures);
 
-        for (&func_ref, &function) in &program.functions {
+        for (&func_ref, function) in &program.functions {
             if !function.captures.is_empty() {
                 continue;
             }
