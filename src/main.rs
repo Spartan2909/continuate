@@ -54,67 +54,71 @@ fn main() {
         .init()
         .unwrap();
 
-    let lir_arena = Arena::new();
+    let hir_arena = Arena::new();
+    let mut program = Program::new("test".to_string(), &hir_arena);
 
-    let program = {
-        let hir_arena = Arena::new();
-        let mut program = Program::new("test".to_string(), &hir_arena);
+    let std_lib = program.lib_std();
+    let ty_int = std_lib.ty_int;
 
-        let std_lib = program.lib_std();
-        let ty_int = std_lib.ty_int;
+    let int_fn = Type::function(vec![ty_int], HashMap::new());
+    let int_fn_ref = program.insert_type(int_fn, &hir_arena);
 
-        let int_fn = Type::function(vec![ty_int], HashMap::new());
-        let int_fn_ref = program.insert_type(int_fn, &hir_arena);
+    let mut sum_fn = Function::new("test::sum".to_string());
+    let cont = sum_fn.ident();
+    let param_1 = sum_fn.ident();
+    let param_2 = sum_fn.ident();
+    sum_fn.params.extend([(param_1, ty_int), (param_2, ty_int)]);
+    sum_fn.continuations.insert(cont, int_fn_ref);
 
-        let mut sum_fn = Function::new("test::sum".to_string());
-        let cont = sum_fn.ident();
-        let param_1 = sum_fn.ident();
-        let param_2 = sum_fn.ident();
-        sum_fn.params.extend([(param_1, ty_int), (param_2, ty_int)]);
-        sum_fn.continuations.insert(cont, int_fn_ref);
+    let l = hir_arena.allocate(Expr::Ident(param_1));
+    let r = hir_arena.allocate(Expr::Ident(param_2));
+    let sum = Expr::Binary(l, BinaryOp::Add, r);
 
-        let l = hir_arena.allocate(Expr::Ident(param_1));
-        let r = hir_arena.allocate(Expr::Ident(param_2));
-        let sum = Expr::Binary(l, BinaryOp::Add, r);
+    let cont_ref = hir_arena.allocate(Expr::Ident(cont));
+    sum_fn.body.push(Expr::Call(cont_ref, vec![sum]));
 
-        let cont_ref = hir_arena.allocate(Expr::Ident(cont));
-        sum_fn.body.push(Expr::Call(cont_ref, vec![sum]));
+    let sum_fn_ref = program.function();
+    program.functions.insert(sum_fn_ref, sum_fn);
 
-        let sum_fn_ref = program.function();
-        program.functions.insert(sum_fn_ref, sum_fn);
+    let sum_fn_ty = Type::function(
+        vec![ty_int, ty_int],
+        iter::once((cont, int_fn_ref)).collect(),
+    );
+    let sum_fn_ty = program.insert_type(sum_fn_ty, &hir_arena);
 
-        let sum_fn_ty = Type::function(
-            vec![ty_int, ty_int],
-            iter::once((cont, int_fn_ref)).collect(),
-        );
-        let sum_fn_ty = program.insert_type(sum_fn_ty, &hir_arena);
+    program.signatures.insert(sum_fn_ref, sum_fn_ty);
 
-        program.signatures.insert(sum_fn_ref, sum_fn_ty);
+    let mut main_fn = Function::new("test::main".to_string());
+    let termination_cont = main_fn.ident();
+    main_fn.continuations.insert(termination_cont, int_fn_ref);
 
-        let mut main_fn = Function::new("test::main".to_string());
-        let termination_cont = main_fn.ident();
-        main_fn.continuations.insert(termination_cont, int_fn_ref);
+    let three = Expr::Literal(Literal::Int(3));
+    let seven = Expr::Literal(Literal::Int(7));
 
-        let three = Expr::Literal(Literal::Int(3));
-        let seven = Expr::Literal(Literal::Int(7));
+    let callee = hir_arena.allocate(Expr::Function(sum_fn_ref));
+    let cont_ref = Expr::Ident(termination_cont);
+    let application = hir_arena.allocate(Expr::ContApplication(
+        callee,
+        iter::once((cont, cont_ref)).collect(),
+    ));
+    main_fn
+        .body
+        .push(Expr::Call(application, vec![three, seven]));
 
-        let callee = hir_arena.allocate(Expr::Function(sum_fn_ref));
-        let cont_ref = Expr::Ident(termination_cont);
-        let application = hir_arena.allocate(Expr::ContApplication(
-            callee,
-            iter::once((cont, cont_ref)).collect(),
-        ));
-        main_fn
-            .body
-            .push(Expr::Call(application, vec![three, seven]));
+    let main_fn_ref = program.entry_point();
+    program.functions.insert(main_fn_ref, main_fn);
 
-        let main_fn_ref = program.entry_point();
-        program.functions.insert(main_fn_ref, main_fn);
+    let mir_arena = Arena::new();
 
-        mid_level_ir::lower(&program, &lir_arena)
-    };
+    let mir_program = mid_level_ir::lower(&program, &mir_arena).unwrap();
 
-    let object = continuate_backend::compile(program.unwrap(), true);
+    drop(program);
+    drop(hir_arena);
+
+    let object = continuate_backend::compile(mir_program, true);
+
+    drop(mir_arena);
+
     let object = object.emit().unwrap();
     fs::create_dir_all("./out").unwrap();
     fs::write("./out/object.o", object).unwrap();

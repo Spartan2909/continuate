@@ -1,5 +1,4 @@
 #![feature(allocator_api)]
-#![feature(dropck_eyepatch)]
 #![feature(ptr_mask)]
 #![warn(clippy::missing_inline_in_public_items)]
 
@@ -14,6 +13,8 @@ use std::alloc::Layout;
 use std::cell::Cell;
 use std::cell::UnsafeCell;
 use std::fmt;
+use std::marker::PhantomData;
+use std::mem;
 use std::ptr;
 use std::ptr::NonNull;
 
@@ -74,12 +75,22 @@ impl Chunk {
 
 pub struct Arena<'arena> {
     chunks: UnsafeCell<Vec<Chunk>>,
-    managed: UnsafeCell<Vec<NonNull<(dyn Any + 'arena)>>>,
+    managed: UnsafeCell<Vec<NonNull<dyn Any>>>,
     next_capacity: Cell<usize>,
+    _marker: PhantomData<dyn Any + 'arena>,
 }
 
 const START_CAPACITY: usize = 4 * 1024;
 const MAX_CAPACITY: usize = 2 * 1024 * 1024;
+
+/// ## Safety
+///
+/// The target of `ptr` must be valid for `'b`.
+unsafe fn transmute_lifetime<'a, 'b>(ptr: NonNull<(dyn Any + 'a)>) -> NonNull<(dyn Any + 'b)> {
+    // SAFETY: Both types have the same layout, and the lifetime safety must be ensured by the
+    // caller.
+    unsafe { mem::transmute(ptr) }
+}
 
 impl<'arena> Arena<'arena> {
     /// ## Panics
@@ -92,6 +103,7 @@ impl<'arena> Arena<'arena> {
             chunks: UnsafeCell::new(vec![start_chunk]),
             managed: UnsafeCell::new(Vec::new()),
             next_capacity: Cell::new(START_CAPACITY * 2),
+            _marker: PhantomData,
         }
     }
 
@@ -127,7 +139,7 @@ impl<'arena> Arena<'arena> {
     /// Panics if `mem::align_of::<T>() > 4096`.
     #[inline]
     #[allow(clippy::mut_from_ref)]
-    pub fn allocate<T: ArenaSafe + 'arena>(&'arena self, value: T) -> &'arena mut T {
+    pub fn allocate<T: ArenaSafe + 'arena>(&'arena self, value: T) -> &'arena T {
         let layout = Layout::new::<T>();
         let ptr = self
             .allocate_raw(Layout::new::<T>())
@@ -141,10 +153,25 @@ impl<'arena> Arena<'arena> {
 
         // SAFETY: This is the only active reference to `*self.managed`.
         let managed = unsafe { &mut *self.managed.get() };
-        managed.push(ptr);
+        // SAFETY: TODO
+        let dyn_ptr = unsafe { transmute_lifetime(ptr) };
+        managed.push(dyn_ptr);
 
         // SAFETY: There are no active references to `*ptr`.
-        unsafe { &mut *ptr.as_ptr() }
+        unsafe { &*ptr.as_ptr() }
+    }
+
+    #[inline]
+    pub fn collect(&mut self) {
+        for &value in self.managed.get_mut().iter().rev() {
+            // SAFETY: This is the last pointer to `*value`.
+            unsafe {
+                ptr::drop_in_place(value.as_ptr());
+            }
+        }
+        for chunk in self.chunks.get_mut() {
+            chunk.deallocate();
+        }
     }
 }
 
@@ -162,19 +189,10 @@ impl<'arena> Default for Arena<'arena> {
     }
 }
 
-// SAFETY: Ensured by caller of `Arena::new`.
-unsafe impl<#[may_dangle] 'arena> Drop for Arena<'arena> {
-    #[inline]
+impl<'arena> Drop for Arena<'arena> {
+    #[inline(always)]
     fn drop(&mut self) {
-        for &value in self.managed.get_mut().iter().rev() {
-            // SAFETY: This is the last pointer to `*value`.
-            unsafe {
-                ptr::drop_in_place(value.as_ptr());
-            }
-        }
-        for chunk in self.chunks.get_mut() {
-            chunk.deallocate();
-        }
+        self.collect();
     }
 }
 

@@ -132,7 +132,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
         let values = elements
             .into_iter()
-            .map(|(expr, _)| &*self.arena.allocate(expr))
+            .map(|(expr, _)| self.arena.allocate(expr))
             .collect();
         let expr = Expr::Tuple { ty, values };
         Ok((expr, ty))
@@ -169,7 +169,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
         let fields = fields
             .into_iter()
-            .map(|(expr, _)| &*self.arena.allocate(expr))
+            .map(|(expr, _)| self.arena.allocate(expr))
             .collect();
         let expr = Expr::Constructor { ty, index, fields };
         Ok((expr, ty))
@@ -194,7 +194,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             .0;
         let array = array
             .into_iter()
-            .map(|(expr, _)| &*self.arena.allocate(expr))
+            .map(|(expr, _)| self.arena.allocate(expr))
             .collect();
         Ok((
             Expr::Array {
@@ -290,7 +290,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
         let params = params
             .into_iter()
-            .map(|(expr, _)| &*self.arena.allocate(expr))
+            .map(|(expr, _)| self.arena.allocate(expr))
             .collect();
         let expr = Expr::Call(self.arena.allocate(callee), params);
         let (ty, _) = self.program.insert_type(Type::None, self.arena);
@@ -314,7 +314,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let mut new_continuations = HashMap::with_capacity(continuations.len());
         for (&ident, expr) in continuations {
             let (expr, ty) = self.expr(expr, block, function)?;
-            let expr = &*self.arena.allocate(expr);
+            let expr = self.arena.allocate(expr);
 
             let cont_ty = callee_ty
                 .continuations
@@ -649,7 +649,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         self.current_block = next_id;
 
         let scrutinee = if discriminants.is_empty() {
-            &*scrutinee
+            scrutinee
         } else {
             self.arena.allocate(Expr::Intrinsic {
                 intrinsic: Intrinsic::Discriminant,

@@ -447,7 +447,7 @@ impl<'arena> Executor<'arena> {
                 _ => unreachable!(),
             };
 
-            &*self.arena.allocate(result.unwrap())
+            self.arena.allocate(result.unwrap())
         } else {
             let ord = left.partial_cmp(right);
             let cmp = match op {
@@ -635,7 +635,7 @@ impl<'arena> Executor<'arena> {
             .get(&self.program.entry_point())
             .unwrap();
         let termination_param = *entry_point.continuations.keys().next().unwrap();
-        let termination_fn = &*self
+        let termination_fn = self
             .arena
             .allocate(Value::Function(self.program.lib_std.fn_termination));
         self.function(
