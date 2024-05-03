@@ -419,31 +419,128 @@ impl<'a> Lexer<'a> {
         self.source.chars().nth(self.position + offset)
     }
 
-    fn group(&mut self, tokens: &mut Vec<TokenTree>) -> Option<Delimiter> {
+    fn digits(&mut self, digits: Option<String>) -> Option<(String, Span)> {
+        let mut digits = digits.unwrap_or_default();
+        let mut span = Span::dummy();
+        while self.peek(0).is_some_and(|ch| ch.is_ascii_digit()) {
+            let (ch, ch_span) = self.next("").unwrap();
+            digits.push(ch);
+            span = span.union(ch_span).unwrap();
+        }
+        if digits.is_empty() {
+            None
+        } else {
+            Some((digits, span))
+        }
+    }
+
+    fn num(&mut self, start: char, start_span: Span) -> TokenTree {
+        let (digits, span) = self.digits(Some(start.to_string())).map_or_else(
+            || (start.to_string(), Span::dummy()),
+            |(digits, digits_span)| (digits, digits_span.union(start_span).unwrap()),
+        );
+        if self.peek(0).is_some_and(|ch| ch == '.')
+            && self.peek(1).as_ref().is_some_and(char::is_ascii_digit)
+        {
+            self.next("").unwrap();
+            let (new_digits, new_span) = self.digits(None).unwrap();
+            let mut num = String::with_capacity(digits.len() + new_digits.len() + 1);
+            num.push_str(&digits);
+            num.push('.');
+            num.push_str(&new_digits);
+            TokenTree::Literal(Literal::Float(
+                num.parse().unwrap(),
+                span.union(new_span).unwrap(),
+            ))
+        } else {
+            TokenTree::Literal(Literal::Int(digits.parse().unwrap(), span))
+        }
+    }
+
+    fn ident(&mut self, start: char, start_span: Span) -> TokenTree {
+        let mut ident = start.to_string();
+        let mut end_span = start_span;
+        while let Some((ch, ch_span)) = self
+            .next("")
+            .ok()
+            .and_then(|(ch, span)| Some((as_ident_body(ch)?, span)))
+        {
+            ident.push(ch);
+            end_span = ch_span;
+        }
+
+        let span = start_span.union(end_span).unwrap();
+
+        if let Ok(kind) = KeywordKind::try_from(ident.as_str()) {
+            Keyword { kind, span }.into()
+        } else {
+            Ident {
+                string: ident,
+                span,
+            }
+            .into()
+        }
+    }
+
+    fn group(&mut self, kind: DelimiterKind, start_span: Span) -> TokenTree {
+        let open_delimiter = Delimiter {
+            kind,
+            side: DelimiterSide::Open,
+            span: start_span,
+        };
+        let mut group_tokens = Vec::new();
+        let close_delimiter = self.sequence(&mut group_tokens);
+        if let Some(close_delimiter) = close_delimiter {
+            if close_delimiter.kind == open_delimiter.kind {
+                Group {
+                    open_delimiter,
+                    close_delimiter,
+                    tokens: group_tokens,
+                }
+                .into()
+            } else {
+                self.errors.push(Error::unclosed_delimiter(
+                    open_delimiter.kind.start().to_string(),
+                    open_delimiter.span,
+                    open_delimiter.kind.end().to_string(),
+                    close_delimiter.span,
+                ));
+                TokenTree::Error(close_delimiter.span)
+            }
+        } else {
+            self.errors.push(Error::unclosed_delimiter(
+                open_delimiter.kind.start().to_string(),
+                open_delimiter.span,
+                open_delimiter.kind.end().to_string(),
+                self.eof(),
+            ));
+            TokenTree::Error(self.eof())
+        }
+    }
+
+    fn sequence(&mut self, tokens: &mut Vec<TokenTree>) -> Option<Delimiter> {
         while let Ok((ch, span)) = self.next("") {
-            let token = if is_ident_start(ch) {
-                let mut ident = ch.to_string();
-                let mut end_span = span;
-                while let Some((ch, ch_span)) = self
-                    .next("")
-                    .ok()
-                    .and_then(|(ch, span)| Some((as_ident_body(ch)?, span)))
-                {
-                    ident.push(ch);
-                    end_span = ch_span;
-                }
-
-                let span = span.union(end_span).unwrap();
-
-                if let Ok(kind) = KeywordKind::try_from(ident.as_str()) {
-                    Keyword { kind, span }.into()
-                } else {
-                    Ident {
-                        string: ident,
-                        span,
+            let token = if ch.is_ascii_digit() {
+                self.num(ch, span)
+            } else if ch == '"' {
+                let mut string = String::new();
+                while let Ok((ch, _)) = self.next("") {
+                    if ch == '"' {
+                        break;
                     }
-                    .into()
+                    string.push(ch);
                 }
+                match self.next('"') {
+                    Ok((_, end_span)) => {
+                        TokenTree::Literal(Literal::String(string, span.union(end_span).unwrap()))
+                    }
+                    Err(err) => {
+                        self.errors.push(err);
+                        TokenTree::Error(self.eof())
+                    }
+                }
+            } else if is_ident_start(ch) {
+                self.ident(ch, span)
             } else if let Ok(kind) = PunctKind::try_from(ch) {
                 let spacing = if self
                     .peek(0)
@@ -461,39 +558,7 @@ impl<'a> Lexer<'a> {
                 }
                 .into()
             } else if let Some(kind) = DelimiterKind::start_from_char(ch) {
-                let open_delimiter = Delimiter {
-                    kind,
-                    side: DelimiterSide::Open,
-                    span,
-                };
-                let mut group_tokens = Vec::new();
-                let close_delimiter = self.group(&mut group_tokens);
-                if let Some(close_delimiter) = close_delimiter {
-                    if close_delimiter.kind == open_delimiter.kind {
-                        Group {
-                            open_delimiter,
-                            close_delimiter,
-                            tokens: group_tokens,
-                        }
-                        .into()
-                    } else {
-                        self.errors.push(Error::unclosed_delimiter(
-                            open_delimiter.kind.start().to_string(),
-                            open_delimiter.span,
-                            open_delimiter.kind.end().to_string(),
-                            close_delimiter.span,
-                        ));
-                        TokenTree::Error(close_delimiter.span)
-                    }
-                } else {
-                    self.errors.push(Error::unclosed_delimiter(
-                        open_delimiter.kind.start().to_string(),
-                        open_delimiter.span,
-                        open_delimiter.kind.end().to_string(),
-                        self.eof(),
-                    ));
-                    TokenTree::Error(self.eof())
-                }
+                self.group(kind, span)
             } else if let Some(kind) = DelimiterKind::end_from_char(ch) {
                 return Some(Delimiter {
                     kind,
@@ -513,7 +578,7 @@ impl<'a> Lexer<'a> {
     fn lex(mut self) -> (Vec<TokenTree>, Vec<Error>) {
         let mut tokens = vec![];
 
-        while let Some(delimiter) = self.group(&mut tokens) {
+        while let Some(delimiter) = self.sequence(&mut tokens) {
             self.errors.push(Error::unopened_delimiter(
                 delimiter.kind.end().to_string(),
                 delimiter.span,
