@@ -20,22 +20,22 @@ use std::rc::Rc;
 use continuate_arena::Arena;
 use continuate_arena::ArenaSafe;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, ArenaSafe)]
 pub enum Value<'arena> {
     Int(i64),
     Float(f64),
     String(String),
-    Array(RefCell<Vec<ValueRef<'arena>>>),
-    Tuple(RefCell<Vec<ValueRef<'arena>>>),
+    Array(RefCell<Vec<&'arena Value<'arena>>>),
+    Tuple(RefCell<Vec<&'arena Value<'arena>>>),
     Function(FuncRef),
-    ContinuedFunction(ValueRef<'arena>, HashMap<Ident, ValueRef<'arena>>),
+    ContinuedFunction(&'arena Value<'arena>, HashMap<Ident, &'arena Value<'arena>>),
     Closure {
         func_ref: FuncRef,
         environment: SharedEnvironment<'arena>,
     },
     UserDefined {
         discriminant: Option<usize>,
-        fields: RefCell<Vec<ValueRef<'arena>>>,
+        fields: RefCell<Vec<&'arena Value<'arena>>>,
     },
 }
 
@@ -256,9 +256,6 @@ impl<'arena> From<Void> for &Value<'arena> {
     }
 }
 
-// SAFETY: `Value` is not `Drop`.
-unsafe impl<'arena> ArenaSafe for Value<'arena> {}
-
 pub type ValueRef<'arena> = &'arena Value<'arena>;
 
 #[derive(Debug)]
@@ -369,6 +366,16 @@ impl<'arena> Environment<'arena> {
     }
 }
 
+// SAFETY: All of `Environment`'s fields are `ArenaSafe`, and `Environment` is not `Drop`.
+unsafe impl<'arena> ArenaSafe for Environment<'arena> {}
+
+const _: () = {
+    const fn assert_arena_safe<T: ArenaSafe>() {}
+
+    assert_arena_safe::<Option<SharedEnvironment>>();
+    assert_arena_safe::<HashMap<Ident, &Value>>();
+};
+
 type SharedEnvironment<'arena> = Rc<RefCell<Environment<'arena>>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -470,7 +477,7 @@ impl<'arena> Executor<'arena> {
         ControlFlow::Value(result)
     }
 
-    fn closure(&mut self, func_ref: FuncRef) -> ControlFlow<ValueRef<'arena>> {
+    fn closure(&self, func_ref: FuncRef) -> ControlFlow<ValueRef<'arena>> {
         let mut new_env = Environment::new();
         new_env.enclosing = Some(Rc::clone(&self.environment));
         let old_env = mem::replace(&mut *self.environment.borrow_mut(), new_env);
@@ -584,7 +591,7 @@ impl<'arena> Executor<'arena> {
     }
 
     fn intrinsic(
-        &mut self,
+        &self,
         intrinsic: Intrinsic,
         value: ValueRef<'arena>,
     ) -> ControlFlow<ValueRef<'arena>> {
