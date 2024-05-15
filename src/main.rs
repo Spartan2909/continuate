@@ -23,7 +23,7 @@ fn link_command() -> process::Command {
     let mut command = process::Command::new("cc");
     command.args([
         "./out/object.o",
-        "./target/debug/libcontinuate_rt.a",
+        option_env!("CONTINUATE_RT_PATH").unwrap_or("./target/debug/libcontinuate_rt.a"),
         "-o",
         "./out/result",
     ]);
