@@ -1,164 +1,15 @@
 use std::fmt;
-use std::hash;
-use std::result;
-use std::str::Chars;
 
 use continuate_error::Error;
-use continuate_error::Result;
 use continuate_error::SourceId;
 use continuate_error::Span;
 
-#[derive(Debug, Clone)]
-pub struct Ident {
-    pub string: String,
-    pub span: Span,
-}
+use logos::Lexer;
+use logos::Logos;
 
-impl Ident {
-    pub const fn new(string: String) -> Ident {
-        Ident {
-            string,
-            span: Span::dummy(),
-        }
-    }
-
-    pub const fn new_spanned(string: String, span: Span) -> Ident {
-        Ident { string, span }
-    }
-}
-
-impl PartialEq for Ident {
-    fn eq(&self, other: &Self) -> bool {
-        self.string == other.string
-    }
-}
-
-impl Eq for Ident {}
-
-impl hash::Hash for Ident {
-    fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        self.string.hash(state);
-    }
-}
-
-impl fmt::Display for Ident {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.string)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeywordKind {
-    Fn,
-    If,
-    Let,
-    Match,
-    Package,
-    Super,
-    Type,
-}
-
-impl TryFrom<&str> for KeywordKind {
-    type Error = ();
-
-    fn try_from(value: &str) -> result::Result<Self, Self::Error> {
-        let kind = match value {
-            "fn" => KeywordKind::Fn,
-            "if" => KeywordKind::If,
-            "let" => KeywordKind::Let,
-            "match" => KeywordKind::Match,
-            "package" => KeywordKind::Super,
-            "type" => KeywordKind::Type,
-            _ => return Err(()),
-        };
-        Ok(kind)
-    }
-}
-
-impl fmt::Display for KeywordKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let string = match self {
-            KeywordKind::Fn => "fn",
-            KeywordKind::If => "if",
-            KeywordKind::Let => "let",
-            KeywordKind::Match => "match",
-            KeywordKind::Package => "package",
-            KeywordKind::Super => "super",
-            KeywordKind::Type => "type",
-        };
-
-        f.write_str(string)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Keyword {
-    pub kind: KeywordKind,
-    pub span: Span,
-}
-
-impl Keyword {
-    pub const fn new(kind: KeywordKind) -> Keyword {
-        Keyword {
-            kind,
-            span: Span::dummy(),
-        }
-    }
-
-    pub const fn new_spanned(kind: KeywordKind, span: Span) -> Keyword {
-        Keyword { kind, span }
-    }
-}
-
-impl PartialEq for Keyword {
-    fn eq(&self, other: &Self) -> bool {
-        self.kind == other.kind
-    }
-}
-
-impl Eq for Keyword {}
-
-impl fmt::Display for Keyword {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.kind, f)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum Literal {
-    Int(i64, Span),
-    Float(f64, Span),
-    String(String, Span),
-}
-
-impl PartialEq for Literal {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Literal::Int(i1, _), Literal::Int(i2, _)) => i1 == i2,
-            (Literal::Float(f1, _), Literal::Float(f2, _)) => f1 == f2,
-            (Literal::String(s1, _), Literal::String(s2, _)) => s1 == s2,
-            _ => false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PunctKind {
-    Dot,
-    Comma,
-}
-
-impl TryFrom<char> for PunctKind {
-    type Error = ();
-
-    fn try_from(value: char) -> result::Result<Self, Self::Error> {
-        let kind = match value {
-            '.' => PunctKind::Dot,
-            ',' => PunctKind::Comma,
-            _ => return Err(()),
-        };
-        Ok(kind)
-    }
+fn string(lex: &Lexer<Token>) -> String {
+    let slice = lex.slice();
+    slice[1..slice.len() - 1].to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,430 +18,135 @@ pub enum Spacing {
     Joint,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct Punct {
-    pub kind: PunctKind,
-    pub spacing: Spacing,
-    pub span: Span,
-}
+fn spacing(lex: &Lexer<Token>) -> Spacing {
+    const PUNCTUATION: [char; 3] = ['.', ',', ':'];
 
-impl Punct {
-    pub const fn new(kind: PunctKind, spacing: Spacing) -> Punct {
-        Punct {
-            kind,
-            spacing,
-            span: Span::dummy(),
+    if let Some(ch) = lex.remainder().chars().next() {
+        if PUNCTUATION.contains(&ch) {
+            Spacing::Joint
+        } else {
+            Spacing::Alone
         }
-    }
-
-    pub const fn new_spanned(kind: PunctKind, spacing: Spacing, span: Span) -> Punct {
-        Punct {
-            kind,
-            spacing,
-            span,
-        }
-    }
-}
-
-impl PartialEq for Punct {
-    fn eq(&self, other: &Self) -> bool {
-        self.kind == other.kind
-    }
-}
-
-impl Eq for Punct {}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DelimiterKind {
-    Paren,
-    Bracket,
-    Brace,
-}
-
-impl DelimiterKind {
-    pub const fn start(self) -> char {
-        match self {
-            DelimiterKind::Paren => '(',
-            DelimiterKind::Bracket => '[',
-            DelimiterKind::Brace => '{',
-        }
-    }
-
-    pub const fn end(self) -> char {
-        match self {
-            DelimiterKind::Paren => ')',
-            DelimiterKind::Bracket => ']',
-            DelimiterKind::Brace => '}',
-        }
-    }
-
-    const fn start_from_char(ch: char) -> Option<DelimiterKind> {
-        match ch {
-            '(' => Some(DelimiterKind::Paren),
-            '[' => Some(DelimiterKind::Bracket),
-            '{' => Some(DelimiterKind::Brace),
-            _ => None,
-        }
-    }
-
-    const fn end_from_char(ch: char) -> Option<DelimiterKind> {
-        match ch {
-            ')' => Some(DelimiterKind::Paren),
-            ']' => Some(DelimiterKind::Bracket),
-            '}' => Some(DelimiterKind::Brace),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DelimiterSide {
-    Open,
-    Close,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Delimiter {
-    kind: DelimiterKind,
-    side: DelimiterSide,
-    span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct Group {
-    open_delimiter: Delimiter,
-    close_delimiter: Delimiter,
-    tokens: Vec<TokenTree>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum TokenTree {
-    Ident(Ident),
-    Keyword(Keyword),
-    Literal(Literal),
-    Punct(Punct),
-    Group(Group),
-    Error(Span),
-}
-
-impl From<Ident> for TokenTree {
-    fn from(value: Ident) -> Self {
-        TokenTree::Ident(value)
-    }
-}
-
-impl From<Keyword> for TokenTree {
-    fn from(value: Keyword) -> Self {
-        TokenTree::Keyword(value)
-    }
-}
-
-impl From<Literal> for TokenTree {
-    fn from(value: Literal) -> Self {
-        TokenTree::Literal(value)
-    }
-}
-
-impl From<Punct> for TokenTree {
-    fn from(value: Punct) -> Self {
-        TokenTree::Punct(value)
-    }
-}
-
-impl From<Group> for TokenTree {
-    fn from(value: Group) -> Self {
-        TokenTree::Group(value)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Token {
-    Ident(Ident),
-    Keyword(Keyword),
-    Literal(Literal),
-    Punct(Punct),
-    Delimiter(Delimiter),
-    Error(Span),
-}
-
-impl Token {
-    fn from_trees(trees: Vec<TokenTree>, tokens: Option<Vec<Token>>) -> Vec<Token> {
-        let mut tokens = tokens.unwrap_or_else(|| Vec::with_capacity(trees.len() * 10));
-        for tree in trees {
-            match tree {
-                TokenTree::Ident(ident) => tokens.push(ident.into()),
-                TokenTree::Keyword(kw) => tokens.push(kw.into()),
-                TokenTree::Literal(lit) => tokens.push(lit.into()),
-                TokenTree::Punct(punct) => tokens.push(punct.into()),
-                TokenTree::Group(group) => {
-                    tokens.push(group.open_delimiter.into());
-                    tokens = Token::from_trees(group.tokens, Some(tokens));
-                    tokens.push(group.close_delimiter.into());
-                }
-                TokenTree::Error(span) => tokens.push(Token::Error(span)),
-            }
-        }
-        tokens
-    }
-}
-
-impl From<Ident> for Token {
-    fn from(value: Ident) -> Self {
-        Token::Ident(value)
-    }
-}
-
-impl From<Keyword> for Token {
-    fn from(value: Keyword) -> Self {
-        Token::Keyword(value)
-    }
-}
-
-impl From<Literal> for Token {
-    fn from(value: Literal) -> Self {
-        Token::Literal(value)
-    }
-}
-
-impl From<Punct> for Token {
-    fn from(value: Punct) -> Self {
-        Token::Punct(value)
-    }
-}
-
-impl From<Delimiter> for Token {
-    fn from(value: Delimiter) -> Self {
-        Token::Delimiter(value)
-    }
-}
-
-fn is_ident_start(ch: char) -> bool {
-    ch.is_alphabetic() || ch == '_'
-}
-
-fn as_ident_body(ch: char) -> Option<char> {
-    if ch.is_alphanumeric() || ch == '_' {
-        Some(ch)
     } else {
-        None
+        Spacing::Alone
     }
 }
 
-struct Lexer<'a> {
-    source: &'a str,
-    chars: Chars<'a>,
-    position: usize,
-    source_id: SourceId,
-    errors: Vec<Error>,
+#[derive(Debug, Clone, PartialEq, Logos)]
+#[logos(error = Error)]
+#[logos(skip r"\s+")]
+pub enum Token {
+    #[regex(r"//[^\n]+", logos::skip)]
+    Comment,
+
+    #[token("fn")]
+    Fn,
+    #[token("if")]
+    If,
+    #[token("let")]
+    Let,
+    #[token("match")]
+    Match,
+    #[token("package")]
+    Package,
+    #[token("super")]
+    Super,
+    #[token("type")]
+    Type,
+
+    Ident(String),
+
+    #[regex(r"\d+", |lex| lex.slice().parse::<i64>().unwrap())]
+    Int(i64),
+    #[regex(r"(\d+)?\.\d+", |lex| lex.slice().parse::<f64>().unwrap())]
+    Float(f64),
+    #[regex(r#""[^"]*""#, string)]
+    String(String),
+
+    #[token(".", spacing)]
+    Dot(Spacing),
+    #[token(",", spacing)]
+    Comma(Spacing),
+    #[token(":", spacing)]
+    Colon(Spacing),
+    #[token("=", spacing)]
+    Eq(Spacing),
+    #[token("<", spacing)]
+    Lt(Spacing),
+    #[token(">", spacing)]
+    Gt(Spacing),
+    #[token(";", spacing)]
+    Semicolon(Spacing),
+
+    #[token("(")]
+    OpenParen,
+    #[token("[")]
+    OpenBracket,
+    #[token("{")]
+    OpenBrace,
+
+    #[token(")")]
+    CloseParen,
+    #[token("]")]
+    CloseBracket,
+    #[token("}")]
+    CloseBrace,
+
+    Error,
 }
 
-impl<'a> Lexer<'a> {
-    fn new(source: &'a str, source_id: SourceId) -> Lexer<'a> {
-        Lexer {
-            source,
-            chars: source.chars(),
-            position: 0,
-            source_id,
-            errors: Vec::new(),
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Token::Comment => f.write_str("<comment>"),
+
+            Token::Fn => f.write_str("fn"),
+            Token::If => f.write_str("if"),
+            Token::Let => f.write_str("let"),
+            Token::Match => f.write_str("match"),
+            Token::Package => f.write_str("package"),
+            Token::Super => f.write_str("super"),
+            Token::Type => f.write_str("type"),
+
+            Token::Ident(ref ident) => f.write_str(ident),
+
+            Token::Int(int) => write!(f, "{int}"),
+            Token::Float(float) => write!(f, "{float}"),
+            Token::String(ref string) => write!(f, r#""{string}""#),
+
+            Token::Dot(_) => f.write_str("."),
+            Token::Comma(_) => f.write_str(","),
+            Token::Colon(_) => f.write_str(":"),
+            Token::Eq(_) => f.write_str("="),
+            Token::Lt(_) => f.write_str("<"),
+            Token::Gt(_) => f.write_str(">"),
+            Token::Semicolon(_) => f.write_str(";"),
+
+            Token::OpenParen => f.write_str("("),
+            Token::OpenBracket => f.write_str("["),
+            Token::OpenBrace => f.write_str("{"),
+            Token::CloseParen => f.write_str(")"),
+            Token::CloseBracket => f.write_str("]"),
+            Token::CloseBrace => f.write_str("}"),
+            Token::Error => f.write_str("<error>"),
         }
     }
+}
 
-    fn eof(&self) -> Span {
-        Span::new(self.source.len(), self.source.len(), self.source_id)
-    }
-
-    fn next_char_span(&mut self) -> Span {
-        let current = self.position;
-        self.position += 1;
-        Span::new(current, current + 1, self.source_id)
-    }
-
-    #[allow(clippy::needless_pass_by_value)] // Makes the API nicer
-    fn next<T: ToString>(&mut self, expected: T) -> Result<(char, Span)> {
-        self.chars
-            .next()
-            .ok_or_else(|| {
-                Error::unexpected_token(Some(Some(expected.to_string())), None, self.eof())
-            })
-            .map(|ch| (ch, self.next_char_span()))
-    }
-
-    fn peek(&self, offset: usize) -> Option<char> {
-        self.source.chars().nth(self.position + offset)
-    }
-
-    fn digits(&mut self, digits: Option<String>) -> Option<(String, Span)> {
-        let mut digits = digits.unwrap_or_default();
-        let mut span = Span::dummy();
-        while self.peek(0).is_some_and(|ch| ch.is_ascii_digit()) {
-            let (ch, ch_span) = self.next("").unwrap();
-            digits.push(ch);
-            span = span.union(ch_span).unwrap();
-        }
-        if digits.is_empty() {
-            None
-        } else {
-            Some((digits, span))
-        }
-    }
-
-    fn num(&mut self, start: char, start_span: Span) -> TokenTree {
-        let (digits, span) = self.digits(Some(start.to_string())).map_or_else(
-            || (start.to_string(), Span::dummy()),
-            |(digits, digits_span)| (digits, digits_span.union(start_span).unwrap()),
-        );
-        if self.peek(0).is_some_and(|ch| ch == '.')
-            && self.peek(1).as_ref().is_some_and(char::is_ascii_digit)
-        {
-            self.next("").unwrap();
-            let (new_digits, new_span) = self.digits(None).unwrap();
-            let mut num = String::with_capacity(digits.len() + new_digits.len() + 1);
-            num.push_str(&digits);
-            num.push('.');
-            num.push_str(&new_digits);
-            TokenTree::Literal(Literal::Float(
-                num.parse().unwrap(),
-                span.union(new_span).unwrap(),
-            ))
-        } else {
-            TokenTree::Literal(Literal::Int(digits.parse().unwrap(), span))
-        }
-    }
-
-    fn ident(&mut self, start: char, start_span: Span) -> TokenTree {
-        let mut ident = start.to_string();
-        let mut end_span = start_span;
-        while let Some((ch, ch_span)) = self
-            .next("")
-            .ok()
-            .and_then(|(ch, span)| Some((as_ident_body(ch)?, span)))
-        {
-            ident.push(ch);
-            end_span = ch_span;
-        }
-
-        let span = start_span.union(end_span).unwrap();
-
-        if let Ok(kind) = KeywordKind::try_from(ident.as_str()) {
-            Keyword { kind, span }.into()
-        } else {
-            Ident {
-                string: ident,
-                span,
+pub fn lex(source: &str, source_id: SourceId) -> (Vec<(Token, Span)>, Vec<Error>) {
+    let mut errors = Vec::new();
+    let tokens = Token::lexer(source)
+        .spanned()
+        .map(|(token, span)| {
+            let span = Span::new(span.start, span.end, source_id);
+            match token {
+                Ok(token) => (token, span),
+                Err(err) => {
+                    errors.push(err);
+                    (Token::Error, span)
+                }
             }
-            .into()
-        }
-    }
-
-    fn group(&mut self, kind: DelimiterKind, start_span: Span) -> TokenTree {
-        let open_delimiter = Delimiter {
-            kind,
-            side: DelimiterSide::Open,
-            span: start_span,
-        };
-        let mut group_tokens = Vec::new();
-        let close_delimiter = self.sequence(&mut group_tokens);
-        if let Some(close_delimiter) = close_delimiter {
-            if close_delimiter.kind == open_delimiter.kind {
-                Group {
-                    open_delimiter,
-                    close_delimiter,
-                    tokens: group_tokens,
-                }
-                .into()
-            } else {
-                self.errors.push(Error::unclosed_delimiter(
-                    open_delimiter.kind.start().to_string(),
-                    open_delimiter.span,
-                    open_delimiter.kind.end().to_string(),
-                    close_delimiter.span,
-                ));
-                TokenTree::Error(close_delimiter.span)
-            }
-        } else {
-            self.errors.push(Error::unclosed_delimiter(
-                open_delimiter.kind.start().to_string(),
-                open_delimiter.span,
-                open_delimiter.kind.end().to_string(),
-                self.eof(),
-            ));
-            TokenTree::Error(self.eof())
-        }
-    }
-
-    fn sequence(&mut self, tokens: &mut Vec<TokenTree>) -> Option<Delimiter> {
-        while let Ok((ch, span)) = self.next("") {
-            let token = if ch.is_ascii_digit() {
-                self.num(ch, span)
-            } else if ch == '"' {
-                let mut string = String::new();
-                while let Ok((ch, _)) = self.next("") {
-                    if ch == '"' {
-                        break;
-                    }
-                    string.push(ch);
-                }
-                match self.next('"') {
-                    Ok((_, end_span)) => {
-                        TokenTree::Literal(Literal::String(string, span.union(end_span).unwrap()))
-                    }
-                    Err(err) => {
-                        self.errors.push(err);
-                        TokenTree::Error(self.eof())
-                    }
-                }
-            } else if is_ident_start(ch) {
-                self.ident(ch, span)
-            } else if let Ok(kind) = PunctKind::try_from(ch) {
-                let spacing = if self
-                    .peek(0)
-                    .is_some_and(|ch| PunctKind::try_from(ch).is_ok())
-                {
-                    Spacing::Joint
-                } else {
-                    Spacing::Alone
-                };
-
-                Punct {
-                    kind,
-                    spacing,
-                    span,
-                }
-                .into()
-            } else if let Some(kind) = DelimiterKind::start_from_char(ch) {
-                self.group(kind, span)
-            } else if let Some(kind) = DelimiterKind::end_from_char(ch) {
-                return Some(Delimiter {
-                    kind,
-                    side: DelimiterSide::Close,
-                    span,
-                });
-            } else {
-                TokenTree::Error(span)
-            };
-
-            tokens.push(token);
-        }
-
-        None
-    }
-
-    fn lex(mut self) -> (Vec<TokenTree>, Vec<Error>) {
-        let mut tokens = vec![];
-
-        while let Some(delimiter) = self.sequence(&mut tokens) {
-            self.errors.push(Error::unopened_delimiter(
-                delimiter.kind.end().to_string(),
-                delimiter.span,
-            ));
-            tokens.push(TokenTree::Error(delimiter.span));
-        }
-
-        (tokens, self.errors)
-    }
-}
-
-pub fn lex(source: &str, source_id: SourceId) -> (Vec<Token>, Vec<Error>) {
-    let (trees, errors) = Lexer::new(source, source_id).lex();
-    (Token::from_trees(trees, None), errors)
+        })
+        .collect();
+    (tokens, errors)
 }

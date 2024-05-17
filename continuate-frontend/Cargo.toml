@@ -6,6 +6,7 @@ version.workspace = true
 [dependencies]
 chumsky = { workspace = true }
 continuate-error = { workspace = true }
+logos = "0.14.0"
 
 [lints]
 workspace = true
