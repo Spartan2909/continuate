@@ -1,12 +1,29 @@
 pub mod lexer;
 
-use lexer::Ident;
-use lexer::Literal;
-
 use std::collections::HashMap;
 
 use continuate_error::Span;
 
+#[derive(Debug, Clone)]
+pub enum Literal {
+    Int(i64, Span),
+    Float(f64, Span),
+    String(String, Span),
+}
+
+#[derive(Debug, Clone)]
+pub struct Ident {
+    pub string: String,
+    pub span: Span,
+}
+
+impl Ident {
+    pub const fn new(string: String, span: Span) -> Ident {
+        Ident { string, span }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum PathIdentSegment {
     Ident(Ident),
     Package(Span),
@@ -15,7 +32,7 @@ pub enum PathIdentSegment {
 
 #[derive(Debug, Clone)]
 pub struct PathSegment {
-    pub ident: Ident,
+    pub ident: PathIdentSegment,
     pub span: Span,
 }
 
@@ -25,49 +42,98 @@ pub struct Path {
     pub span: Span,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum UnaryOp {
+    Neg(Span),
+    Not(Span),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BinaryOp {
+    Add(Span),
+    Sub(Span),
+    Mul(Span),
+    Div(Span),
+    Rem(Span),
+    Eq(Span),
+    Ne(Span),
+    Lt(Span),
+    Le(Span),
+    Gt(Span),
+    Ge(Span),
+}
+
 #[derive(Debug, Clone)]
-pub enum Expr<'arena> {
+pub enum Pattern {
+    Wildcard,
+    Ident(Ident),
+    Destructure { ty: Path, fields: Vec<Pattern> },
+}
+
+#[derive(Debug, Clone)]
+pub enum Expr {
     Literal(Literal),
     Ident(Ident),
     Block {
-        exprs: Vec<Expr<'arena>>,
+        exprs: Vec<Expr>,
         span: Span,
     },
     Tuple {
-        exprs: Vec<Expr<'arena>>,
+        exprs: Vec<Expr>,
         span: Span,
-    },
-    TupleConstructor {
-        path: Path,
-        fields: Vec<Expr<'arena>>,
-        paren_span: Span,
     },
     NamedConstructor {
         path: Path,
-        fields: Vec<(Ident, Expr<'arena>)>,
+        fields: Vec<(Ident, Expr)>,
         brace_span: Span,
     },
     Array {
-        exprs: Vec<Expr<'arena>>,
+        exprs: Vec<Expr>,
         span: Span,
     },
 
     Get {
-        object: &'arena Expr<'arena>,
+        object: Box<Expr>,
         field: Ident,
     },
     Set {
-        object: &'arena Expr<'arena>,
+        object: Box<Expr>,
         field: Ident,
-        value: &'arena Expr<'arena>,
+        value: Box<Expr>,
     },
 
     Call {
-        callee: &'arena Expr<'arena>,
-        arguments: Vec<Expr<'arena>>,
+        callee: Box<Expr>,
+        arguments: Vec<Expr>,
+        paren_span: Span,
     },
     ContApplication {
-        callee: &'arena Expr<'arena>,
-        arguments: HashMap<Ident, Expr<'arena>>,
+        callee: Box<Expr>,
+        arguments: HashMap<Ident, Expr>,
+        bracket_span: Span,
+    },
+
+    Unary {
+        operator: UnaryOp,
+        operand: Box<Expr>,
+    },
+    Binary {
+        left: Box<Expr>,
+    },
+
+    Declare {
+        name: Ident,
+        ty: Path,
+        value: Box<Expr>,
+        span: Span,
+    },
+    Assign {
+        name: Ident,
+        value: Box<Expr>,
+    },
+
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<(Pattern, Expr)>,
     },
 }
