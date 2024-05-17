@@ -90,6 +90,7 @@ pub enum Literal {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ArenaSafeCopy)]
 pub enum UnaryOp {
+    Not,
     Neg,
 }
 

@@ -349,6 +349,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let input_ty = *self.program.types.get_by_left(&input_ty_ref).unwrap();
         let output_ty = match (operator, input_ty) {
             (UnaryOp::Neg, Type::Int | Type::Float) => input_ty_ref,
+            (UnaryOp::Not, _) if input_ty_ref == self.program.lib_std.ty_bool => input_ty_ref,
             _ => Err(format!("cannot apply {operator:?} to {input_ty:?}"))?,
         };
         let expr = Expr::Unary {

@@ -622,7 +622,10 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
         match operator {
             UnaryOp::Neg if operand_ty == types::F64 => Some(self.builder.ins().ineg(operand)),
             UnaryOp::Neg if operand_ty == types::I64 => Some(self.builder.ins().fneg(operand)),
-            UnaryOp::Neg => unreachable!(),
+            UnaryOp::Not if operand_ty == types::I8 => {
+                Some(self.builder.ins().bxor_imm(operand, 1))
+            }
+            UnaryOp::Neg | UnaryOp::Not => unreachable!(),
         }
     }
 
@@ -1229,7 +1232,7 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
     fn compile_module(&mut self, func_ctx: &mut FunctionBuilderContext) {
         self.calc_ty_layouts();
 
-       self.declare_functions();
+        self.declare_functions();
 
         let functions: Vec<_> = self
             .program

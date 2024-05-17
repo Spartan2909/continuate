@@ -92,6 +92,20 @@ impl<'arena> Value<'arena> {
         }
     }
 
+    pub const fn as_user_defined(
+        &self,
+    ) -> Option<(Option<usize>, &RefCell<Vec<ValueRef<'arena>>>)> {
+        if let Value::UserDefined {
+            discriminant,
+            ref fields,
+        } = *self
+        {
+            Some((discriminant, fields))
+        } else {
+            None
+        }
+    }
+
     fn call(
         &self,
         params: Vec<ValueRef<'arena>>,
@@ -436,6 +450,23 @@ impl<'arena> Executor<'arena> {
         )
     }
 
+    fn unary_op(
+        &mut self,
+        operator: UnaryOp,
+        operand: &Expr<'arena>,
+    ) -> ControlFlow<ValueRef<'arena>> {
+        let value = value!(self.expr(operand));
+        match operator {
+            UnaryOp::Neg => ControlFlow::value(Value::Int(-value.as_int().unwrap()), self.arena),
+            UnaryOp::Not => {
+                let (discriminant, fields) = value.as_user_defined().unwrap();
+                let value =
+                    Value::user_defined(Some(discriminant.unwrap() ^ 1), fields.borrow().clone());
+                ControlFlow::value(value, self.arena)
+            }
+        }
+    }
+
     fn binary_op(
         &mut self,
         left: &Expr<'arena>,
@@ -544,14 +575,7 @@ impl<'arena> Executor<'arena> {
                 operator,
                 operand,
                 operand_ty: _,
-            } => {
-                let value = value!(self.expr(operand));
-                match operator {
-                    UnaryOp::Neg => {
-                        ControlFlow::value(Value::Int(-value.as_int().unwrap()), self.arena)
-                    }
-                }
-            }
+            } => self.unary_op(operator, operand),
             Expr::Binary {
                 left,
                 left_ty: _,
