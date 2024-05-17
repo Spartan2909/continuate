@@ -3,6 +3,8 @@ use std::collections::HashSet;
 use std::fmt;
 use std::io;
 use std::io::Write;
+use std::iter;
+use std::mem;
 use std::num::NonZeroU32;
 use std::ops::Range;
 use std::path::Path;
@@ -15,6 +17,7 @@ use ariadne::Report;
 use ariadne::ReportKind;
 
 use chumsky::input::Input;
+use chumsky::label;
 use chumsky::span;
 use chumsky::util::MaybeRef;
 
@@ -292,7 +295,7 @@ impl ariadne::Span for Span {
 #[derive(EnumDiscriminants)]
 #[strum_discriminants(name(ErrorCode))]
 #[strum_discriminants(repr(u8))]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum ErrorInner {
     UnexpectedToken {
         expected: HashSet<Option<String>>,
@@ -303,6 +306,7 @@ enum ErrorInner {
         unclosed: String,
         unclosed_span: Span,
         expected: String,
+        found: String,
         found_span: Span,
     },
     UnopenedDelimiter {
@@ -310,6 +314,26 @@ enum ErrorInner {
         unopened_span: Span,
     },
     Simple(String),
+}
+
+impl ErrorInner {
+    fn take_found(&mut self) -> Option<String> {
+        match self {
+            ErrorInner::UnexpectedToken { found, .. } => found.take(),
+            ErrorInner::UnclosedDelimiter { found, .. } => Some(mem::take(found)),
+            ErrorInner::UnopenedDelimiter { unopened, .. } => Some(mem::take(unopened)),
+            ErrorInner::Simple(_) => None,
+        }
+    }
+
+    const fn span(&self) -> Option<Span> {
+        match *self {
+            ErrorInner::UnexpectedToken { span, .. } => Some(span),
+            ErrorInner::UnclosedDelimiter { found_span, .. } => Some(found_span),
+            ErrorInner::UnopenedDelimiter { unopened_span, .. } => Some(unopened_span),
+            ErrorInner::Simple(_) => None,
+        }
+    }
 }
 
 impl fmt::Display for ErrorCode {
@@ -326,7 +350,7 @@ fn format_token(token: Option<&String>) -> String {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct SingleError {
     inner: ErrorInner,
     note: Option<String>,
@@ -376,6 +400,7 @@ impl SingleError {
                 ref unclosed,
                 unclosed_span,
                 ref expected,
+                found: _,
                 found_span,
             } => {
                 let unclosed_message = format!("Unclosed '{unclosed}'");
@@ -424,7 +449,7 @@ impl From<ErrorInner> for SingleError {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Error {
     errors: Vec<SingleError>,
 }
@@ -447,12 +472,14 @@ impl Error {
         unclosed: String,
         unclosed_span: Span,
         expected: String,
+        found: String,
         found_span: Span,
     ) -> Error {
         ErrorInner::UnclosedDelimiter {
             unclosed,
             unclosed_span,
             expected,
+            found,
             found_span,
         }
         .into()
@@ -545,6 +572,12 @@ impl From<String> for Error {
     }
 }
 
+impl Default for Error {
+    fn default() -> Self {
+        Error::simple("unrecognised token".to_string())
+    }
+}
+
 impl<'a, I> chumsky::error::Error<'a, I> for Error
 where
     I: Input<'a, Span = Span>,
@@ -562,6 +595,42 @@ where
             found.map(|token| (*token).to_string()),
             span,
         )
+    }
+
+    fn merge(mut self, mut other: Self) -> Self {
+        self.errors.append(&mut other.errors);
+        self
+    }
+}
+
+impl<'a, I, L> label::LabelError<'a, I, L> for Error
+where
+    I: Input<'a, Span = Span>,
+    I::Token: ToString,
+    L: ToString,
+{
+    fn label_with(&mut self, label: L) {
+        for error in &mut self.errors {
+            if let ErrorInner::UnexpectedToken {
+                ref mut expected,
+                found: _,
+                span: _,
+            } = error.inner
+            {
+                expected.clear();
+                expected.insert(Some(label.to_string()));
+            } else {
+                error.inner = ErrorInner::UnexpectedToken {
+                    expected: iter::once(Some(label.to_string())).collect(),
+                    found: error.inner.take_found(),
+                    span: error.inner.span().unwrap_or_else(Span::dummy),
+                }
+            }
+        }
+    }
+
+    fn in_context(&mut self, label: L, _: Span) {
+        <Self as label::LabelError<'a, I, L>>::label_with(self, label);
     }
 }
 

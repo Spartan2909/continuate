@@ -29,7 +29,7 @@ resolver = "2"
 package.version = "0.1.0"
 
 [workspace.dependencies]
-chumsky = { version = "1.0.0-alpha.7", features = ["nightly"] }
+chumsky = { version = "1.0.0-alpha.7", features = ["label", "nightly"] }
 continuate-arena = { version = "0.1.0", path = "./continuate-arena" }
 continuate-arena-macros = { version = "0.1.0", path = "./continuate-arena-macros" }
 continate-backend = { version = "0.1.0", path = "./continuate-backend" }
