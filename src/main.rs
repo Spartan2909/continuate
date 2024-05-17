@@ -92,6 +92,9 @@ fn main() {
     let termination_cont = main_fn.ident();
     main_fn.continuations.insert(termination_cont, int_fn_ref);
 
+    let string = Expr::Literal(Literal::String("hello".to_string()));
+    main_fn.body.push(string);
+
     let three = Expr::Literal(Literal::Int(3));
     let seven = Expr::Literal(Literal::Int(7));
 

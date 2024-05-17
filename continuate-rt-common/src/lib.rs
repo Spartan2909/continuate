@@ -90,7 +90,7 @@ impl<'a, T> Slice<'a, T> {
     #[inline]
     pub fn allocate_slice<'b, A: Allocator + 'b>(slice: &[T], alloc: &'b A) -> Slice<'b, T>
     where
-        T: Copy,
+        T: Copy + 'b,
     {
         let layout = Layout::array::<T>(slice.len()).unwrap();
         let ptr = alloc.allocate(layout).unwrap();
@@ -162,6 +162,12 @@ impl<'a, T> ops::Index<usize> for Slice<'a, T> {
     }
 }
 
+// SAFETY: `Slice` behaves identically to `&'a [T]`.
+unsafe impl<'a, T> Send for Slice<'a, T> where &'a [T]: Send {}
+
+// SAFETY: `Slice` behaves identically to `&'a [T]`.
+unsafe impl<'a, T> Sync for Slice<'a, T> where &'a [T]: Sync {}
+
 /// The layout of a primitive type, a product type, or a single variant of a sum type.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ArenaSafeCopy)]
@@ -196,14 +202,16 @@ pub enum TyLayout<'a> {
         /// The highest alignment required by a variant layout, in bytes.
         align: u64,
     } = 1,
+    String = 2,
 }
 
 impl<'a> TyLayout<'a> {
     #[inline]
-    pub const fn size(&self) -> u64 {
+    pub const fn size(&self) -> Option<u64> {
         match *self {
-            TyLayout::Single(ref layout) => layout.size,
-            TyLayout::Sum { size, .. } => size,
+            TyLayout::Single(ref layout) => Some(layout.size),
+            TyLayout::Sum { size, .. } => Some(size),
+            TyLayout::String => None,
         }
     }
 
@@ -212,6 +220,7 @@ impl<'a> TyLayout<'a> {
         match *self {
             TyLayout::Single(ref layout) => layout.align,
             TyLayout::Sum { align, .. } => align,
+            TyLayout::String => 1,
         }
     }
 

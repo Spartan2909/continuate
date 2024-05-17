@@ -8,6 +8,8 @@ crate-type = ["staticlib"]
 
 [dependencies]
 continuate-rt-common = { version = "0.1.0", path = "../continuate-rt-common" }
+log = { workspace = true }
+simple_logger = { workspace = true }
 
 [lints]
 workspace = true

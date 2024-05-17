@@ -206,6 +206,8 @@ name = "continuate-rt"
 version = "0.1.0"
 dependencies = [
  "continuate-rt-common",
+ "log",
+ "simple_logger",
 ]
 
 [[package]]

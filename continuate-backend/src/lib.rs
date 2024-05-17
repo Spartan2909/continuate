@@ -79,8 +79,14 @@ struct Runtime {
     /// `fn(ty_layout: &'static TyLayout<'static>, variant: usize) -> *mut ()`
     alloc_gc: FuncId,
 
+    /// `fn(len: usize) -> *mut ()`
+    alloc_string: FuncId,
+
     /// `fn(i64)`
     exit: FuncId,
+
+    /// `fn()`
+    enable_log: FuncId,
 }
 
 impl Runtime {
@@ -96,13 +102,33 @@ impl Runtime {
             .declare_function("cont_rt_alloc_gc", Linkage::Import, &alloc_gc_sig)
             .unwrap();
 
+        let mut alloc_string_sig = module.make_signature();
+        alloc_string_sig.params.push(AbiParam::new(ptr_ty));
+        alloc_string_sig.returns.push(AbiParam::new(ptr_ty));
+        let alloc_string = module
+            .declare_function("cont_rt_alloc_string", Linkage::Import, &alloc_string_sig)
+            .unwrap();
+
         let mut exit_sig = module.make_signature();
         exit_sig.params.push(AbiParam::new(types::I64));
         let exit = module
             .declare_function("cont_rt_exit", Linkage::Import, &exit_sig)
             .unwrap();
 
-        Runtime { alloc_gc, exit }
+        let enable_log = module
+            .declare_function(
+                "cont_rt_enable_log",
+                Linkage::Import,
+                &module.make_signature(),
+            )
+            .unwrap();
+
+        Runtime {
+            alloc_gc,
+            alloc_string,
+            exit,
+            enable_log,
+        }
     }
 }
 
@@ -134,7 +160,7 @@ fn ptr_ty(triple: &Triple) -> Type {
 }
 
 fn fat_ptr_ty(triple: &Triple) -> Type {
-    Type::int(ptr_ty(triple).bits() as u16).unwrap()
+    Type::int(ptr_ty(triple).bits() as u16 * 2).unwrap()
 }
 
 fn int_as_target_usize<T: Into<u64>>(i: T, sink: &mut Vec<u8>, triple: &Triple) {
@@ -155,7 +181,7 @@ fn int_as_target_usize<T: Into<u64>>(i: T, sink: &mut Vec<u8>, triple: &Triple) 
     }
 }
 
-fn declare_const(
+fn declare_static(
     contents: Box<[u8]>,
     align: Option<u64>,
     module: &mut ObjectModule,
@@ -187,40 +213,6 @@ fn dangling_static_ptr(
     data_description.define(contents.into_boxed_slice());
     module.define_data(ptr, data_description).unwrap();
     ptr
-}
-
-fn pointer_to_global(
-    data_id: DataId,
-    align: Option<u64>,
-    module: &mut ObjectModule,
-    data_description: &mut DataDescription,
-    triple: &Triple,
-) -> DataId {
-    let align = align.unwrap_or(1);
-    let ptr = module.declare_anonymous_data(false, false).unwrap();
-    data_description.clear();
-    let mut contents = Vec::with_capacity(8);
-    int_as_target_usize(align, &mut contents, triple);
-    data_description.define(contents.into_boxed_slice());
-    let gv = module.declare_data_in_data(data_id, data_description);
-    data_description.write_data_addr(0, gv, 0);
-    module.define_data(ptr, data_description).unwrap();
-
-    ptr
-}
-
-fn declare_static(
-    contents: Box<[u8]>,
-    align: Option<u64>,
-    module: &mut ObjectModule,
-    data_description: &mut DataDescription,
-    triple: &Triple,
-) -> DataId {
-    let global = declare_const(contents, align, module, data_description);
-    let dangling = dangling_static_ptr(align, module, data_description, triple);
-    global.map_or(dangling, |global| {
-        pointer_to_global(global, align, module, data_description, triple)
-    })
 }
 
 fn ty_for(ty: TypeRef, triple: &Triple, lib_std: &StdLib) -> Type {
@@ -351,10 +343,23 @@ impl<'arena, 'function, 'builder> FunctionCompiler<'arena, 'function, 'builder> 
             None,
             self.module,
             self.data_description,
-            self.triple,
-        );
+        )
+        .unwrap_or_else(|| {
+            dangling_static_ptr(None, self.module, self.data_description, self.triple)
+        });
 
-        let dest_ptr = self.alloc_gc(self.program.lib_std.ty_string, None);
+        let alloc_string = self
+            .module
+            .declare_func_in_func(self.runtime.alloc_string, self.builder.func);
+        let len = self
+            .builder
+            .ins()
+            .iconst(ptr_ty(self.triple), string.len() as i64);
+        let call_result = self.builder.ins().call(alloc_string, &[len]);
+        let values = self.builder.inst_results(call_result);
+        debug_assert_eq!(values.len(), 1);
+
+        let dest_ptr = values[0];
 
         let gv = self
             .module
@@ -1003,7 +1008,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         layout: &SingleLayout,
         contents: &mut Vec<u8>,
     ) -> (u32, DataId) {
-        let gc_pointer_locations = declare_const(
+        let gc_pointer_locations = declare_static(
             layout.field_locations.as_byte_slice().as_slice().into(),
             Some(8),
             &mut self.module,
@@ -1037,7 +1042,6 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         )
     }
 
-    /// Returns the global by value.
     fn declare_single_layout_global(
         &mut self,
         layout: &SingleLayout,
@@ -1067,14 +1071,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
         match *layout {
             TyLayout::Single(ref layout) => {
                 let contents = vec![0; ptr_ty(&self.triple).bytes() as usize];
-                let layout = self.declare_single_layout_global(layout, contents);
-                pointer_to_global(
-                    layout,
-                    Some(8),
-                    &mut self.module,
-                    &mut self.data_description,
-                    &self.triple,
-                )
+                self.declare_single_layout_global(layout, contents)
             }
             TyLayout::Sum {
                 layouts,
@@ -1123,14 +1120,15 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
                     .define_data(layout, &self.data_description)
                     .unwrap();
 
-                pointer_to_global(
-                    layout,
-                    Some(8),
-                    &mut self.module,
-                    &mut self.data_description,
-                    &self.triple,
-                )
+                layout
             }
+            TyLayout::String => declare_static(
+                [2].into(),
+                None,
+                &mut self.module,
+                &mut self.data_description,
+            )
+            .unwrap(),
         }
     }
 
@@ -1141,7 +1139,7 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
             MirType::Int | MirType::Float | MirType::Function(_) => {
                 SingleLayout::primitive(8, 8).into()
             }
-            MirType::String => SingleLayout::primitive(16, 8).into(),
+            MirType::String => TyLayout::String,
             MirType::Array(elem_ty, len) => {
                 let (elem_size, elem_align, ptr) = ty_ref_size_align_ptr(elem_ty, &self.program);
                 let field_locations: Vec<_> =
@@ -1253,6 +1251,11 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
             let block = builder.create_block();
             builder.switch_to_block(block);
             builder.seal_block(block);
+
+            let enable_log = self
+                .module
+                .declare_func_in_func(self.runtime.enable_log, builder.func);
+            builder.ins().call(enable_log, &[]);
 
             let entry_point = self.functions[&self.program.entry_point()].0;
             let entry_point = self.module.declare_func_in_func(entry_point, builder.func);

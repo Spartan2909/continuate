@@ -8,8 +8,8 @@ continuate-arena = { version = "0.1.0", path = "./continuate-arena" }
 continuate-backend = { version = "0.1.0", path = "./continuate-backend" }
 continuate-frontend = { version = "0.1.0", path = "./continuate-frontend" }
 continuate-ir = { version = "0.1.0", path = "./continuate-ir" }
-log = "0.4.21"
-simple_logger = { version = "4.3.3", features = ["colored"] }
+log = { workspace = true }
+simple_logger = { workspace = true }
 
 [lints]
 workspace = true
@@ -30,6 +30,8 @@ package.version = "0.1.0"
 
 [workspace.dependencies]
 chumsky = { version = "1.0.0-alpha.7", features = ["nightly"] }
+log = "0.4.21"
+simple_logger = { version = "4.3.3", features = ["colored"] }
 
 [profile.dev.package."*"]
 opt-level = 3
