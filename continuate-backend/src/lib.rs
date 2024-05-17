@@ -90,7 +90,7 @@ struct Runtime {
 }
 
 impl Runtime {
-    fn new(module: &mut ObjectModule) -> Runtime {
+    fn new<M: Module>(module: &mut M) -> Runtime {
         let ptr_ty = Type::triple_pointer_type(module.isa().triple());
 
         let mut alloc_gc_sig = module.make_signature();
@@ -181,10 +181,10 @@ fn int_as_target_usize<T: Into<u64>>(i: T, sink: &mut Vec<u8>, triple: &Triple) 
     }
 }
 
-fn declare_static(
+fn declare_static<M: Module>(
     contents: Box<[u8]>,
     align: Option<u64>,
-    module: &mut ObjectModule,
+    module: &mut M,
     data_description: &mut DataDescription,
 ) -> Option<DataId> {
     if contents.is_empty() {
@@ -200,9 +200,9 @@ fn declare_static(
     Some(global)
 }
 
-fn dangling_static_ptr(
+fn dangling_static_ptr<M: Module>(
     align: Option<u64>,
-    module: &mut ObjectModule,
+    module: &mut M,
     data_description: &mut DataDescription,
     triple: &Triple,
 ) -> DataId {
@@ -266,9 +266,9 @@ fn signature_from_function_ty(
     signature
 }
 
-struct FunctionCompiler<'arena, 'function, 'builder> {
+struct FunctionCompiler<'arena, 'function, 'builder, M> {
     program: &'function Program<'function>,
-    module: &'function mut ObjectModule,
+    module: &'function mut M,
     data_description: &'function mut DataDescription,
     triple: &'function Triple,
     runtime: &'function Runtime,
@@ -280,7 +280,7 @@ struct FunctionCompiler<'arena, 'function, 'builder> {
     params: &'function [(Ident, Type)],
 }
 
-impl<'arena, 'function, 'builder> FunctionCompiler<'arena, 'function, 'builder> {
+impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function, 'builder, M> {
     fn cranelift_endianness(&self) -> ir::Endianness {
         use ir::Endianness as E;
         match self.triple.endianness().unwrap() {
@@ -864,9 +864,9 @@ impl<'arena, 'function, 'builder> FunctionCompiler<'arena, 'function, 'builder> 
     }
 }
 
-struct Compiler<'arena, 'a> {
+struct Compiler<'arena, 'a, M> {
     program: Program<'a>,
-    module: ObjectModule,
+    module: M,
     context: Context,
     data_description: DataDescription,
     triple: Triple,
@@ -876,12 +876,12 @@ struct Compiler<'arena, 'a> {
     arena: &'arena Arena<'arena>,
 }
 
-impl<'arena, 'a> Compiler<'arena, 'a> {
+impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
     fn new(
         program: Program<'a>,
-        mut module: ObjectModule,
+        mut module: M,
         arena: &'arena Arena<'arena>,
-    ) -> Compiler<'arena, 'a> {
+    ) -> Compiler<'arena, 'a, M> {
         let triple = module.isa().triple().clone();
         let runtime = Runtime::new(&mut module);
         Compiler {
@@ -1188,12 +1188,14 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
             .insert(ty_ref, (self.arena.allocate(layout), global_id));
     }
 
-    fn compile(mut self, binary: bool) -> ObjectProduct {
+    fn calc_ty_layouts(&mut self) {
         let types: Vec<_> = self.program.types.left_values().copied().collect();
         for ty in types {
             self.calc_ty_layout(ty);
         }
+    }
 
+    fn declare_functions(&mut self) {
         for (&func_ref, &function) in &self.program.functions {
             let params: Vec<_> = function
                 .params
@@ -1222,6 +1224,12 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
                 .unwrap();
             self.functions.insert(func_ref, (id, sig));
         }
+    }
+
+    fn compile_module(&mut self, func_ctx: &mut FunctionBuilderContext) {
+        self.calc_ty_layouts();
+
+       self.declare_functions();
 
         let functions: Vec<_> = self
             .program
@@ -1229,54 +1237,65 @@ impl<'arena, 'a> Compiler<'arena, 'a> {
             .iter()
             .map(|(&func_ref, &func)| (func_ref, func))
             .collect();
-        let mut func_ctx = FunctionBuilderContext::new();
         for (func_ref, function) in functions {
-            self.function(function, func_ref, &mut func_ctx);
+            self.function(function, func_ref, func_ctx);
         }
+    }
+}
 
-        if binary {
-            let c_int = self.c_int_ty();
+impl<'arena, 'a> Compiler<'arena, 'a, ObjectModule> {
+    fn compile_library(mut self) -> ObjectProduct {
+        self.compile_module(&mut FunctionBuilderContext::new());
 
-            let mut signature = self.module.make_signature();
-            signature.returns.push(AbiParam::new(c_int));
+        self.module.finish()
+    }
 
-            let main = self
-                .module
-                .declare_function("main", Linkage::Export, &signature)
-                .unwrap();
-            let name = UserFuncName::User(UserExternalName::new(1, 0));
-            let mut function = Function::with_name_signature(name, signature);
-            let mut builder = FunctionBuilder::new(&mut function, &mut func_ctx);
+    fn compile_binary(mut self) -> ObjectProduct {
+        let mut func_ctx = FunctionBuilderContext::new();
 
-            let block = builder.create_block();
-            builder.switch_to_block(block);
-            builder.seal_block(block);
+        self.compile_module(&mut func_ctx);
 
-            let enable_log = self
-                .module
-                .declare_func_in_func(self.runtime.enable_log, builder.func);
-            builder.ins().call(enable_log, &[]);
+        let c_int = self.c_int_ty();
 
-            let entry_point = self.functions[&self.program.entry_point()].0;
-            let entry_point = self.module.declare_func_in_func(entry_point, builder.func);
+        let mut signature = self.module.make_signature();
+        signature.returns.push(AbiParam::new(c_int));
 
-            let termination_ref = self.program.lib_std.fn_termination;
-            let termination = self.functions[&termination_ref].0;
-            let termination = self.module.declare_func_in_func(termination, builder.func);
-            let termination_addr = builder.ins().func_addr(ptr_ty(&self.triple), termination);
-            builder.ins().call(entry_point, &[termination_addr]);
+        let main = self
+            .module
+            .declare_function("main", Linkage::Export, &signature)
+            .unwrap();
+        let name = UserFuncName::User(UserExternalName::new(1, 0));
+        let mut function = Function::with_name_signature(name, signature);
+        let mut builder = FunctionBuilder::new(&mut function, &mut func_ctx);
 
-            let rval = builder.ins().iconst(c_int, 0);
-            builder.ins().return_(&[rval]);
+        let block = builder.create_block();
+        builder.switch_to_block(block);
+        builder.seal_block(block);
 
-            builder.finalize();
+        let enable_log = self
+            .module
+            .declare_func_in_func(self.runtime.enable_log, builder.func);
+        builder.ins().call(enable_log, &[]);
 
-            self.context.clear();
-            self.context.func = function;
-            self.module
-                .define_function(main, &mut self.context)
-                .unwrap();
-        }
+        let entry_point = self.functions[&self.program.entry_point()].0;
+        let entry_point = self.module.declare_func_in_func(entry_point, builder.func);
+
+        let termination_ref = self.program.lib_std.fn_termination;
+        let termination = self.functions[&termination_ref].0;
+        let termination = self.module.declare_func_in_func(termination, builder.func);
+        let termination_addr = builder.ins().func_addr(ptr_ty(&self.triple), termination);
+        builder.ins().call(entry_point, &[termination_addr]);
+
+        let rval = builder.ins().iconst(c_int, 0);
+        builder.ins().return_(&[rval]);
+
+        builder.finalize();
+
+        self.context.clear();
+        self.context.func = function;
+        self.module
+            .define_function(main, &mut self.context)
+            .unwrap();
 
         self.module.finish()
     }
@@ -1296,5 +1315,10 @@ pub fn compile(program: Program, binary: bool) -> ObjectProduct {
     );
 
     let arena = Arena::new();
-    Compiler::new(program, module, &arena).compile(binary)
+    let compiler = Compiler::new(program, module, &arena);
+    if binary {
+        compiler.compile_binary()
+    } else {
+        compiler.compile_library()
+    }
 }
