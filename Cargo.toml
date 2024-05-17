@@ -30,8 +30,9 @@ package.version = "0.1.0"
 
 [workspace.dependencies]
 chumsky = { version = "1.0.0-alpha.7", features = ["nightly"] }
+itertools = "0.13.0"
 log = "0.4.21"
-simple_logger = { version = "4.3.3", features = ["colored"] }
+simple_logger = { version = "5.0.0", features = ["colors", "stderr"] }
 
 [profile.dev.package."*"]
 opt-level = 3

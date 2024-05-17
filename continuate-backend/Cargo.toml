@@ -10,7 +10,7 @@ continuate-rt-common = { version = "0.1.0", path = "../continuate-rt-common" }
 cranelift = "0.107.0"
 cranelift-module = "0.107.0"
 cranelift-object = "0.107.0"
-itertools = "0.12.1"
+itertools = { workspace = true }
 log = { workspace = true }
 target-lexicon = "0.12.14"
 
