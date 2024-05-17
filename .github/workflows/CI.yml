@@ -18,7 +18,7 @@ jobs:
       fail-fast: false
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: Setup
       run: |
         rustup toolchain add nightly --component clippy
@@ -31,12 +31,13 @@ jobs:
       run: cargo test --verbose --workspace --profile ci
     - name: Run Clippy
       run: cargo clippy --verbose --workspace --profile ci
+
   miri:
     name: Test with Miri
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup
         run: |
           rustup toolchain add nightly --component miri
