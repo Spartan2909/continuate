@@ -30,6 +30,13 @@ package.version = "0.1.0"
 
 [workspace.dependencies]
 chumsky = { version = "1.0.0-alpha.7", features = ["nightly"] }
+continuate-arena = { version = "0.1.0", path = "./continuate-arena" }
+continuate-arena-macros = { version = "0.1.0", path = "./continuate-arena-macros" }
+continate-backend = { version = "0.1.0", path = "./continuate-backend" }
+continuate-error = { version = "0.1.0", path = "./continuate-error" }
+continuate-frontend = { version = "0.1.0", path = "./continuate-frontend" }
+continuate-ir = { version = "0.1.0", path = "./continuate-ir" }
+continuate-rt-common = { version = "0.1.0", path = "./continuate-rt-common" }
 itertools = "0.13.0"
 log = "0.4.21"
 simple_logger = { version = "5.0.0", features = ["colors", "stderr"] }
