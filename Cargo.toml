@@ -37,6 +37,12 @@ simple_logger = { version = "5.0.0", features = ["colors", "stderr"] }
 [profile.dev.package."*"]
 opt-level = 3
 
+[profile.ci]
+inherits = "dev"
+
+[profile.ci.package."*"]
+opt-level = 0
+
 [profile.release]
 opt-level = 3
 lto = true

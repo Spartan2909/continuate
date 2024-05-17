@@ -26,11 +26,11 @@ jobs:
     - name: Build runtime
       run: cargo build --verbose -p continuate-rt
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --verbose --profile ci
     - name: Run tests
-      run: cargo test --verbose --workspace
+      run: cargo test --verbose --workspace --profile ci
     - name: Run Clippy
-      run: cargo clippy --verbose --workspace
+      run: cargo clippy --verbose --workspace --profile ci
   miri:
     name: Test with Miri
     runs-on: ubuntu-latest
@@ -43,4 +43,4 @@ jobs:
           rustup override set nightly
           cargo miri setup
       - name: Run Miri
-        run: cargo miri test --verbose --workspace
+        run: cargo miri test --verbose --workspace --profile ci
