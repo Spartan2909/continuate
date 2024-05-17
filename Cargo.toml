@@ -61,3 +61,6 @@ redundant_pub_crate = "allow"
 todo = "warn"
 undocumented_unsafe_blocks = "deny"
 use_self = "allow"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
