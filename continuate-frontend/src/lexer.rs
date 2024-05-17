@@ -19,7 +19,7 @@ pub enum Spacing {
 }
 
 fn spacing(lex: &Lexer<Token>) -> Spacing {
-    const PUNCTUATION: [char; 3] = ['.', ',', ':'];
+    const PUNCTUATION: [char; 7] = ['.', ',', ':', '=', '<', '>', ';'];
 
     if let Some(ch) = lex.remainder().chars().next() {
         if PUNCTUATION.contains(&ch) {
@@ -54,6 +54,7 @@ pub enum Token {
     #[token("type")]
     Type,
 
+    #[regex(r"[a-zA-Z_]\w*", |lex| lex.slice().to_string())]
     Ident(String),
 
     #[regex(r"\d+", |lex| lex.slice().parse::<i64>().unwrap())]
