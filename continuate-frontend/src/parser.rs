@@ -1,5 +1,6 @@
 use crate::lexer::Spacing;
 use crate::lexer::Token;
+use crate::BinaryOp;
 use crate::Expr;
 use crate::Ident;
 use crate::Literal;
@@ -7,6 +8,7 @@ use crate::Path;
 use crate::PathIdentSegment;
 use crate::PathSegment;
 use crate::Pattern;
+use crate::UnaryOp;
 
 use chumsky::prelude::*;
 
@@ -22,6 +24,22 @@ type ParserInput<'tokens, 'src> =
 macro_rules! filter_matches {
     ($pat:pat) => {
         any().filter(|token| matches!(token, $pat))
+    };
+}
+
+/// Parse a token that matches the given pattern, then map its span to the given function.
+macro_rules! operator {
+    ($token:path, $op:expr) => {
+        filter_matches!($token(_)).to_span().map($op)
+    };
+}
+
+macro_rules! wide_operator {
+    ($first:path, $second:path, $op:expr) => {
+        just($first(Spacing::Joint))
+            .then(filter_matches!($second(_)))
+            .to_span()
+            .map($op)
     };
 }
 
@@ -117,9 +135,7 @@ where
                 },
             );
 
-        filter_matches!(Token::Underscore(_))
-            .to_span()
-            .map(Pattern::Wildcard)
+        operator!(Token::Underscore, Pattern::Wildcard)
             .or(ident().map(Pattern::Ident))
             .or(named_destructure)
             .or(anonymous_destructure)
@@ -296,8 +312,7 @@ fn expr<'tokens, 'src>(
 where
     'src: 'tokens,
 {
-    // FIXME: This is a terrible way of avoiding recursive types.
-    recursive(|_| {
+    recursive(|expr| {
         let call = atom().foldl(call_rhs().repeated(), |object, rhs| match rhs {
             CallRhs::Get { field } => Expr::Get {
                 object: Box::new(object),
@@ -326,6 +341,73 @@ where
             },
         });
 
-        call
-    }).labelled("expression")
+        let unary = recursive(|unary| {
+            operator!(Token::Dash, UnaryOp::Neg)
+                .or(operator!(Token::Bang, UnaryOp::Not))
+                .then(unary)
+                .map(|(operator, operand)| Expr::Unary {
+                    operator,
+                    operand: Box::new(operand),
+                })
+                .or(call)
+        });
+
+        let factor = unary.clone().foldl(
+            operator!(Token::Asterisk, BinaryOp::Mul)
+                .or(operator!(Token::Slash, BinaryOp::Div))
+                .or(operator!(Token::Percent, BinaryOp::Rem))
+                .then(unary)
+                .repeated(),
+            |left, (operator, right)| Expr::Binary {
+                left: Box::new(left),
+                operator,
+                right: Box::new(right),
+            },
+        );
+
+        let sum = factor.clone().foldl(
+            operator!(Token::Plus, BinaryOp::Add)
+                .or(operator!(Token::Dash, BinaryOp::Sub))
+                .then(factor)
+                .repeated(),
+            |left, (operator, right)| Expr::Binary {
+                left: Box::new(left),
+                operator,
+                right: Box::new(right),
+            },
+        );
+
+        let comparison = sum
+            .clone()
+            .then(
+                wide_operator!(Token::Eq, Token::Eq, BinaryOp::Eq)
+                    .or(wide_operator!(Token::Bang, Token::Eq, BinaryOp::Ne))
+                    .or(operator!(Token::Lt, BinaryOp::Lt))
+                    .or(wide_operator!(Token::Lt, Token::Eq, BinaryOp::Le))
+                    .or(operator!(Token::Gt, BinaryOp::Gt))
+                    .or(wide_operator!(Token::Gt, Token::Eq, BinaryOp::Ge))
+                    .then(sum)
+                    .or_not(),
+            )
+            .map(|(left, right)| {
+                if let Some((operator, right)) = right {
+                    Expr::Binary {
+                        left: Box::new(left),
+                        operator,
+                        right: Box::new(right),
+                    }
+                } else {
+                    left
+                }
+            });
+
+        comparison.or(ident()
+            .then_ignore(filter_matches!(Token::Eq(_)))
+            .then(expr)
+            .map(|(name, value)| Expr::Assign {
+                name,
+                value: Box::new(value),
+            }))
+    })
+    .labelled("expression")
 }

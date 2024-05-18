@@ -19,7 +19,9 @@ pub enum Spacing {
 }
 
 fn spacing<'src>(lex: &Lexer<'src, Token<'src>>) -> Spacing {
-    const PUNCTUATION: [char; 7] = ['.', ',', ':', '=', '<', '>', ';'];
+    const PUNCTUATION: [char; 13] = [
+        '.', ',', ':', '=', '<', '>', ';', '+', '-', '*', '/', '%', '!',
+    ];
 
     if let Some(ch) = lex.remainder().chars().next() {
         if PUNCTUATION.contains(&ch) {
@@ -34,10 +36,13 @@ fn spacing<'src>(lex: &Lexer<'src, Token<'src>>) -> Spacing {
 
 #[derive(Debug, Clone, Copy, PartialEq, Logos)]
 #[logos(error = Error)]
-#[logos(skip r"\s+")]
+#[logos(skip r"[ \t]+")]
 pub enum Token<'src> {
     #[regex(r"//[^\n]+", logos::skip)]
     Comment,
+
+    #[token("\n")]
+    Newline,
 
     #[token("fn")]
     Fn,
@@ -78,6 +83,19 @@ pub enum Token<'src> {
     Gt(Spacing),
     #[token(";", spacing)]
     Semicolon(Spacing),
+    #[token("+", spacing)]
+    Plus(Spacing),
+    #[token("-", spacing)]
+    Dash(Spacing),
+    #[token("*", spacing)]
+    Asterisk(Spacing),
+    #[token("/", spacing)]
+    Slash(Spacing),
+    #[token("%", spacing)]
+    Percent(Spacing),
+    #[token("!", spacing)]
+    Bang(Spacing),
+
     #[token("_", spacing)]
     Underscore(Spacing),
 
@@ -101,7 +119,9 @@ pub enum Token<'src> {
 impl fmt::Display for Token<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            Token::Comment => f.write_str("<comment>"),
+            Token::Comment => f.write_str("<comment>\n"),
+
+            Token::Newline => f.write_str("\n"),
 
             Token::Fn => f.write_str("fn"),
             Token::If => f.write_str("if"),
@@ -124,6 +144,13 @@ impl fmt::Display for Token<'_> {
             Token::Lt(_) => f.write_str("<"),
             Token::Gt(_) => f.write_str(">"),
             Token::Semicolon(_) => f.write_str(";"),
+            Token::Plus(_) => f.write_str("+"),
+            Token::Dash(_) => f.write_str("-"),
+            Token::Asterisk(_) => f.write_str("*"),
+            Token::Slash(_) => f.write_str("/"),
+            Token::Percent(_) => f.write_str("%"),
+            Token::Bang(_) => f.write_str("!"),
+
             Token::Underscore(_) => f.write_str("_"),
 
             Token::OpenParen => f.write_str("("),
@@ -132,6 +159,7 @@ impl fmt::Display for Token<'_> {
             Token::CloseParen => f.write_str(")"),
             Token::CloseBracket => f.write_str("]"),
             Token::CloseBrace => f.write_str("}"),
+
             Token::Error => f.write_str("<error>"),
         }
     }
