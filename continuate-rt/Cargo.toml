@@ -1,7 +1,8 @@
 [package]
 name = "continuate-rt"
-edition = "2021"
 version.workspace = true
+edition = "2021"
+license.workspace = true
 
 [lib]
 crate-type = ["staticlib"]

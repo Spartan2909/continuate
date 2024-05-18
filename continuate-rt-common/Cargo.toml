@@ -1,7 +1,8 @@
 [package]
 name = "continuate-rt-common"
-edition = "2021"
 version.workspace = true
+edition = "2021"
+license.workspace = true
 
 [dependencies]
 bytemuck = "1.15.0"

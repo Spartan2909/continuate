@@ -1,7 +1,8 @@
 [package]
 name = "continuate-frontend"
-edition = "2021"
 version.workspace = true
+edition = "2021"
+license.workspace = true
 
 [dependencies]
 chumsky = { workspace = true }
