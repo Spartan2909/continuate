@@ -7,9 +7,9 @@ use continuate_error::Span;
 use logos::Lexer;
 use logos::Logos;
 
-fn string(lex: &Lexer<Token>) -> String {
+fn string<'src>(lex: &Lexer<'src, Token<'src>>) -> &'src str {
     let slice = lex.slice();
-    slice[1..slice.len() - 1].to_string()
+    &slice[1..slice.len() - 1]
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,7 +18,7 @@ pub enum Spacing {
     Joint,
 }
 
-fn spacing(lex: &Lexer<Token>) -> Spacing {
+fn spacing<'src>(lex: &Lexer<'src, Token<'src>>) -> Spacing {
     const PUNCTUATION: [char; 7] = ['.', ',', ':', '=', '<', '>', ';'];
 
     if let Some(ch) = lex.remainder().chars().next() {
@@ -32,10 +32,10 @@ fn spacing(lex: &Lexer<Token>) -> Spacing {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Logos)]
+#[derive(Debug, Clone, Copy, PartialEq, Logos)]
 #[logos(error = Error)]
 #[logos(skip r"\s+")]
-pub enum Token {
+pub enum Token<'src> {
     #[regex(r"//[^\n]+", logos::skip)]
     Comment,
 
@@ -54,15 +54,15 @@ pub enum Token {
     #[token("type")]
     Type,
 
-    #[regex(r"[a-zA-Z_]\w*", |lex| lex.slice().to_string())]
-    Ident(String),
+    #[regex(r"([a-zA-Z]\w*|[a-zA-Z_]\w+)")]
+    Ident(&'src str),
 
     #[regex(r"\d+", |lex| lex.slice().parse::<i64>().unwrap())]
     Int(i64),
     #[regex(r"(\d+)?\.\d+", |lex| lex.slice().parse::<f64>().unwrap())]
     Float(f64),
     #[regex(r#""[^"]*""#, string)]
-    String(String),
+    String(&'src str),
 
     #[token(".", spacing)]
     Dot(Spacing),
@@ -78,6 +78,8 @@ pub enum Token {
     Gt(Spacing),
     #[token(";", spacing)]
     Semicolon(Spacing),
+    #[token("_", spacing)]
+    Underscore(Spacing),
 
     #[token("(")]
     OpenParen,
@@ -96,7 +98,7 @@ pub enum Token {
     Error,
 }
 
-impl fmt::Display for Token {
+impl fmt::Display for Token<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Token::Comment => f.write_str("<comment>"),
@@ -109,11 +111,11 @@ impl fmt::Display for Token {
             Token::Super => f.write_str("super"),
             Token::Type => f.write_str("type"),
 
-            Token::Ident(ref ident) => f.write_str(ident),
+            Token::Ident(ident) => f.write_str(ident),
 
             Token::Int(int) => write!(f, "{int}"),
             Token::Float(float) => write!(f, "{float}"),
-            Token::String(ref string) => write!(f, r#""{string}""#),
+            Token::String(string) => write!(f, r#""{string}""#),
 
             Token::Dot(_) => f.write_str("."),
             Token::Comma(_) => f.write_str(","),
@@ -122,6 +124,7 @@ impl fmt::Display for Token {
             Token::Lt(_) => f.write_str("<"),
             Token::Gt(_) => f.write_str(">"),
             Token::Semicolon(_) => f.write_str(";"),
+            Token::Underscore(_) => f.write_str("_"),
 
             Token::OpenParen => f.write_str("("),
             Token::OpenBracket => f.write_str("["),
