@@ -268,3 +268,5 @@ unsafe impl<'arena> Allocator for Arena<'arena> {
         }
     }
 }
+
+pub type ArenaRef<'arena> = &'arena Arena<'arena>;

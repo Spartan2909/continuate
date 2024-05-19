@@ -18,6 +18,7 @@ use std::hash;
 use bimap::BiHashMap;
 
 use continuate_arena::Arena;
+use continuate_arena::ArenaRef;
 use continuate_arena::ArenaSafe;
 use continuate_arena::ArenaSafeCopy;
 
@@ -32,16 +33,16 @@ pub enum Expr<'arena> {
     Function(FuncRef),
     Tuple {
         ty: TypeRef,
-        values: Vec<&'arena Expr<'arena>>,
+        values: Vec<Expr<'arena>, ArenaRef<'arena>>,
     },
     Constructor {
         ty: TypeRef,
         index: Option<usize>,
-        fields: Vec<&'arena Expr<'arena>>,
+        fields: Vec<Expr<'arena>, ArenaRef<'arena>>,
     },
     Array {
         ty: TypeRef,
-        values: Vec<&'arena Expr<'arena>>,
+        values: Vec<Expr<'arena>, ArenaRef<'arena>>,
         value_ty: TypeRef,
     },
 
@@ -59,7 +60,7 @@ pub enum Expr<'arena> {
         value: &'arena Expr<'arena>,
     },
 
-    Call(&'arena Expr<'arena>, Vec<&'arena Expr<'arena>>),
+    Call(&'arena Expr<'arena>, Vec<Expr<'arena>, ArenaRef<'arena>>),
     ContApplication(&'arena Expr<'arena>, HashMap<Ident, &'arena Expr<'arena>>),
 
     Unary {
@@ -304,7 +305,7 @@ impl<'arena> Block<'arena> {
 
 #[derive(Debug, ArenaSafe)]
 pub struct Function<'arena> {
-    pub params: Vec<(Ident, TypeRef)>,
+    pub params: Vec<(Ident, TypeRef), ArenaRef<'arena>>,
     pub continuations: HashMap<Ident, TypeRef>,
     pub declarations: HashMap<Ident, (TypeRef, Option<Literal>)>,
     pub blocks: HashMap<BlockId, Block<'arena>>,
@@ -315,9 +316,9 @@ pub struct Function<'arena> {
 }
 
 impl<'arena> Function<'arena> {
-    pub fn new(name: String) -> Function<'arena> {
+    pub fn new(name: String, arena: ArenaRef<'arena>) -> Function<'arena> {
         Function {
-            params: Vec::new(),
+            params: Vec::new_in(arena),
             continuations: HashMap::new(),
             declarations: HashMap::new(),
             blocks: HashMap::new(),

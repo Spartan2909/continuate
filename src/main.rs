@@ -1,3 +1,5 @@
+#![feature(allocator_api)]
+
 use std::collections::HashMap;
 use std::fs;
 use std::iter;
@@ -63,7 +65,7 @@ fn main() {
     let int_fn = Type::function(vec![ty_int], HashMap::new());
     let int_fn_ref = program.insert_type(int_fn, &hir_arena);
 
-    let mut sum_fn = Function::new("test::sum".to_string());
+    let mut sum_fn = Function::new("test::sum".to_string(), &hir_arena);
     let cont = sum_fn.ident();
     let param_1 = sum_fn.ident();
     let param_2 = sum_fn.ident();
@@ -75,7 +77,9 @@ fn main() {
     let sum = Expr::Binary(l, BinaryOp::Add, r);
 
     let cont_ref = hir_arena.allocate(Expr::Ident(cont));
-    sum_fn.body.push(Expr::Call(cont_ref, vec![sum]));
+    let mut args = Vec::with_capacity_in(1, &hir_arena);
+    args.push(sum);
+    sum_fn.body.push(Expr::Call(cont_ref, args));
 
     let sum_fn_ref = program.function();
     program.functions.insert(sum_fn_ref, sum_fn);
@@ -88,7 +92,7 @@ fn main() {
 
     program.signatures.insert(sum_fn_ref, sum_fn_ty);
 
-    let mut main_fn = Function::new("test::main".to_string());
+    let mut main_fn = Function::new("test::main".to_string(), &hir_arena);
     let termination_cont = main_fn.ident();
     main_fn.continuations.insert(termination_cont, int_fn_ref);
 
@@ -104,9 +108,9 @@ fn main() {
         callee,
         iter::once((cont, cont_ref)).collect(),
     ));
-    main_fn
-        .body
-        .push(Expr::Call(application, vec![three, seven]));
+    let mut args = Vec::with_capacity_in(2, &hir_arena);
+    args.extend([three, seven]);
+    main_fn.body.push(Expr::Call(application, args));
 
     let main_fn_ref = program.entry_point();
     program.functions.insert(main_fn_ref, main_fn);

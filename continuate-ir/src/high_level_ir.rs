@@ -14,22 +14,23 @@ use std::hash;
 use bimap::BiHashMap;
 
 use continuate_arena::Arena;
+use continuate_arena::ArenaRef;
 use continuate_arena::ArenaSafe;
 
 use itertools::Itertools as _;
 
 #[derive(Debug, PartialEq, ArenaSafe)]
-pub enum Pattern {
+pub enum Pattern<'arena> {
     Wildcard,
     Ident(Ident),
     Destructure {
         ty: TypeRef,
         variant: Option<usize>,
-        fields: Vec<Pattern>,
+        fields: Vec<Pattern<'arena>, ArenaRef<'arena>>,
     },
 }
 
-impl Pattern {
+impl<'arena> Pattern<'arena> {
     pub const fn as_ident(&self) -> Option<Ident> {
         if let Pattern::Ident(ident) = self {
             Some(*ident)
@@ -44,14 +45,14 @@ pub enum Expr<'arena> {
     Literal(Literal),
     Ident(Ident),
     Function(FuncRef),
-    Block(Vec<Expr<'arena>>),
-    Tuple(Vec<Expr<'arena>>),
+    Block(Vec<Expr<'arena>, ArenaRef<'arena>>),
+    Tuple(Vec<Expr<'arena>, ArenaRef<'arena>>),
     Constructor {
         ty: TypeRef,
         index: Option<usize>,
-        fields: Vec<Expr<'arena>>,
+        fields: Vec<Expr<'arena>, ArenaRef<'arena>>,
     },
-    Array(Vec<Expr<'arena>>),
+    Array(Vec<Expr<'arena>, ArenaRef<'arena>>),
 
     Get {
         object: &'arena Expr<'arena>,
@@ -63,7 +64,7 @@ pub enum Expr<'arena> {
         value: &'arena Expr<'arena>,
     },
 
-    Call(&'arena Expr<'arena>, Vec<Expr<'arena>>),
+    Call(&'arena Expr<'arena>, Vec<Expr<'arena>, ArenaRef<'arena>>),
     ContApplication(&'arena Expr<'arena>, HashMap<Ident, Expr<'arena>>),
 
     Unary(UnaryOp, &'arena Expr<'arena>),
@@ -82,7 +83,7 @@ pub enum Expr<'arena> {
 
     Match {
         scrutinee: &'arena Expr<'arena>,
-        arms: Vec<(Pattern, Expr<'arena>)>,
+        arms: Vec<(Pattern<'arena>, Expr<'arena>), ArenaRef<'arena>>,
     },
 
     Closure {
@@ -149,21 +150,21 @@ pub enum TypeConstructor {
 
 #[derive(Debug, ArenaSafe)]
 pub struct Function<'arena> {
-    pub params: Vec<(Ident, TypeRef)>,
+    pub params: Vec<(Ident, TypeRef), ArenaRef<'arena>>,
     pub continuations: HashMap<Ident, TypeRef>,
-    pub body: Vec<Expr<'arena>>,
-    pub captures: Vec<Ident>,
+    pub body: Vec<Expr<'arena>, ArenaRef<'arena>>,
+    pub captures: Vec<Ident, ArenaRef<'arena>>,
     next_ident: u32,
     pub name: String,
 }
 
 impl<'arena> Function<'arena> {
-    pub fn new(name: String) -> Function<'arena> {
+    pub fn new(name: String, arena: ArenaRef<'arena>) -> Function<'arena> {
         Function {
-            params: Vec::new(),
+            params: Vec::new_in(arena),
             continuations: HashMap::new(),
-            body: Vec::new(),
-            captures: Vec::new(),
+            body: Vec::new_in(arena),
+            captures: Vec::new_in(arena),
             next_ident: 0,
             name,
         }

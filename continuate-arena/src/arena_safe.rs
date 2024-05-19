@@ -1,3 +1,5 @@
+use std::alloc::Allocator;
+use std::alloc::Global;
 use std::cell::Cell;
 use std::cell::OnceCell;
 use std::cell::RefCell;
@@ -29,10 +31,10 @@ use std::sync::Weak as WeakArc;
 pub unsafe trait ArenaSafe {}
 
 // SAFETY: `&T` doesn't need `Drop`.
-unsafe impl<'a, T: ArenaSafe> ArenaSafe for &'a T {}
+unsafe impl<'a, T> ArenaSafe for &'a T {}
 
 // SAFETY: `&mut T` doesn't need `Drop`.
-unsafe impl<'a, T: ArenaSafe> ArenaSafe for &'a mut T {}
+unsafe impl<'a, T> ArenaSafe for &'a mut T {}
 
 macro_rules! impl_arena_safe {
     (
@@ -63,7 +65,6 @@ impl_arena_safe![
     f32,
     f64,
     String,
-    Box<T>,
     Cell<T>,
     OnceCell<T>,
     RefCell<T>,
@@ -80,7 +81,7 @@ impl_arena_safe![
     Arc<T>,
     Mutex<T>,
     WeakArc<T>,
-    Vec<T>,
+    Global,
 ];
 
 // SAFETY: Arrays do not introspect on drop.
@@ -91,6 +92,12 @@ unsafe impl<K: ArenaSafe, V: ArenaSafe, S> ArenaSafe for HashMap<K, V, S> {}
 
 // SAFETY: `HashMap` does not introspect on drop.
 unsafe impl<T: ArenaSafe, S> ArenaSafe for HashSet<T, S> {}
+
+// SAFETY: `Box` does not introspect on drop.
+unsafe impl<T: ArenaSafe, A: Allocator + ArenaSafe> ArenaSafe for Box<T, A> {}
+
+// SAFETY: `Vec` does not introspect on drop.
+unsafe impl<T: ArenaSafe, A: Allocator + ArenaSafe> ArenaSafe for Vec<T, A> {}
 
 macro_rules! tuple_impl {
     () => {

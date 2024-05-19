@@ -109,7 +109,13 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let mut exprs: Vec<_> = self.expr_list(exprs, block, function)?;
         let (last_expr, block_ty) = exprs.pop().unwrap_or_else(|| {
             let ty = self.program.insert_type(Type::Tuple(vec![]), self.arena).0;
-            (Expr::Tuple { ty, values: vec![] }, ty)
+            (
+                Expr::Tuple {
+                    ty,
+                    values: Vec::new_in(self.arena),
+                },
+                ty,
+            )
         });
         let exprs = exprs.into_iter().map(|(expr, _)| self.arena.allocate(expr));
         for expr in exprs {
@@ -130,10 +136,8 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let ty = Type::Tuple(types);
         let ty = self.program.insert_type(ty, self.arena).0;
 
-        let values = elements
-            .into_iter()
-            .map(|(expr, _)| self.arena.allocate(expr))
-            .collect();
+        let mut values = Vec::with_capacity_in(elements.len(), self.arena);
+        values.extend(elements.into_iter().map(|(expr, _)| expr));
         let expr = Expr::Tuple { ty, values };
         Ok((expr, ty))
     }
@@ -167,11 +171,13 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             given_field_ty.unify(field_ty, &mut self.program, self.arena)?;
         }
 
-        let fields = fields
-            .into_iter()
-            .map(|(expr, _)| self.arena.allocate(expr))
-            .collect();
-        let expr = Expr::Constructor { ty, index, fields };
+        let mut new_fields = Vec::with_capacity_in(fields.len(), self.arena);
+        new_fields.extend(fields.into_iter().map(|(expr, _)| expr));
+        let expr = Expr::Constructor {
+            ty,
+            index,
+            fields: new_fields,
+        };
         Ok((expr, ty))
     }
 
@@ -192,14 +198,12 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             .program
             .insert_type(Type::Array(value_ty, array.len() as u64), self.arena)
             .0;
-        let array = array
-            .into_iter()
-            .map(|(expr, _)| self.arena.allocate(expr))
-            .collect();
+        let mut values = Vec::with_capacity_in(array.len(), self.arena);
+        values.extend(array.into_iter().map(|(expr, _)| expr));
         Ok((
             Expr::Array {
                 ty: array_ty,
-                values: array,
+                values,
                 value_ty,
             },
             array_ty,
@@ -288,11 +292,9 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             formal.unify(actual, &mut self.program, self.arena)?;
         }
 
-        let params = params
-            .into_iter()
-            .map(|(expr, _)| self.arena.allocate(expr))
-            .collect();
-        let expr = Expr::Call(self.arena.allocate(callee), params);
+        let mut new_params = Vec::with_capacity_in(params.len(), self.arena);
+        new_params.extend(params.into_iter().map(|(expr, _)| expr));
+        let expr = Expr::Call(self.arena.allocate(callee), new_params);
         let (ty, _) = self.program.insert_type(Type::None, self.arena);
         Ok((expr, ty))
     }
@@ -449,7 +451,9 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         Ok((expr, ty))
     }
 
-    fn order_patterns(fields: &[Pattern]) -> impl Iterator<Item = (usize, &Pattern)> {
+    fn order_patterns<'b, 'c>(
+        fields: &'b [Pattern<'c>],
+    ) -> impl Iterator<Item = (usize, &'b Pattern<'c>)> {
         fields
             .iter()
             .enumerate()
@@ -800,25 +804,31 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         }
     }
 
-    fn function(
+    fn function<'b, 'c>(
         &mut self,
-        function: &HirFunction,
+        function: &'b HirFunction<'c>,
         captures: HashMap<Ident, TypeRef>,
     ) -> Result<Function<'arena>> {
-        let mut lir_function = Function::new(function.name.clone());
-        lir_function.params.clone_from(&function.params);
-        lir_function
+        let mut mir_function = Function::new(function.name.clone(), self.arena);
+        mir_function.params.reserve(function.params.len());
+        for &param in &function.params {
+            mir_function.params.push(param);
+        }
+        mir_function
             .continuations
-            .clone_from(&function.continuations);
+            .reserve(function.continuations.len());
+        for (&param, &ty) in &function.continuations {
+            mir_function.continuations.insert(param, ty);
+        }
 
         self.environment.clone_from(&captures);
-        lir_function.captures = captures;
+        mir_function.captures = captures;
 
-        for (&param, &ty) in lir_function
+        for (&param, &ty) in mir_function
             .params
             .iter()
             .map(|(param, ty)| (param, ty))
-            .chain(&lir_function.continuations)
+            .chain(&mir_function.continuations)
         {
             self.environment.insert(param, ty);
         }
@@ -826,9 +836,9 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         self.current_block = Function::entry_point();
 
         let mut block = Block::new();
-        let (body, body_ty) = self.expr_block(&function.body, &mut block, &mut lir_function)?;
+        let (body, body_ty) = self.expr_block(&function.body, &mut block, &mut mir_function)?;
         block.exprs.push(self.arena.allocate(body));
-        lir_function.blocks.insert(self.current_block, block);
+        mir_function.blocks.insert(self.current_block, block);
         let (_, ty_none) = self.program.insert_type(Type::None, self.arena);
         self.program.types.get_by_left(&body_ty).unwrap().unify(
             ty_none,
@@ -836,7 +846,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             self.arena,
         )?;
 
-        Ok(lir_function)
+        Ok(mir_function)
     }
 
     fn lower(arena: &'arena Arena<'arena>, program: &'a HirProgram<'a>) -> Result<Program<'arena>> {

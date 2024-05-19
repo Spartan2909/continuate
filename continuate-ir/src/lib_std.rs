@@ -58,7 +58,7 @@ pub(crate) fn standard_library<'arena>(
     let ty_string_ref = program.ty();
     program.types.insert(ty_string_ref, ty_string);
 
-    let mut fn_termination = Function::new("termination".to_string());
+    let mut fn_termination = Function::new("termination".to_string(), arena);
     let param = fn_termination.ident();
     fn_termination.params.push((param, ty_int_ref));
     fn_termination.body.push(Expr::Intrinsic {
@@ -72,7 +72,7 @@ pub(crate) fn standard_library<'arena>(
     let int_fn = Type::function(vec![ty_int_ref], HashMap::new());
     let int_fn_ref = program.insert_type(int_fn, arena);
 
-    let mut fn_discriminant = Function::new("discriminant".to_string());
+    let mut fn_discriminant = Function::new("discriminant".to_string(), arena);
     let param = fn_discriminant.ident();
     fn_discriminant.params.push((param, ty_bool_ref)); // TODO: Should be generic.
     let cont = fn_discriminant.ident();
@@ -88,10 +88,9 @@ pub(crate) fn standard_library<'arena>(
         expr: arena.allocate(intrinsic),
     };
     fn_discriminant.body.push(declare);
-    let cont_call = Expr::Call(
-        arena.allocate(Expr::Ident(cont)),
-        vec![Expr::Ident(discriminant)],
-    );
+    let mut args = Vec::with_capacity_in(1, arena);
+    args.push(Expr::Ident(discriminant));
+    let cont_call = Expr::Call(arena.allocate(Expr::Ident(cont)), args);
     fn_discriminant.body.push(cont_call);
 
     let fn_discriminant_ref = program.function();

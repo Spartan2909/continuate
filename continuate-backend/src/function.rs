@@ -1,12 +1,12 @@
-use super::Runtime;
-use super::ptr_ty;
-use super::fat_ptr_ty;
-use super::declare_static;
 use super::dangling_static_ptr;
-use super::ty_ref_size_align_ptr;
-use super::ty_for;
-use super::Callable;
+use super::declare_static;
+use super::fat_ptr_ty;
+use super::ptr_ty;
 use super::signature_from_function_ty;
+use super::ty_for;
+use super::ty_ref_size_align_ptr;
+use super::Callable;
+use super::Runtime;
 
 use std::collections::HashMap;
 
@@ -189,7 +189,7 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
         &mut self,
         ty: TypeRef,
         layout: &SingleLayout,
-        values: &[&Expr],
+        values: &[Expr],
     ) -> Option<Value> {
         let stack_slot_data = StackSlotData {
             kind: StackSlotKind::ExplicitSlot,
@@ -197,7 +197,7 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
         };
         let stack_slot = self.builder.create_sized_stack_slot(stack_slot_data);
 
-        for (&field_location, &field) in layout.field_locations.iter().zip(values) {
+        for (&field_location, field) in layout.field_locations.iter().zip(values) {
             let field = self.expr(field)?;
             self.builder.ins().stack_store(
                 field,
@@ -224,7 +224,7 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
         Some(dest_ptr)
     }
 
-    fn expr_tuple(&mut self, ty: TypeRef, values: &[&Expr]) -> Option<Value> {
+    fn expr_tuple(&mut self, ty: TypeRef, values: &[Expr]) -> Option<Value> {
         let layout = self.ty_layouts[&ty].0.as_single().unwrap();
         self.compound_ty(ty, layout, values)
     }
@@ -233,7 +233,7 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
         &mut self,
         ty: TypeRef,
         index: Option<usize>,
-        fields: &[&Expr],
+        fields: &[Expr],
     ) -> Option<Value> {
         let layout = self.ty_layouts[&ty].0;
         let layout = if let Some(index) = index {
@@ -244,7 +244,7 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
         self.compound_ty(ty, layout, fields)
     }
 
-    fn expr_array(&mut self, ty: TypeRef, values: &[&Expr], value_ty: TypeRef) -> Option<Value> {
+    fn expr_array(&mut self, ty: TypeRef, values: &[Expr], value_ty: TypeRef) -> Option<Value> {
         let (value_size, _, _) = ty_ref_size_align_ptr(value_ty, self.program);
         let size = value_size * values.len() as u64;
 
@@ -256,7 +256,7 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
 
         let mut offset = 0;
         let value_size = i32::try_from(value_size).unwrap();
-        for &value in values {
+        for value in values {
             let value = self.expr(value)?;
             self.builder.ins().stack_store(value, stack_slot, offset);
             offset += value_size;
@@ -367,13 +367,13 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
         }
     }
 
-    fn expr_call(&mut self, callee: &Expr, params: &[&Expr]) -> Option<Value> {
+    fn expr_call(&mut self, callee: &Expr, params: &[Expr]) -> Option<Value> {
         let (callable, continuations) = match Self::simple_callee(callee) {
             Ok(callee) => callee,
             Err(expr) => todo!("{expr:?} is not a supported callee"),
         };
 
-        let params: Option<Vec<_>> = params.iter().map(|&expr| self.expr(expr)).collect();
+        let params: Option<Vec<_>> = params.iter().map(|expr| self.expr(expr)).collect();
         let mut params = params?;
 
         let continuations: Option<Vec<_>> = continuations

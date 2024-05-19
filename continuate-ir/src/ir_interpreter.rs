@@ -426,9 +426,9 @@ impl<'arena> Executor<'arena> {
         }
     }
 
-    fn expr_list(&mut self, exprs: &[&Expr<'arena>]) -> ControlFlow<Vec<ValueRef<'arena>>> {
+    fn expr_list(&mut self, exprs: &[Expr<'arena>]) -> ControlFlow<Vec<ValueRef<'arena>>> {
         let mut values = Vec::with_capacity(exprs.len());
-        for &expr in exprs {
+        for expr in exprs {
             values.push(value!(self.expr(expr)));
         }
         ControlFlow::Value(values)
