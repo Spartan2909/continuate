@@ -98,6 +98,7 @@ pub enum Expr<'src> {
     Path(Path<'src>),
     Block {
         exprs: Vec<Expr<'src>>,
+        tail: Option<Box<Expr<'src>>>,
         span: Span,
     },
     Tuple {

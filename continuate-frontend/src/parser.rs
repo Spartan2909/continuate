@@ -155,6 +155,24 @@ where
         .collect()
 }
 
+fn block<'tokens, 'src>() -> impl Parser<
+    'tokens,
+    ParserInput<'tokens, 'src>,
+    (Vec<Expr<'src>>, Option<Expr<'src>>, Span),
+    ParserExtra,
+> + Clone
+where
+    'src: 'tokens,
+{
+    expr()
+        .then_ignore(just(Token::Newline))
+        .repeated()
+        .collect()
+        .then(expr().or_not())
+        .delimited_by(just(Token::OpenBrace), just(Token::CloseBrace))
+        .map_with(|(exprs, tail), e| (exprs, tail, e.span()))
+}
+
 fn atom<'tokens, 'src>(
 ) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, Expr<'src>, ParserExtra> + Clone
 where
@@ -244,6 +262,12 @@ where
             brace_span,
         });
 
+    let block = block().map(|(exprs, tail, span)| Expr::Block {
+        exprs,
+        tail: tail.map(Box::new),
+        span,
+    });
+
     choice((
         literal.map(Expr::Literal),
         let_expr,
@@ -251,6 +275,7 @@ where
         tuple,
         constructor_or_ident,
         match_expr,
+        block,
     ))
 }
 
