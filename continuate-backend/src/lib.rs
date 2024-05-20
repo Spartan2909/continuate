@@ -17,9 +17,9 @@ use continuate_ir::mid_level_ir::Type as MirType;
 use continuate_ir::mid_level_ir::TypeConstructor;
 use continuate_ir::mid_level_ir::UserDefinedType;
 
-use continuate_rt_common::SingleLayout;
-use continuate_rt_common::Slice;
-use continuate_rt_common::TyLayout;
+use continuate_common::SingleLayout;
+use continuate_common::Slice;
+use continuate_common::TyLayout;
 
 use cranelift::codegen::ir::types;
 use cranelift::codegen::ir::AbiParam;
@@ -53,7 +53,7 @@ use cranelift_object::ObjectProduct;
 
 use itertools::Itertools as _;
 
-use log::warn;
+use tracing::warn;
 
 use target_lexicon::CallingConvention;
 use target_lexicon::Endianness;
@@ -273,6 +273,7 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
         }
     }
 
+    #[tracing::instrument(skip(self))]
     fn c_int_ty(&self) -> Type {
         if self.triple.default_calling_convention() == Ok(CallingConvention::AppleAarch64) {
             warn!("Apple ARM support is potentially incomplete");

@@ -1,19 +1,22 @@
-#![no_std]
 #![feature(allocator_api)]
 #![warn(clippy::missing_inline_in_public_items)]
 
-use core::alloc::Allocator;
-use core::alloc::Layout;
-use core::fmt;
-use core::marker::PhantomData;
-use core::mem;
-use core::ops;
-use core::ptr::NonNull;
-use core::slice;
+use std::alloc::Allocator;
+use std::alloc::Layout;
+use std::error::Error;
+use std::fmt;
+use std::io;
+use std::marker::PhantomData;
+use std::mem;
+use std::ops;
+use std::ptr::NonNull;
+use std::slice;
 
 use bytemuck::Pod;
 
 use continuate_arena::ArenaSafeCopy;
+
+use tracing_subscriber::filter::LevelFilter;
 
 /// An FFI-safe slice.
 ///
@@ -248,4 +251,16 @@ impl<'a> From<SingleLayout<'a>> for TyLayout<'a> {
     fn from(value: SingleLayout<'a>) -> Self {
         TyLayout::Single(value)
     }
+}
+
+/// ## Errors
+///
+/// Returns an error if `tracing` instantiation fails.
+#[inline]
+pub fn init_tracing(filter: LevelFilter) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+    tracing_subscriber::fmt()
+        .with_max_level(filter)
+        .without_time()
+        .with_writer(io::stderr)
+        .try_init()
 }

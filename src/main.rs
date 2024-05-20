@@ -16,9 +16,7 @@ use continuate_ir::mid_level_ir;
 
 use continuate_arena::Arena;
 
-use log::LevelFilter;
-
-use simple_logger::SimpleLogger;
+use tracing_subscriber::filter::LevelFilter;
 
 #[cfg(target_family = "unix")]
 fn link_command() -> process::Command {
@@ -49,12 +47,7 @@ fn link_command() -> process::Command {
 }
 
 fn main() {
-    SimpleLogger::new()
-        .with_level(LevelFilter::Info)
-        .with_colors(true)
-        .without_timestamps()
-        .init()
-        .unwrap();
+    continuate_common::init_tracing(LevelFilter::DEBUG).expect("failed to instantiate logger");
 
     let hir_arena = Arena::new();
     let mut program = Program::new("test".to_string(), &hir_arena);

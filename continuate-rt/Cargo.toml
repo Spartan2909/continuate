@@ -8,9 +8,9 @@ license.workspace = true
 crate-type = ["staticlib"]
 
 [dependencies]
-continuate-rt-common = { workspace = true }
-log = { workspace = true }
-simple_logger = { workspace = true }
+continuate-common = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true

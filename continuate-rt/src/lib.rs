@@ -8,9 +8,11 @@ use std::mem;
 use std::process;
 use std::ptr::NonNull;
 
-use continuate_rt_common::TyLayout;
+use continuate_common::TyLayout;
 
-use log::info;
+use tracing::debug;
+
+use tracing_subscriber::filter::LevelFilter;
 
 static STRING_LAYOUT: TyLayout = TyLayout::String;
 
@@ -29,7 +31,7 @@ pub unsafe extern "C" fn cont_rt_alloc_gc(
     variant: usize,
 ) -> NonNull<()> {
     #[cfg(debug_assertions)]
-    info!("allocating object with layout {layout:?}");
+    debug!("allocating object with layout {layout:?}");
 
     let size = layout
         .size()
@@ -64,7 +66,7 @@ pub unsafe extern "C" fn cont_rt_alloc_gc(
 #[allow(clippy::missing_panics_doc)]
 pub extern "C" fn cont_rt_alloc_string(len: usize) -> NonNull<()> {
     #[cfg(debug_assertions)]
-    info!("allocating string with length {len}");
+    debug!("allocating string with length {len}");
 
     let mem_layout = Layout::from_size_align(len + mem::size_of::<usize>(), 1).unwrap();
 
@@ -95,12 +97,7 @@ pub extern "C" fn cont_rt_exit(code: i64) {
 #[no_mangle]
 #[allow(clippy::missing_panics_doc)]
 pub extern "C" fn cont_rt_enable_log() {
-    simple_logger::SimpleLogger::new()
-        .with_level(log::LevelFilter::Info)
-        .with_colors(true)
-        .without_timestamps()
-        .init()
-        .unwrap();
+    continuate_common::init_tracing(LevelFilter::DEBUG).expect("failed to instantiate logger");
 }
 
 #[cfg(not(debug_assertions))]
