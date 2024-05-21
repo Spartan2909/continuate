@@ -1,5 +1,6 @@
 mod function;
 use function::FunctionCompiler;
+use function::FunctionRuntime;
 
 use std::collections::HashMap;
 use std::mem;
@@ -53,6 +54,7 @@ use cranelift_object::ObjectProduct;
 
 use itertools::Itertools as _;
 
+use tracing::info;
 use tracing::warn;
 
 use target_lexicon::CallingConvention;
@@ -61,11 +63,17 @@ use target_lexicon::PointerWidth;
 use target_lexicon::Triple;
 
 struct Runtime {
-    /// `fn(ty_layout: &'static TyLayout<'static>, variant: usize) -> *mut ()`
+    /// `fn(ty_layout: &'static TyLayout<'static>) -> *mut ()`
     alloc_gc: FuncId,
 
     /// `fn(len: usize) -> *mut ()`
     alloc_string: FuncId,
+
+    /// `fn(ptr: *const ())`
+    mark_root: FuncId,
+
+    /// `fn(ptr: *const ())`
+    unmark_root: FuncId,
 
     /// `fn(i64)`
     exit: FuncId,
@@ -79,9 +87,7 @@ impl Runtime {
         let ptr_ty = Type::triple_pointer_type(module.isa().triple());
 
         let mut alloc_gc_sig = module.make_signature();
-        alloc_gc_sig
-            .params
-            .extend([ptr_ty, ptr_ty].into_iter().map(AbiParam::new));
+        alloc_gc_sig.params.push(AbiParam::new(ptr_ty));
         alloc_gc_sig.returns.push(AbiParam::new(ptr_ty));
         let alloc_gc = module
             .declare_function("cont_rt_alloc_gc", Linkage::Import, &alloc_gc_sig)
@@ -92,6 +98,19 @@ impl Runtime {
         alloc_string_sig.returns.push(AbiParam::new(ptr_ty));
         let alloc_string = module
             .declare_function("cont_rt_alloc_string", Linkage::Import, &alloc_string_sig)
+            .unwrap();
+
+        let mut mark_unmark_root_sig = module.make_signature();
+        mark_unmark_root_sig.params.push(AbiParam::new(types::I64));
+        let mark_root = module
+            .declare_function("cont_rt_mark_root", Linkage::Import, &mark_unmark_root_sig)
+            .unwrap();
+        let unmark_root = module
+            .declare_function(
+                "cont_rt_unmark_root",
+                Linkage::Import,
+                &mark_unmark_root_sig,
+            )
             .unwrap();
 
         let mut exit_sig = module.make_signature();
@@ -111,6 +130,8 @@ impl Runtime {
         Runtime {
             alloc_gc,
             alloc_string,
+            mark_root,
+            unmark_root,
             exit,
             enable_log,
         }
@@ -283,12 +304,16 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
         }
     }
 
+    #[tracing::instrument(skip_all)]
     fn function(
         &mut self,
         mir_function: &MirFunction,
         func_ref: FuncRef,
         func_ctx: &mut FunctionBuilderContext,
     ) {
+        let name = &mir_function.name;
+        info!("compiling function '{name}'");
+
         let params: Vec<_> = mir_function
             .params
             .iter()
@@ -300,7 +325,6 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
                     .map(|(&param, &param_ty)| (param, param_ty))
                     .sorted_by_key(|&(param, _)| param),
             )
-            .map(|(param, param_ty)| (param, ty_for(param_ty, &self.triple, &self.program.lib_std)))
             .collect();
 
         let (func_id, ref sig) = self.functions[&func_ref];
@@ -315,6 +339,21 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
             .map(|&id| (id, builder.create_block()))
             .collect();
 
+        let function_runtime = FunctionRuntime {
+            alloc_gc: self
+                .module
+                .declare_func_in_func(self.runtime.alloc_gc, builder.func),
+            alloc_string: self
+                .module
+                .declare_func_in_func(self.runtime.alloc_string, builder.func),
+            mark_root: self
+                .module
+                .declare_func_in_func(self.runtime.mark_root, builder.func),
+            unmark_root: self
+                .module
+                .declare_func_in_func(self.runtime.unmark_root, builder.func),
+        };
+
         let function_compiler = FunctionCompiler {
             program: &self.program,
             module: &mut self.module,
@@ -327,6 +366,8 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
             block_map: &block_map,
             mir_function,
             params: &params,
+            function_runtime,
+            vars: HashMap::new(),
         };
 
         function_compiler.compile();
@@ -354,16 +395,16 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
             .unwrap();
     }
 
-    fn compund_ty_layout(&self, types: &[TypeRef]) -> SingleLayout<'arena> {
+    fn compund_ty_layout(&self, types: &[&[TypeRef]]) -> SingleLayout<'arena> {
         let mut size = 0;
         let mut align = 1;
         let mut field_locations = Vec::with_capacity(types.len());
         let mut gc_pointer_locations = Vec::with_capacity(types.len());
-        for &ty in types {
+        for &ty in types.iter().copied().flatten() {
             let (field_size, field_align, ptr) = ty_ref_size_align_ptr(ty, &self.program);
-            let misalignment = size % align;
+            let misalignment = size % field_align;
             if misalignment != 0 {
-                size += align - misalignment;
+                size += field_align - misalignment;
             }
             field_locations.push(size);
             if ptr {
@@ -537,13 +578,13 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
             MirType::Tuple(ref types)
             | MirType::UserDefined(UserDefinedType {
                 constructor: TypeConstructor::Product(ref types),
-            }) => self.compund_ty_layout(types).into(),
+            }) => self.compund_ty_layout(&[types]).into(),
             MirType::UserDefined(UserDefinedType {
                 constructor: TypeConstructor::Sum(ref variants),
             }) => {
                 let layouts: Vec<_> = variants
                     .iter()
-                    .map(|types| self.compund_ty_layout(types))
+                    .map(|types| self.compund_ty_layout(&[&[self.program.lib_std.ty_int], types]))
                     .collect();
                 let size = layouts.iter().fold(0, |size, layout| size.max(layout.size));
                 let align = layouts

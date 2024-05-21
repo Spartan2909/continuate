@@ -90,7 +90,12 @@ fn main() {
     main_fn.continuations.insert(termination_cont, int_fn_ref);
 
     let string = Expr::Literal(Literal::String("hello".to_string()));
-    main_fn.body.push(string);
+    let assign_string = Expr::Declare {
+        ident: main_fn.ident(),
+        ty: program.lib_std().ty_string,
+        expr: hir_arena.allocate(string),
+    };
+    main_fn.body.push(assign_string);
 
     let three = Expr::Literal(Literal::Int(3));
     let seven = Expr::Literal(Literal::Int(7));

@@ -41,7 +41,6 @@ use cranelift::codegen::ir::Signature;
 use cranelift::codegen::ir::StackSlotData;
 use cranelift::codegen::ir::StackSlotKind;
 use cranelift::codegen::ir::TrapCode;
-use cranelift::codegen::ir::Type;
 use cranelift::codegen::isa::CallConv;
 use cranelift::frontend::FunctionBuilder;
 use cranelift::frontend::Switch;
@@ -56,6 +55,20 @@ use itertools::Itertools as _;
 
 use target_lexicon::Endianness;
 use target_lexicon::Triple;
+
+pub(super) struct FunctionRuntime {
+    /// `fn(ty_layout: &'static TyLayout<'static>, variant: usize) -> *mut ()`
+    pub(super) alloc_gc: ir::FuncRef,
+
+    /// `fn(len: usize) -> *mut ()`
+    pub(super) alloc_string: ir::FuncRef,
+
+    /// `fn(ptr: *const ())`
+    pub(super) mark_root: ir::FuncRef,
+
+    /// `fn(ptr: *const ())`
+    pub(super) unmark_root: ir::FuncRef,
+}
 
 macro_rules! match_ty {
     { ($scrutinee:expr)
@@ -79,7 +92,9 @@ pub(super) struct FunctionCompiler<'arena, 'function, 'builder, M> {
     pub(super) builder: &'function mut FunctionBuilder<'builder>,
     pub(super) block_map: &'function HashMap<BlockId, Block>,
     pub(super) mir_function: &'function MirFunction<'function>,
-    pub(super) params: &'function [(Ident, Type)],
+    pub(super) params: &'function [(Ident, TypeRef)],
+    pub(super) function_runtime: FunctionRuntime,
+    pub(super) vars: HashMap<Ident, (TypeRef, bool)>,
 }
 
 impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function, 'builder, M> {
@@ -91,24 +106,36 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
         }
     }
 
-    fn fat_ptr(&mut self, thin_ptr: Value, size: Value) -> Value {
+    fn fat_ptr(&mut self, thin_ptr: Value, metadata: Value) -> Value {
         let fat_ptr_ty = fat_ptr_ty(self.triple);
 
-        let rotation_places = self
-            .builder
-            .ins()
-            .iconst(types::I32, i64::from(ptr_ty(self.triple).bits()));
+        let rotation_places = i64::from(ptr_ty(self.triple).bits());
         let fat_ptr = self.builder.ins().uextend(fat_ptr_ty, thin_ptr);
-        let fat_ptr = self.builder.ins().rotl(fat_ptr, rotation_places);
-        let size = self.builder.ins().uextend(fat_ptr_ty, size);
-        self.builder.ins().bor(fat_ptr, size)
+        let fat_ptr = self.builder.ins().rotl_imm(fat_ptr, rotation_places);
+        let metadata = self.builder.ins().uextend(fat_ptr_ty, metadata);
+        self.builder.ins().bor(fat_ptr, metadata)
     }
 
-    fn alloc_gc(&mut self, ty: TypeRef, variant: Option<usize>) -> Value {
-        let alloc_gc = self
-            .module
-            .declare_func_in_func(self.runtime.alloc_gc, self.builder.func);
+    fn fat_ptr_addr(&mut self, fat_ptr: Value) -> Value {
+        let rotation_places = i64::from(ptr_ty(self.triple).bits());
+        let thin_ptr = self.builder.ins().rotr_imm(fat_ptr, rotation_places);
+        self.builder
+            .ins()
+            .ireduce(ptr_ty(self.triple), thin_ptr)
+    }
 
+    fn value_ptr(&mut self, value: Value, ty: TypeRef) -> Option<Value> {
+        if !self.program.is_primitive(ty) {
+            Some(value)
+        } else if ty == self.program.lib_std.ty_string {
+            let str_ptr = self.fat_ptr_addr(value);
+            Some(str_ptr)
+        } else {
+            None
+        }
+    }
+
+    fn alloc_gc(&mut self, ty: TypeRef) -> Value {
         let ty_layout = self.ty_layouts[&ty].1;
         let ty_layout = self
             .module
@@ -118,13 +145,10 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
             .ins()
             .global_value(ptr_ty(self.triple), ty_layout);
 
-        let variant = variant.unwrap_or(usize::MAX);
-        let variant = self
+        let call_result = self
             .builder
             .ins()
-            .iconst(ptr_ty(self.triple), variant as i64);
-
-        let call_result = self.builder.ins().call(alloc_gc, &[ty_layout, variant]);
+            .call(self.function_runtime.alloc_gc, &[ty_layout]);
         let values = self.builder.inst_results(call_result);
         debug_assert_eq!(values.len(), 1);
 
@@ -150,14 +174,14 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
             dangling_static_ptr(None, self.module, self.data_description, self.triple)
         });
 
-        let alloc_string = self
-            .module
-            .declare_func_in_func(self.runtime.alloc_string, self.builder.func);
         let len = self
             .builder
             .ins()
             .iconst(ptr_ty(self.triple), string.len() as i64);
-        let call_result = self.builder.ins().call(alloc_string, &[len]);
+        let call_result = self
+            .builder
+            .ins()
+            .call(self.function_runtime.alloc_string, &[len]);
         let values = self.builder.inst_results(call_result);
         debug_assert_eq!(values.len(), 1);
 
@@ -189,7 +213,7 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
         &mut self,
         ty: TypeRef,
         layout: &SingleLayout,
-        values: &[Expr],
+        values: &[&[Expr]],
     ) -> Option<Value> {
         let stack_slot_data = StackSlotData {
             kind: StackSlotKind::ExplicitSlot,
@@ -197,7 +221,11 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
         };
         let stack_slot = self.builder.create_sized_stack_slot(stack_slot_data);
 
-        for (&field_location, field) in layout.field_locations.iter().zip(values) {
+        for (&field_location, field) in layout
+            .field_locations
+            .iter()
+            .zip(values.iter().copied().flatten())
+        {
             let field = self.expr(field)?;
             self.builder.ins().stack_store(
                 field,
@@ -206,7 +234,7 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
             );
         }
 
-        let dest_ptr = self.alloc_gc(ty, None);
+        let dest_ptr = self.alloc_gc(ty);
 
         let src_ptr = self
             .builder
@@ -226,7 +254,7 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
 
     fn expr_tuple(&mut self, ty: TypeRef, values: &[Expr]) -> Option<Value> {
         let layout = self.ty_layouts[&ty].0.as_single().unwrap();
-        self.compound_ty(ty, layout, values)
+        self.compound_ty(ty, layout, &[values])
     }
 
     fn expr_constructor(
@@ -236,12 +264,17 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
         fields: &[Expr],
     ) -> Option<Value> {
         let layout = self.ty_layouts[&ty].0;
-        let layout = if let Some(index) = index {
-            &layout.as_sum().unwrap()[index]
+        if let Some(index) = index {
+            let layout = &layout.as_sum().unwrap()[index];
+            self.compound_ty(
+                ty,
+                layout,
+                &[&[Expr::Literal(Literal::Int(index as i64))], fields],
+            )
         } else {
-            layout.as_single().unwrap()
-        };
-        self.compound_ty(ty, layout, fields)
+            let layout = layout.as_single().unwrap();
+            self.compound_ty(ty, layout, &[fields])
+        }
     }
 
     fn expr_array(&mut self, ty: TypeRef, values: &[Expr], value_ty: TypeRef) -> Option<Value> {
@@ -262,7 +295,7 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
             offset += value_size;
         }
 
-        let dest_ptr = self.alloc_gc(ty, None);
+        let dest_ptr = self.alloc_gc(ty);
 
         let src_ptr = self
             .builder
@@ -383,6 +416,26 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
             .collect();
         params.append(&mut continuations?);
 
+        let vars: Vec<_> = self
+            .vars
+            .iter()
+            .filter_map(|(&var, &(var_ty, initialised))| {
+                if initialised {
+                    Some((var, var_ty))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for (var, var_ty) in vars {
+            let value = self.builder.use_var(Variable::from_u32(var.into()));
+            if let Some(ptr) = self.value_ptr(value, var_ty) {
+                self.builder
+                    .ins()
+                    .call(self.function_runtime.unmark_root, &[ptr]);
+            }
+        }
+
         match callable {
             Callable::FuncRef(func_ref) => {
                 let func_id = self.functions[&func_ref].0;
@@ -495,9 +548,29 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
     }
 
     fn expr_assign(&mut self, ident: Ident, expr: &Expr) -> Option<Value> {
+        let (var_ty, initialised_ref) = self.vars.get_mut(&ident).unwrap();
+        let (var_ty, initialised) = (*var_ty, *initialised_ref);
+        *initialised_ref = true;
+
+        if initialised {
+            let value = self.builder.use_var(Variable::from_u32(ident.into()));
+            if let Some(ptr) = self.value_ptr(value, var_ty) {
+                self.builder
+                    .ins()
+                    .call(self.function_runtime.unmark_root, &[ptr]);
+            }
+        }
+
         let value = self.expr(expr)?;
         self.builder
             .def_var(Variable::from_u32(ident.into()), value);
+
+        if let Some(ptr) = self.value_ptr(value, var_ty) {
+            self.builder
+                .ins()
+                .call(self.function_runtime.mark_root, &[ptr]);
+        }
+
         Some(value)
     }
 
@@ -632,8 +705,11 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
     /// This method does not finalise or verify the function, or define it in the module.
     pub(super) fn compile(mut self) {
         for &(param, param_ty) in self.params {
-            self.builder
-                .declare_var(Variable::from_u32(param.into()), param_ty);
+            self.builder.declare_var(
+                Variable::from_u32(param.into()),
+                ty_for(param_ty, self.triple, &self.program.lib_std),
+            );
+            self.vars.insert(param, (param_ty, true));
         }
 
         let entry_point = self.block_map[&MirFunction::entry_point()];
@@ -657,6 +733,8 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
 
                 self.builder.def_var(Variable::from_u32(var.into()), value);
             }
+
+            self.vars.insert(var, (var_ty, initialiser.is_some()));
         }
 
         for (&block_id, block) in &self.mir_function.blocks {

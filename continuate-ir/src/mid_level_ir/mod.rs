@@ -423,4 +423,16 @@ impl<'arena> Program<'arena> {
             (type_ref, ty)
         }
     }
+
+    #[allow(clippy::missing_panics_doc)]
+    pub fn is_primitive(&self, ty: TypeRef) -> bool {
+        [
+            self.lib_std.ty_bool,
+            self.lib_std.ty_int,
+            self.lib_std.ty_float,
+            self.lib_std.ty_string,
+        ]
+        .contains(&ty)
+            || self.types.get_by_left(&ty).unwrap().as_function().is_some()
+    }
 }
