@@ -119,9 +119,7 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
     fn fat_ptr_addr(&mut self, fat_ptr: Value) -> Value {
         let rotation_places = i64::from(ptr_ty(self.triple).bits());
         let thin_ptr = self.builder.ins().rotr_imm(fat_ptr, rotation_places);
-        self.builder
-            .ins()
-            .ireduce(ptr_ty(self.triple), thin_ptr)
+        self.builder.ins().ireduce(ptr_ty(self.triple), thin_ptr)
     }
 
     fn value_ptr(&mut self, value: Value, ty: TypeRef) -> Option<Value> {
@@ -164,8 +162,12 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
     }
 
     fn expr_literal_string(&mut self, string: &str) -> Value {
+        let mut contents = Vec::with_capacity(string.len() + 1);
+        contents.extend(string.as_bytes().iter().copied());
+        contents.push(0);
+
         let global_string_ref = declare_static(
-            string.as_bytes().into(),
+            contents.into_boxed_slice(),
             None,
             self.module,
             self.data_description,
@@ -177,7 +179,7 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
         let len = self
             .builder
             .ins()
-            .iconst(ptr_ty(self.triple), string.len() as i64);
+            .iconst(ptr_ty(self.triple), string.len() as i64 + 1);
         let call_result = self
             .builder
             .ins()
@@ -195,10 +197,15 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
         let size = self
             .builder
             .ins()
-            .iconst(ptr_ty(self.triple), string.len() as i64);
+            .iconst(ptr_ty(self.triple), string.len() as i64 + 1);
 
         self.builder
             .call_memcpy(self.module.target_config(), dest_ptr, src_ptr, size);
+
+        let size = self
+            .builder
+            .ins()
+            .iconst(ptr_ty(self.triple), string.len() as i64);
 
         self.fat_ptr(dest_ptr, size)
     }
