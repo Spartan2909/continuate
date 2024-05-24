@@ -6,7 +6,6 @@ use super::signature_from_function_ty;
 use super::ty_for;
 use super::ty_ref_size_align_ptr;
 use super::Callable;
-use super::Runtime;
 
 use std::collections::HashMap;
 

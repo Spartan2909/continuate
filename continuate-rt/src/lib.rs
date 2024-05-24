@@ -134,7 +134,7 @@ impl<A: Allocator> GarbageCollector<A> {
     /// ## Safety
     ///
     /// - Any memory allocated in `self` which is accessed after this method is called must be
-    /// marked.
+    ///     marked.
     ///
     /// - All values in `self` must be valid.
     unsafe fn sweep(&mut self) {
@@ -170,7 +170,7 @@ impl<A: Allocator> GarbageCollector<A> {
     /// ## Safety
     ///
     /// - Any memory allocated in `self` which is accessed after this method is called must be
-    /// reachable from an element of `self.roots` or `self.temp_roots`.
+    ///     reachable from an element of `self.roots` or `self.temp_roots`.
     ///
     /// - All values in `self` must be valid.
     unsafe fn collect(&mut self) {
@@ -292,10 +292,10 @@ pub unsafe extern "C" fn cont_rt_alloc_gc(layout: &'static TyLayout<'static>) ->
 /// ## Safety
 ///
 /// - `ptr` must point to memory allocated with [`cont_rt_alloc_gc`], and must not have
-/// previously been passed to this function.
+///     previously been passed to this function.
 ///
 /// - All objects allocated with [`cont_rt_alloc_gc`] must be reachable from `ptr` or an object
-/// previously marked with [`cont_rt_mark_root`].
+///     previously marked with [`cont_rt_mark_root`].
 ///
 /// ## Panics
 ///
