@@ -86,7 +86,6 @@ pub(super) struct FunctionCompiler<'arena, 'function, 'builder, M> {
     pub(super) module: &'function mut M,
     pub(super) data_description: &'function mut DataDescription,
     pub(super) triple: &'function Triple,
-    pub(super) runtime: &'function Runtime,
     pub(super) functions: &'function HashMap<FuncRef, (FuncId, Signature)>,
     pub(super) ty_layouts: &'function HashMap<TypeRef, (&'arena TyLayout<'arena>, DataId)>,
     pub(super) builder: &'function mut FunctionBuilder<'builder>,
@@ -636,11 +635,7 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
                 }
             }
             Intrinsic::Terminate => {
-                let exit = self
-                    .module
-                    .declare_func_in_func(self.runtime.exit, self.builder.func);
-                self.builder.ins().call(exit, &[value]);
-                self.builder.ins().trap(TrapCode::UnreachableCodeReached);
+                self.builder.ins().return_(&[value]);
                 None
             }
         }

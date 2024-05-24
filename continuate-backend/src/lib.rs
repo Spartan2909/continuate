@@ -75,9 +75,6 @@ struct Runtime {
     /// `fn(ptr: *const ())`
     unmark_root: FuncId,
 
-    /// `fn(i64)`
-    exit: FuncId,
-
     /// `fn()`
     enable_log: FuncId,
 }
@@ -113,12 +110,6 @@ impl Runtime {
             )
             .unwrap();
 
-        let mut exit_sig = module.make_signature();
-        exit_sig.params.push(AbiParam::new(types::I64));
-        let exit = module
-            .declare_function("cont_rt_exit", Linkage::Import, &exit_sig)
-            .unwrap();
-
         let enable_log = module
             .declare_function(
                 "cont_rt_enable_log",
@@ -132,7 +123,6 @@ impl Runtime {
             alloc_string,
             mark_root,
             unmark_root,
-            exit,
             enable_log,
         }
     }
@@ -258,6 +248,7 @@ fn signature_from_function_ty(
         )
         .map(|param_ty| AbiParam::new(ty_for(param_ty, triple, &program.lib_std)))
         .collect();
+    signature.returns.push(AbiParam::new(types::I64));
     signature
 }
 
@@ -359,7 +350,6 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
             module: &mut self.module,
             data_description: &mut self.data_description,
             triple: &self.triple,
-            runtime: &self.runtime,
             functions: &self.functions,
             ty_layouts: &self.ty_layouts,
             builder: &mut builder,
@@ -635,6 +625,7 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
             for &(_, param_ty) in &params {
                 sig.params.push(AbiParam::new(param_ty));
             }
+            sig.returns.push(AbiParam::new(types::I64));
 
             let id = self
                 .module
@@ -706,9 +697,12 @@ impl<'arena, 'a> Compiler<'arena, 'a, ObjectModule> {
         let termination = self.functions[&termination_ref].0;
         let termination = self.module.declare_func_in_func(termination, builder.func);
         let termination_addr = builder.ins().func_addr(ptr_ty(&self.triple), termination);
-        builder.ins().call(entry_point, &[termination_addr]);
+        let result = builder.ins().call(entry_point, &[termination_addr]);
+        let rvals = builder.inst_results(result);
+        debug_assert_eq!(rvals.len(), 1);
+        let rval = rvals[0];
 
-        let rval = builder.ins().iconst(c_int, 0);
+        let rval = builder.ins().ireduce(c_int, rval);
         builder.ins().return_(&[rval]);
 
         builder.finalize();

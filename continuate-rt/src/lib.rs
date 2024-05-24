@@ -7,7 +7,6 @@ use std::alloc::Layout;
 use std::ffi::c_char;
 use std::ffi::CStr;
 use std::mem;
-use std::process;
 use std::ptr::NonNull;
 use std::sync::Mutex;
 
@@ -372,12 +371,6 @@ pub extern "C" fn cont_rt_alloc_string(len: usize) -> NonNull<()> {
 
     // SAFETY: `value_ptr` is directly derived from a `NonNull`.
     unsafe { NonNull::new_unchecked(value_ptr.cast()) }
-}
-
-#[no_mangle]
-pub extern "C" fn cont_rt_exit(code: i64) {
-    println!("{code}");
-    process::exit(code as i32);
 }
 
 #[cfg(debug_assertions)]
