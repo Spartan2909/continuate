@@ -4,6 +4,7 @@ use std::alloc::handle_alloc_error;
 use std::alloc::Allocator;
 use std::alloc::Global;
 use std::alloc::Layout;
+use std::ffi::c_char;
 use std::ffi::CStr;
 use std::mem;
 use std::process;
@@ -112,8 +113,8 @@ impl<A: Allocator> GarbageCollector<A> {
                 }
             }
             TyLayout::String => {
-                // SAFETY: `object` is a valid pointer to a `GcValue<u8>`.
-                let value: *const i8 = unsafe {
+                // SAFETY: `object` is a valid pointer to a `GcValue<c_char>`.
+                let value: *const c_char = unsafe {
                     object
                         .as_ptr()
                         .add(mem::offset_of!(GcValue<()>, value))
