@@ -13,10 +13,15 @@ use std::sync::Mutex;
 use continuate_common::SingleLayout;
 use continuate_common::TyLayout;
 
+use mimalloc::MiMalloc;
+
 #[cfg(debug_assertions)]
 use tracing::debug;
 
 use tracing_subscriber::filter::LevelFilter;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 static STRING_LAYOUT: TyLayout = TyLayout::String;
 
