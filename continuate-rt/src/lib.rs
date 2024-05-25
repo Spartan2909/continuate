@@ -2,13 +2,12 @@
 
 mod garbage_collector;
 
-use mimalloc::MiMalloc;
-
 #[cfg(debug_assertions)]
 use tracing_subscriber::filter::LevelFilter;
 
+#[cfg(not(miri))]
 #[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[cfg(debug_assertions)]
 #[export_name = "cont_rt_enable_log"]
