@@ -36,11 +36,12 @@ fn link_command() -> process::Command {
     command.args([
         "./target/debug/continuate_rt.lib",
         "./out/object.o",
-        "libcmt.lib",
+        "ucrt.lib",
         "Ws2_32.lib",
         "Synchronization.lib",
         "Userenv.lib",
         "ntdll.lib",
+        "Advapi32.lib",
         "/out:./out/result.exe",
     ]);
     command
