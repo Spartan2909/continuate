@@ -22,6 +22,7 @@ pub use continuate_arena_macros::ArenaSafe;
 pub use continuate_arena_macros::ArenaSafeCopy;
 pub use continuate_arena_macros::ArenaSafeStatic;
 
+#[derive(Debug)]
 struct Chunk {
     start: NonNull<()>,
     end: NonNull<()>,
@@ -153,7 +154,7 @@ impl<'arena> Arena<'arena> {
 
         // SAFETY: This is the only active reference to `*self.managed`.
         let managed = unsafe { &mut *self.managed.get() };
-        // SAFETY: TODO
+        // SAFETY: `self.managed` only exists during the lifetime `'arena`.
         let dyn_ptr = unsafe { transmute_lifetime(ptr) };
         managed.push(dyn_ptr);
 
@@ -162,6 +163,7 @@ impl<'arena> Arena<'arena> {
     }
 
     #[inline]
+    #[allow(clippy::missing_panics_doc)]
     pub fn collect(&mut self) {
         for &value in self.managed.get_mut().iter().rev() {
             // SAFETY: This is the last pointer to `*value`.
@@ -169,9 +171,14 @@ impl<'arena> Arena<'arena> {
                 ptr::drop_in_place(value.as_ptr());
             }
         }
-        for chunk in self.chunks.get_mut() {
+        self.managed.get_mut().clear();
+        let len = self.chunks.get_mut().len();
+        for chunk in &mut self.chunks.get_mut()[..len - 1] {
             chunk.deallocate();
         }
+        let chunk = self.chunks.get_mut().pop().unwrap();
+        self.chunks.get_mut().clear();
+        self.chunks.get_mut().push(chunk);
     }
 }
 
@@ -193,6 +200,7 @@ impl<'arena> Drop for Arena<'arena> {
     #[inline(always)]
     fn drop(&mut self) {
         self.collect();
+        self.chunks.get_mut()[0].deallocate();
     }
 }
 
@@ -270,3 +278,6 @@ unsafe impl<'arena> Allocator for Arena<'arena> {
 }
 
 pub type ArenaRef<'arena> = &'arena Arena<'arena>;
+
+#[cfg(test)]
+mod tests;
