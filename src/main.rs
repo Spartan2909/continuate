@@ -134,4 +134,10 @@ fn main() {
         .stderr(Stdio::inherit())
         .output()
         .unwrap();
+
+    process::Command::new("./out/result")
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .output()
+        .unwrap();
 }
