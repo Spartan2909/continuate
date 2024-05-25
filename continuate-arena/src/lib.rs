@@ -120,10 +120,11 @@ impl<'arena> Arena<'arena> {
         Ok(())
     }
 
+    /// ## Safety
+    ///
+    /// `layout.align()` must be not be greater than 4096.
     #[inline(always)]
-    fn allocate_raw(&self, layout: Layout) -> Result<NonNull<()>, AllocError> {
-        assert!(layout.align() <= START_CAPACITY);
-
+    unsafe fn allocate_raw(&self, layout: Layout) -> Result<NonNull<()>, AllocError> {
         // SAFETY: This is the only access to `*self.chunks`.
         let chunks = unsafe { &mut *self.chunks.get() };
 
@@ -135,17 +136,16 @@ impl<'arena> Arena<'arena> {
         unsafe { Ok(chunks.last_mut().unwrap().allocate(layout)) }
     }
 
-    /// ## Panics
-    ///
-    /// Panics if `mem::align_of::<T>() > 4096`.
     #[inline]
-    #[allow(clippy::mut_from_ref)]
     pub fn allocate<T: ArenaSafe + 'arena>(&'arena self, value: T) -> &'arena T {
+        const { assert!(mem::align_of::<T>() <= START_CAPACITY) }
         let layout = Layout::new::<T>();
-        let ptr = self
-            .allocate_raw(Layout::new::<T>())
-            .unwrap_or_else(|_| alloc::handle_alloc_error(layout))
-            .cast();
+        // SAFETY: Checked in `const` block.
+        let ptr = unsafe {
+            self.allocate_raw(Layout::new::<T>())
+                .unwrap_or_else(|_| alloc::handle_alloc_error(layout))
+                .cast()
+        };
 
         // SAFETY: `Chunk::allocate` always returns a valid pointer.
         unsafe {
@@ -212,7 +212,9 @@ impl<T: ?Sized> Any for T {}
 unsafe impl<'arena> Allocator for Arena<'arena> {
     #[inline]
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        let data: NonNull<u8> = self.allocate_raw(layout)?.cast();
+        assert!(layout.align() <= START_CAPACITY);
+        // SAFETY: Just checked.
+        let data: NonNull<u8> = unsafe { self.allocate_raw(layout)?.cast() };
         let ptr = NonNull::slice_from_raw_parts(data, layout.size());
         Ok(ptr)
     }
