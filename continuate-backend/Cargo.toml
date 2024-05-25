@@ -3,6 +3,7 @@ name = "continuate-backend"
 version.workspace = true
 edition = "2021"
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 continuate-arena = { workspace = true }

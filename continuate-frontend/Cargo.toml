@@ -3,6 +3,7 @@ name = "continuate-frontend"
 version.workspace = true
 edition = "2021"
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 chumsky = { workspace = true }

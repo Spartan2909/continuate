@@ -3,6 +3,7 @@ name = "continuate-arena"
 version.workspace = true
 edition = "2021"
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 continuate-arena-macros = { workspace = true }

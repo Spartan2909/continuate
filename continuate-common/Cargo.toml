@@ -3,6 +3,7 @@ name = "continuate-common"
 version.workspace = true
 edition = "2021"
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 bytemuck = "1.15.0"

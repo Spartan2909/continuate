@@ -3,6 +3,7 @@ name = "continuate-error"
 version.workspace = true
 edition = "2021"
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 ariadne = { version = "0.4.1", features = ["auto-color"] }

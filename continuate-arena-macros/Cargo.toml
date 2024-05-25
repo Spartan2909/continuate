@@ -3,6 +3,7 @@ name = "continuate-arena-macros"
 version.workspace = true
 edition = "2021"
 license.workspace = true
+rust-version.workspace = true
 
 [lib]
 proc-macro = true

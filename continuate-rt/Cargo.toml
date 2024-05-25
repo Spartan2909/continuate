@@ -3,6 +3,7 @@ name = "continuate-rt"
 version.workspace = true
 edition = "2021"
 license.workspace = true
+rust-version.workspace = true
 
 [lib]
 crate-type = ["staticlib"]
