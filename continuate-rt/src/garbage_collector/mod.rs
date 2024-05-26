@@ -4,6 +4,7 @@ use std::alloc::Global;
 use std::alloc::Layout;
 use std::ffi::c_char;
 use std::ffi::CStr;
+use std::fmt;
 use std::mem;
 use std::ptr::NonNull;
 use std::sync::Mutex;
@@ -19,9 +20,41 @@ static STRING_LAYOUT: TyLayout = TyLayout::String;
 #[repr(C)]
 struct GcValue<T: ?Sized> {
     layout: &'static TyLayout<'static>,
-    next: Option<NonNull<GcValue<()>>>,
     mark: bool,
+    next: Option<NonNull<GcValue<()>>>,
     value: T,
+}
+
+impl<T: ?Sized> GcValue<T> {
+    const unsafe fn layout(this: *const GcValue<T>) -> &'static TyLayout<'static> {
+        // SAFETY: Must be ensured by caller.
+        let layout_ptr: *const &TyLayout =
+            unsafe { this.byte_add(mem::offset_of!(GcValue<()>, layout)).cast() };
+        // SAFETY: Must be ensured by caller.
+        unsafe { layout_ptr.read() }
+    }
+
+    unsafe fn set_mark(this: *mut GcValue<T>, mark: bool) {
+        // SAFETY: Must be ensured by caller.
+        let mark_ptr: *mut bool = unsafe {
+            this.byte_add(mem::offset_of!(GcValue<()>, mark))
+                .cast()
+        };
+        // SAFETY: Must be ensured by caller.
+        unsafe {
+            mark_ptr.write(mark);
+        }
+    }
+}
+
+impl<T: ?Sized> fmt::Debug for GcValue<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GcValue")
+            .field("layout", self.layout)
+            .field("next", &self.next)
+            .field("mark", &self.mark)
+            .finish_non_exhaustive()
+    }
 }
 
 struct GarbageCollector<A> {
@@ -33,16 +66,24 @@ struct GarbageCollector<A> {
     allocator: A,
 }
 
-fn mark_object(value: &mut GcValue<()>) {
-    value.mark = true;
-    let gc_pointer_locations = match *value.layout {
+/// ## Safety
+///
+/// `value` must be valid.
+unsafe fn mark_object(value: *mut GcValue<()>) {
+    // SAFETY: Must be ensured by caller.
+    unsafe {
+        GcValue::set_mark(value, true);
+    }
+    // SAFETY: Must be ensured by caller.
+    let layout = unsafe { GcValue::layout(value) };
+    let gc_pointer_locations = match *layout {
         TyLayout::Single(SingleLayout {
             gc_pointer_locations,
             ..
         }) => gc_pointer_locations.as_slice(),
         TyLayout::Sum { layouts, .. } => {
-            let value: *mut () = &mut value.value;
-            let discriminant: *mut u64 = value.cast();
+            // SAFETY: `value` is a valid pointer to a `GcValue<()>`.
+            let discriminant: *mut u64 = unsafe { value.byte_add(mem::offset_of!(GcValue<()>, value)).cast() };
             // SAFETY: A `GcValue` with a `Layout::Sum` must begin with a `u64` discriminant.
             let discriminant = unsafe { discriminant.read() };
             layouts[discriminant as usize]
@@ -56,10 +97,14 @@ fn mark_object(value: &mut GcValue<()>) {
     for &location in gc_pointer_locations {
         let location = mem::offset_of!(GcValue<()>, value) + location as usize;
         // SAFETY: Every element of `gc_pointer_locations` is a valid offset into `value.value`.
-        let object = unsafe { value.byte_add(location) };
+        let value_ptr: *const *mut () = unsafe { value.byte_add(location).cast() };
+        // SAFETY: `value_ptr` is valid.
+        let value = unsafe { value_ptr.read() };
+        // SAFETY: `value` is a valid pointer to the `value` field of a `GcValue<()>`.
+        let object = unsafe { value.byte_sub(mem::offset_of!(GcValue<()>, value)).cast() };
         // SAFETY: See above.
         unsafe {
-            mark_object(&mut *object);
+            mark_object(object);
         }
     }
 }
@@ -73,14 +118,14 @@ impl<A: Allocator> GarbageCollector<A> {
     unsafe fn mark_roots(&mut self) {
         for &root in &self.roots {
             // SAFETY: Must be ensured by caller.
-            let root = unsafe { &mut *root.as_ptr() };
-            mark_object(root);
+            unsafe {
+                mark_object(root.as_ptr());
+            }
         }
 
         for &temp_root in &self.roots {
             // SAFETY: Must be ensured by caller.
-            let temp_root = unsafe { &mut *temp_root.as_ptr() };
-            mark_object(temp_root);
+            unsafe { mark_object(temp_root.as_ptr()) };
         }
     }
 
@@ -229,10 +274,8 @@ unsafe fn track_object(ptr: NonNull<GcValue<()>>, size: usize) {
             .byte_add(mem::offset_of!(GcValue<()>, mark))
             .cast()
     };
-    // SAFETY: `next_ptr` is valid.
-    unsafe {
-        mark_ptr.write(true);
-    }
+    // SAFETY: `mark_ptr` is valid.
+    unsafe { mark_ptr.write(false) }
 }
 
 /// ## Safety
@@ -290,6 +333,8 @@ pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull
 /// - `ptr` must point to memory allocated with [`cont_rt_alloc_gc`], and must not have
 ///     previously been passed to this function.
 ///
+/// - `ptr` must be valid for writes.
+///
 /// - All objects allocated with [`cont_rt_alloc_gc`] must be reachable from `ptr` or an object
 ///     previously marked with [`cont_rt_mark_root`].
 ///
@@ -299,8 +344,11 @@ pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull
 #[export_name = "cont_rt_mark_root"]
 pub unsafe extern "C" fn mark_root(ptr: NonNull<()>) {
     // SAFETY: Must be ensured by caller.
-    let value: *mut GcValue<()> =
-        unsafe { ptr.as_ptr().sub(mem::offset_of!(GcValue<()>, value)).cast() };
+    let value: *mut GcValue<()> = unsafe {
+        ptr.as_ptr()
+            .byte_sub(mem::offset_of!(GcValue<()>, value))
+            .cast()
+    };
     // SAFETY: Garbage collected pointers are always non-null.
     let value = unsafe { NonNull::new_unchecked(value) };
     let mut gc = GARBAGE_COLLECTOR.lock().unwrap();
@@ -368,3 +416,6 @@ pub extern "C" fn alloc_string(len: usize) -> NonNull<()> {
     // SAFETY: `value_ptr` is directly derived from a `NonNull`.
     unsafe { NonNull::new_unchecked(value_ptr.cast()) }
 }
+
+#[cfg(test)]
+mod tests;
