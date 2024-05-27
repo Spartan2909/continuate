@@ -54,7 +54,7 @@ fn simple() {
 
     // SAFETY: All roots have been marked.
     unsafe {
-        GARBAGE_COLLECTOR.lock().unwrap().collect();
+        garbage_collector().lock().unwrap().collect();
     }
 
     // SAFETY: `x` must be valid.
@@ -82,7 +82,7 @@ fn link() {
 
     // SAFETY: `x_box` has been marked, and `x` is reachable from `x_box`.
     unsafe {
-        GARBAGE_COLLECTOR.lock().unwrap().collect();
+        garbage_collector().lock().unwrap().collect();
     }
 
     // SAFETY: `x` must be valid.

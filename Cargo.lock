@@ -214,6 +214,7 @@ version = "0.1.0"
 dependencies = [
  "continuate-common",
  "mimalloc",
+ "nohash",
  "tracing",
  "tracing-subscriber",
 ]
@@ -512,6 +513,12 @@ checksum = "e9186d86b79b52f4a77af65604b51225e8db1d6ee7e3f41aec1e40829c71a176"
 dependencies = [
  "libmimalloc-sys",
 ]
+
+[[package]]
+name = "nohash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0f889fb66f7acdf83442c35775764b51fed3c606ab9cee51500dbde2cf528ca"
 
 [[package]]
 name = "nu-ansi-term"

@@ -2,15 +2,22 @@ use std::alloc::handle_alloc_error;
 use std::alloc::Allocator;
 use std::alloc::Global;
 use std::alloc::Layout;
+use std::borrow::Borrow;
 use std::ffi::c_char;
 use std::ffi::CStr;
 use std::fmt;
+use std::hash;
+use std::hash::BuildHasherDefault;
 use std::mem;
 use std::ptr::NonNull;
 use std::sync::Mutex;
+use std::sync::MutexGuard;
+use std::sync::OnceLock;
 
 use continuate_common::SingleLayout;
 use continuate_common::TyLayout;
+
+use nohash::IntSet;
 
 #[cfg(debug_assertions)]
 use tracing::debug;
@@ -34,6 +41,14 @@ impl<T: ?Sized> GcValue<T> {
         unsafe { layout_ptr.read() }
     }
 
+    const unsafe fn mark(this: *const GcValue<T>) -> bool {
+        // SAFETY: Must be ensured by caller.
+        let mark_ptr: *const bool =
+            unsafe { this.byte_add(mem::offset_of!(GcValue<()>, mark)).cast() };
+        // SAFETY: Must be ensured by caller.
+        unsafe { mark_ptr.read() }
+    }
+
     unsafe fn set_mark(this: *mut GcValue<T>, mark: bool) {
         // SAFETY: Must be ensured by caller.
         let mark_ptr: *mut bool =
@@ -55,9 +70,51 @@ impl<T: ?Sized> fmt::Debug for GcValue<T> {
     }
 }
 
+#[repr(transparent)]
+struct HashableGcValue<T>(NonNull<GcValue<T>>);
+
+impl<T> Clone for HashableGcValue<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for HashableGcValue<T> {}
+
+impl<T> PartialEq for HashableGcValue<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<T> Eq for HashableGcValue<T> {}
+
+impl<T> hash::Hash for HashableGcValue<T> {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        state.write_usize(self.0.as_ptr() as usize);
+    }
+}
+
+impl<T> From<NonNull<GcValue<T>>> for HashableGcValue<T> {
+    fn from(value: NonNull<GcValue<T>>) -> Self {
+        HashableGcValue(value)
+    }
+}
+
+impl<T> Borrow<NonNull<GcValue<T>>> for HashableGcValue<T> {
+    fn borrow(&self) -> &NonNull<GcValue<T>> {
+        &self.0
+    }
+}
+
+// SAFETY: `HashableGcValue` cannot be used from safe code.
+unsafe impl<T> Send for HashableGcValue<T> {}
+
+impl<T> nohash::IsEnabled for HashableGcValue<T> {}
+
 struct GarbageCollector<A> {
     values: Option<NonNull<GcValue<()>>>,
-    roots: Vec<NonNull<GcValue<()>>>,
+    roots: IntSet<HashableGcValue<()>>,
     temp_roots: Vec<NonNull<GcValue<()>>>,
     bytes_allocated: usize,
     next_gc: usize,
@@ -68,6 +125,11 @@ struct GarbageCollector<A> {
 ///
 /// `value` must be valid.
 unsafe fn mark_object(value: *mut GcValue<()>) {
+    // SAFETY: Must be ensured by caller.
+    if unsafe { GcValue::mark(value) } {
+        return;
+    }
+
     // SAFETY: Must be ensured by caller.
     unsafe {
         GcValue::set_mark(value, true);
@@ -118,14 +180,14 @@ impl<A: Allocator> GarbageCollector<A> {
         for &root in &self.roots {
             // SAFETY: Must be ensured by caller.
             unsafe {
-                mark_object(root.as_ptr());
+                mark_object(root.0.as_ptr());
             }
         }
 
         for &temp_root in &self.roots {
             // SAFETY: Must be ensured by caller.
             unsafe {
-                mark_object(temp_root.as_ptr());
+                mark_object(temp_root.0.as_ptr());
             }
         }
     }
@@ -233,20 +295,29 @@ impl<A: Allocator> GarbageCollector<A> {
 // SAFETY: Every pointer in a `GarbageCollector` is owned by that collector.
 unsafe impl<A: Send> Send for GarbageCollector<A> {}
 
-static GARBAGE_COLLECTOR: Mutex<GarbageCollector<Global>> = Mutex::new(GarbageCollector {
-    values: None,
-    roots: Vec::new(),
-    temp_roots: Vec::new(),
-    bytes_allocated: 0,
-    next_gc: 1024 * 1024,
-    allocator: Global,
-});
+fn garbage_collector() -> &'static Mutex<GarbageCollector<Global>> {
+    static GARBAGE_COLLECTOR: OnceLock<Mutex<GarbageCollector<Global>>> = OnceLock::new();
+
+    GARBAGE_COLLECTOR.get_or_init(|| {
+        Mutex::new(GarbageCollector {
+            values: None,
+            roots: IntSet::with_hasher(BuildHasherDefault::default()),
+            temp_roots: Vec::new(),
+            bytes_allocated: 0,
+            next_gc: 1024 * 1024,
+            allocator: Global,
+        })
+    })
+}
 
 /// ## Safety
 ///
-/// `ptr` must be a valid pointer to a (possibly uninitialised) `GcValue<()>`.
-unsafe fn track_object(ptr: NonNull<GcValue<()>>, size: usize) {
-    let mut gc = GARBAGE_COLLECTOR.lock().unwrap();
+/// `ptr` must be a valid pointer to a (possibly uninitialised) `GcValue<()>` allocated in `gc`.
+unsafe fn track_object<A: Allocator>(
+    ptr: NonNull<GcValue<()>>,
+    size: usize,
+    mut gc: MutexGuard<GarbageCollector<A>>,
+) -> MutexGuard<GarbageCollector<A>> {
     gc.bytes_allocated += size;
     if gc.bytes_allocated > gc.next_gc {
         // SAFETY: The only unreachable object is `ptr`, which is not yet tracked.
@@ -254,6 +325,15 @@ unsafe fn track_object(ptr: NonNull<GcValue<()>>, size: usize) {
             gc.collect();
         }
     }
+
+    // SAFETY: `ptr` is a valid pointer to a `GcValue<()>`.
+    let mark_ptr: *mut bool = unsafe {
+        ptr.as_ptr()
+            .byte_add(mem::offset_of!(GcValue<()>, mark))
+            .cast()
+    };
+    // SAFETY: `mark_ptr` is valid.
+    unsafe { mark_ptr.write(false) }
 
     // SAFETY: `ptr` is a valid pointer to a `GcValue<()>`.
     let next_ptr: *mut Option<NonNull<GcValue<()>>> = unsafe {
@@ -267,16 +347,7 @@ unsafe fn track_object(ptr: NonNull<GcValue<()>>, size: usize) {
     }
     gc.values = Some(ptr);
 
-    drop(gc);
-
-    // SAFETY: `ptr` is a valid pointer to a `GcValue<()>`.
-    let mark_ptr: *mut bool = unsafe {
-        ptr.as_ptr()
-            .byte_add(mem::offset_of!(GcValue<()>, mark))
-            .cast()
-    };
-    // SAFETY: `mark_ptr` is valid.
-    unsafe { mark_ptr.write(false) }
+    gc
 }
 
 /// ## Safety
@@ -290,6 +361,7 @@ unsafe fn track_object(ptr: NonNull<GcValue<()>>, size: usize) {
 /// Panics if `layout` is a `TyLayout::String` or if another garbage collection operation has
 /// previously panicked.
 #[export_name = "cont_rt_alloc_gc"]
+#[allow(clippy::significant_drop_tightening)] // False positive
 pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull<()> {
     #[cfg(debug_assertions)]
     debug!("allocating object with layout {layout:?}");
@@ -301,11 +373,11 @@ pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull
     let size = size as usize + mem::size_of::<GcValue<()>>();
     let align = (layout.align() as usize).max(mem::align_of::<GcValue<()>>());
 
+    let gc = garbage_collector().lock().unwrap();
+
     // SAFETY: Must be ensured by caller.
     let mem_layout = unsafe { Layout::from_size_align_unchecked(size, align) };
-    let ptr = GARBAGE_COLLECTOR
-        .lock()
-        .unwrap()
+    let ptr: NonNull<[u8]> = gc
         .allocator
         .allocate_zeroed(mem_layout)
         .unwrap_or_else(|_| handle_alloc_error(mem_layout));
@@ -320,7 +392,7 @@ pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull
 
     // SAFETY: `ptr` is a valid pointer to a `GcValue<()>`.
     unsafe {
-        track_object(ptr, size);
+        drop(track_object(ptr, size, gc));
     }
 
     // SAFETY: See above.
@@ -352,8 +424,8 @@ pub unsafe extern "C" fn mark_root(ptr: NonNull<()>) {
     };
     // SAFETY: Garbage collected pointers are always non-null.
     let value = unsafe { NonNull::new_unchecked(value) };
-    let mut gc = GARBAGE_COLLECTOR.lock().unwrap();
-    gc.roots.push(value);
+    let mut gc = garbage_collector().lock().unwrap();
+    gc.roots.insert(value.into());
     gc.temp_roots.clear();
 }
 
@@ -374,18 +446,14 @@ pub unsafe extern "C" fn unmark_root(ptr: NonNull<()>) {
             .byte_sub(mem::offset_of!(GcValue<()>, value))
             .cast()
     };
-    let mut gc = GARBAGE_COLLECTOR.lock().unwrap();
-    for (i, &root) in gc.roots.iter().rev().enumerate() {
-        if root.as_ptr() == value {
-            gc.roots.remove(i);
-            drop(gc);
-            break;
-        }
-    }
+    // SAFETY: `value` is derived from a non-null pointer.
+    let value = unsafe { NonNull::new_unchecked(value) };
+    garbage_collector().lock().unwrap().roots.remove(&value);
 }
 
 #[export_name = "cont_rt_alloc_string"]
 #[allow(clippy::missing_panics_doc)]
+#[allow(clippy::significant_drop_tightening)] // False positive
 pub extern "C" fn alloc_string(len: usize) -> NonNull<()> {
     #[cfg(debug_assertions)]
     debug!("allocating string with length {len}");
@@ -393,9 +461,9 @@ pub extern "C" fn alloc_string(len: usize) -> NonNull<()> {
     let size = len + mem::size_of::<GcValue<()>>();
     let mem_layout = Layout::from_size_align(size, mem::align_of::<GcValue<()>>()).unwrap();
 
-    let ptr: NonNull<GcValue<()>> = GARBAGE_COLLECTOR
-        .lock()
-        .unwrap()
+    let gc = garbage_collector().lock().unwrap();
+
+    let ptr: NonNull<GcValue<()>> = gc
         .allocator
         .allocate(mem_layout)
         .unwrap_or_else(|_| handle_alloc_error(mem_layout))
@@ -411,7 +479,7 @@ pub extern "C" fn alloc_string(len: usize) -> NonNull<()> {
 
     // SAFETY: `ptr` is a valid pointer to a `GcValue<()>`.
     unsafe {
-        track_object(ptr, size);
+        drop(track_object(ptr, size, gc));
     }
 
     // SAFETY: `value_ptr` is directly derived from a `NonNull`.
