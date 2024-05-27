@@ -76,7 +76,7 @@ struct Runtime {
     unmark_root: FuncId,
 
     /// `fn()`
-    enable_log: FuncId,
+    init: FuncId,
 }
 
 impl Runtime {
@@ -110,9 +110,9 @@ impl Runtime {
             )
             .unwrap();
 
-        let enable_log = module
+        let init = module
             .declare_function(
-                "cont_rt_enable_log",
+                "cont_rt_init",
                 Linkage::Import,
                 &module.make_signature(),
             )
@@ -123,7 +123,7 @@ impl Runtime {
             alloc_string,
             mark_root,
             unmark_root,
-            enable_log,
+            init,
         }
     }
 }
@@ -681,14 +681,11 @@ impl<'arena, 'a> Compiler<'arena, 'a, ObjectModule> {
         builder.switch_to_block(block);
         builder.seal_block(block);
 
-        #[cfg(debug_assertions)]
-        {
-            let enable_log = self
-                .module
-                .declare_func_in_func(self.runtime.enable_log, builder.func);
-            let results = builder.ins().call(enable_log, &[]);
-            debug_assert_eq!(builder.inst_results(results).len(), 0);
-        }
+        let init = self
+            .module
+            .declare_func_in_func(self.runtime.init, builder.func);
+        let results = builder.ins().call(init, &[]);
+        debug_assert_eq!(builder.inst_results(results).len(), 0);
 
         let entry_point = self.functions[&self.program.entry_point()].0;
         let entry_point = self.module.declare_func_in_func(entry_point, builder.func);
