@@ -576,7 +576,7 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
                     .iter()
                     .map(|types| self.compund_ty_layout(&[&[self.program.lib_std.ty_int], types]))
                     .collect();
-                let size = layouts.iter().fold(0, |size, layout| size.max(layout.size));
+                let size = layouts.iter().fold(8, |size, layout| size.max(layout.size));
                 let align = layouts
                     .iter()
                     .fold(1, |align, layout| align.max(layout.align));

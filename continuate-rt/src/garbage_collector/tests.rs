@@ -52,11 +52,6 @@ fn simple() {
         mark_root(y.cast());
     }
 
-    // SAFETY: All roots have been marked.
-    unsafe {
-        garbage_collector().lock().unwrap().collect();
-    }
-
     // SAFETY: `x` must be valid.
     unsafe {
         assert_eq!(*x.as_ptr(), 5);
@@ -78,11 +73,6 @@ fn link() {
     // SAFETY: `x_box` has just been allocated, and is the only unreachable, unmarked pointer.
     unsafe {
         mark_root(x_box.cast());
-    }
-
-    // SAFETY: `x_box` has been marked, and `x` is reachable from `x_box`.
-    unsafe {
-        garbage_collector().lock().unwrap().collect();
     }
 
     // SAFETY: `x` must be valid.

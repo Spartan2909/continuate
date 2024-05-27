@@ -184,10 +184,10 @@ impl<A: Allocator> GarbageCollector<A> {
             }
         }
 
-        for &temp_root in &self.roots {
+        for &temp_root in &self.temp_roots {
             // SAFETY: Must be ensured by caller.
             unsafe {
-                mark_object(temp_root.0.as_ptr());
+                mark_object(temp_root.as_ptr());
             }
         }
     }
@@ -209,11 +209,13 @@ impl<A: Allocator> GarbageCollector<A> {
         match *layout {
             TyLayout::Single(SingleLayout { size, align, .. })
             | TyLayout::Sum { size, align, .. } => {
-                let layout = Layout::from_size_align(size as usize, align as usize).unwrap();
+                let size = size as usize + mem::size_of::<GcValue<()>>();
+                let layout = Layout::from_size_align(size, align as usize).unwrap();
                 // SAFETY: `object` was allocated with `Global` with `layout`.
                 unsafe {
                     self.allocator.deallocate(object.cast(), layout);
                 }
+                self.bytes_allocated -= size;
             }
             TyLayout::String => {
                 // SAFETY: `object` is a valid pointer to a `GcValue<c_char>`.
@@ -231,6 +233,7 @@ impl<A: Allocator> GarbageCollector<A> {
                 unsafe {
                     self.allocator.deallocate(object.cast(), layout);
                 }
+                self.bytes_allocated -= size;
             }
         }
     }
@@ -319,7 +322,7 @@ unsafe fn track_object<A: Allocator>(
     mut gc: MutexGuard<GarbageCollector<A>>,
 ) -> MutexGuard<GarbageCollector<A>> {
     gc.bytes_allocated += size;
-    if gc.bytes_allocated > gc.next_gc {
+    if cfg!(test) || gc.bytes_allocated > gc.next_gc {
         // SAFETY: The only unreachable object is `ptr`, which is not yet tracked.
         unsafe {
             gc.collect();
@@ -346,6 +349,8 @@ unsafe fn track_object<A: Allocator>(
         next_ptr.write(gc.values);
     }
     gc.values = Some(ptr);
+
+    gc.temp_roots.push(ptr);
 
     gc
 }
