@@ -36,10 +36,8 @@ impl<T: ?Sized> GcValue<T> {
 
     unsafe fn set_mark(this: *mut GcValue<T>, mark: bool) {
         // SAFETY: Must be ensured by caller.
-        let mark_ptr: *mut bool = unsafe {
-            this.byte_add(mem::offset_of!(GcValue<()>, mark))
-                .cast()
-        };
+        let mark_ptr: *mut bool =
+            unsafe { this.byte_add(mem::offset_of!(GcValue<()>, mark)).cast() };
         // SAFETY: Must be ensured by caller.
         unsafe {
             mark_ptr.write(mark);
@@ -83,7 +81,8 @@ unsafe fn mark_object(value: *mut GcValue<()>) {
         }) => gc_pointer_locations.as_slice(),
         TyLayout::Sum { layouts, .. } => {
             // SAFETY: `value` is a valid pointer to a `GcValue<()>`.
-            let discriminant: *mut u64 = unsafe { value.byte_add(mem::offset_of!(GcValue<()>, value)).cast() };
+            let discriminant: *mut u64 =
+                unsafe { value.byte_add(mem::offset_of!(GcValue<()>, value)).cast() };
             // SAFETY: A `GcValue` with a `Layout::Sum` must begin with a `u64` discriminant.
             let discriminant = unsafe { discriminant.read() };
             layouts[discriminant as usize]
@@ -125,7 +124,9 @@ impl<A: Allocator> GarbageCollector<A> {
 
         for &temp_root in &self.roots {
             // SAFETY: Must be ensured by caller.
-            unsafe { mark_object(temp_root.as_ptr()) };
+            unsafe {
+                mark_object(temp_root.as_ptr());
+            }
         }
     }
 

@@ -79,6 +79,7 @@ multiple_unsafe_ops_per_block = "deny"
 must_use_candidate = "allow"
 option_if_let_else = "allow"
 redundant_pub_crate = "allow"
+semicolon_inside_block = "warn" # Confusing name: semicolons *should* be inside the block.
 todo = "warn"
 undocumented_unsafe_blocks = "deny"
 use_self = "allow"

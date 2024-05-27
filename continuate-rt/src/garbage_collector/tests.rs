@@ -58,9 +58,13 @@ fn simple() {
     }
 
     // SAFETY: `x` must be valid.
-    unsafe { assert_eq!(*x.as_ptr(), 5); }
+    unsafe {
+        assert_eq!(*x.as_ptr(), 5);
+    }
     // SAFETY: `y` must be valid.
-    unsafe { assert_eq!(*y.as_ptr(), 7); }
+    unsafe {
+        assert_eq!(*y.as_ptr(), 7);
+    }
 }
 
 #[test]
@@ -82,9 +86,13 @@ fn link() {
     }
 
     // SAFETY: `x` must be valid.
-    unsafe { assert_eq!(*x.as_ptr(), 3); }
+    unsafe {
+        assert_eq!(*x.as_ptr(), 3);
+    }
     // SAFETY: `x_box` must be valid.
     let x_box = unsafe { x_box.as_ptr().read() };
     // SAFETY: `x_box.0` must be valid.
-    unsafe { assert_eq!(*x_box.0.as_ptr(), 3) };
+    unsafe {
+        assert_eq!(*x_box.0.as_ptr(), 3);
+    }
 }
