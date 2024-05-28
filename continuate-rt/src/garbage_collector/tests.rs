@@ -72,13 +72,17 @@ fn link() {
     let x = unsafe { alloc_value(&I64_LAYOUT, 3i64) };
 
     // SAFETY: `x` is a valid garbage-collected pointer.
-    unsafe { mark_root(x.cast()); }
+    unsafe {
+        mark_root(x.cast());
+    }
 
     // SAFETY: `I64_BOX_LAYOUT` is valid.
     let x_box = unsafe { alloc_value(&I64_BOX_LAYOUT, I64Box(x)) };
 
     // SAFETY: `x` is a valid marked, garbage-collected pointer.
-    unsafe { unmark_root(x.cast()); }
+    unsafe {
+        unmark_root(x.cast());
+    }
 
     // SAFETY: `x_box` has just been allocated.
     unsafe {
