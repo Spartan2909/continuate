@@ -3,6 +3,9 @@
 mod garbage_collector;
 
 #[cfg(debug_assertions)]
+use tracing::debug;
+
+#[cfg(debug_assertions)]
 use tracing_subscriber::filter::LevelFilter;
 
 #[cfg(not(miri))]
@@ -16,4 +19,7 @@ pub extern "C" fn enable_log() {
     continuate_common::init_tracing(LevelFilter::DEBUG).expect("failed to instantiate logger");
 
     garbage_collector::init_garbage_collector();
+
+    #[cfg(debug_assertions)]
+    debug!("runtime initialised");
 }
