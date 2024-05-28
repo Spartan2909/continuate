@@ -115,7 +115,6 @@ impl<T> nohash::IsEnabled for HashableGcValue<T> {}
 struct GarbageCollector<A> {
     values: Option<NonNull<GcValue<()>>>,
     roots: IntSet<HashableGcValue<()>>,
-    temp_roots: Vec<NonNull<GcValue<()>>>,
     bytes_allocated: usize,
     next_gc: usize,
     allocator: A,
@@ -181,13 +180,6 @@ impl<A: Allocator> GarbageCollector<A> {
             // SAFETY: Must be ensured by caller.
             unsafe {
                 mark_object(root.0.as_ptr());
-            }
-        }
-
-        for &temp_root in &self.temp_roots {
-            // SAFETY: Must be ensured by caller.
-            unsafe {
-                mark_object(temp_root.as_ptr());
             }
         }
     }
@@ -306,7 +298,9 @@ static GARBAGE_COLLECTOR: OnceLock<Mutex<GarbageCollector<Global>>> = OnceLock::
 #[cfg_attr(debug_assertions, track_caller)]
 unsafe fn garbage_collector() -> &'static Mutex<GarbageCollector<Global>> {
     if cfg!(debug_assertions) {
-        GARBAGE_COLLECTOR.get().expect("garbage collector not initialised")
+        GARBAGE_COLLECTOR
+            .get()
+            .expect("garbage collector not initialised")
     } else {
         // SAFETY: Must be ensured by caller.
         unsafe { GARBAGE_COLLECTOR.get().unwrap_unchecked() }
@@ -318,7 +312,6 @@ pub(super) fn init_garbage_collector() {
         Mutex::new(GarbageCollector {
             values: None,
             roots: IntSet::with_hasher(BuildHasherDefault::default()),
-            temp_roots: Vec::new(),
             bytes_allocated: 0,
             next_gc: 1024 * 1024,
             allocator: Global,
@@ -362,8 +355,6 @@ unsafe fn track_object<A: Allocator>(
         next_ptr.write(gc.values);
     }
     gc.values = Some(ptr);
-
-    gc.temp_roots.push(ptr);
 
     gc
 }
@@ -429,9 +420,6 @@ pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull
 ///
 /// - `ptr` must be valid for writes.
 ///
-/// - All objects allocated with [`cont_rt_alloc_gc`] must be reachable from `ptr` or an object
-///     previously marked with [`cont_rt_mark_root`].
-///
 /// - The garbage collector must be initialised.
 ///
 /// ## Panics
@@ -450,7 +438,6 @@ pub unsafe extern "C" fn mark_root(ptr: NonNull<()>) {
     // SAFETY: Must be ensured by caller.
     let mut gc = unsafe { garbage_collector().lock().unwrap() };
     gc.roots.insert(value.into());
-    gc.temp_roots.clear();
 }
 
 /// ## Safety

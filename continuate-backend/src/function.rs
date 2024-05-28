@@ -93,6 +93,7 @@ pub(super) struct FunctionCompiler<'arena, 'function, 'builder, M> {
     pub(super) params: &'function [(Ident, TypeRef)],
     pub(super) function_runtime: FunctionRuntime,
     pub(super) vars: HashMap<Ident, (TypeRef, bool)>,
+    pub(super) temp_roots: Vec<Value>,
 }
 
 impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function, 'builder, M> {
@@ -131,6 +132,16 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
         }
     }
 
+    fn clear_temp_roots(&mut self) {
+        for &temp_root in &self.temp_roots {
+            self.builder
+                .ins()
+                .call(self.function_runtime.unmark_root, &[temp_root]);
+        }
+
+        self.temp_roots.clear();
+    }
+
     fn alloc_gc(&mut self, ty: TypeRef) -> Value {
         let ty_layout = self.ty_layouts[&ty].1;
         let ty_layout = self
@@ -147,6 +158,8 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
             .call(self.function_runtime.alloc_gc, &[ty_layout]);
         let values = self.builder.inst_results(call_result);
         debug_assert_eq!(values.len(), 1);
+
+        self.temp_roots.push(values[0]);
 
         values[0]
     }
@@ -199,6 +212,8 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
 
         self.builder
             .call_memcpy(self.module.target_config(), dest_ptr, src_ptr, size);
+
+        self.temp_roots.push(dest_ptr);
 
         let size = self
             .builder
@@ -387,6 +402,7 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
             object,
             layout.field_locations[field] as i32,
         );
+        self.clear_temp_roots();
         Some(value)
     }
 
@@ -575,6 +591,8 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
                 .ins()
                 .call(self.function_runtime.mark_root, &[ptr]);
         }
+
+        self.clear_temp_roots();
 
         Some(value)
     }

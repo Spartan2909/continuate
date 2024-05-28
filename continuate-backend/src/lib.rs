@@ -111,11 +111,7 @@ impl Runtime {
             .unwrap();
 
         let init = module
-            .declare_function(
-                "cont_rt_init",
-                Linkage::Import,
-                &module.make_signature(),
-            )
+            .declare_function("cont_rt_init", Linkage::Import, &module.make_signature())
             .unwrap();
 
         Runtime {
@@ -358,6 +354,7 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
             params: &params,
             function_runtime,
             vars: HashMap::new(),
+            temp_roots: Vec::new(),
         };
 
         function_compiler.compile();
