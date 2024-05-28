@@ -325,8 +325,8 @@ pub(super) fn init_garbage_collector() {
 unsafe fn track_object<A: Allocator>(
     ptr: NonNull<GcValue<()>>,
     size: usize,
-    mut gc: MutexGuard<GarbageCollector<A>>,
-) -> MutexGuard<GarbageCollector<A>> {
+    gc: &mut MutexGuard<GarbageCollector<A>>,
+) {
     gc.bytes_allocated += size;
     if cfg!(test) || gc.bytes_allocated > gc.next_gc {
         // SAFETY: The only unreachable object is `ptr`, which is not yet tracked.
@@ -355,8 +355,6 @@ unsafe fn track_object<A: Allocator>(
         next_ptr.write(gc.values);
     }
     gc.values = Some(ptr);
-
-    gc
 }
 
 /// ## Safety
@@ -372,7 +370,6 @@ unsafe fn track_object<A: Allocator>(
 /// Panics if `layout` is a `TyLayout::String` or if another garbage collection operation has
 /// previously panicked.
 #[export_name = "cont_rt_alloc_gc"]
-#[allow(clippy::significant_drop_tightening)] // False positive
 pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull<()> {
     #[cfg(debug_assertions)]
     debug!("allocating object with layout {layout:?}");
@@ -385,7 +382,7 @@ pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull
     let align = (layout.align() as usize).max(mem::align_of::<GcValue<()>>());
 
     // SAFETY: Must be ensured by caller.
-    let gc = unsafe { garbage_collector().lock().unwrap() };
+    let mut gc = unsafe { garbage_collector().lock().unwrap() };
 
     // SAFETY: Must be ensured by caller.
     let mem_layout = unsafe { Layout::from_size_align_unchecked(size, align) };
@@ -404,8 +401,10 @@ pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull
 
     // SAFETY: `ptr` is a valid pointer to a `GcValue<()>`.
     unsafe {
-        drop(track_object(ptr, size, gc));
+        track_object(ptr, size, &mut gc);
     }
+
+    drop(gc);
 
     // SAFETY: See above.
     let value_ptr = unsafe { ptr.as_ptr().byte_add(mem::offset_of!(GcValue<()>, value)) };
@@ -451,7 +450,6 @@ pub unsafe extern "C" fn mark_root(ptr: NonNull<()>) {
 ///
 /// Panics if a garbage collection operation has previously panicked.
 #[export_name = "cont_rt_unmark_root"]
-#[allow(clippy::significant_drop_in_scrutinee)]
 pub unsafe extern "C" fn unmark_root(ptr: NonNull<()>) {
     // SAFETY: Must be ensured by caller.
     let value: *mut GcValue<()> = unsafe {
@@ -472,7 +470,6 @@ pub unsafe extern "C" fn unmark_root(ptr: NonNull<()>) {
 /// The garbage collector must be initialised.
 #[export_name = "cont_rt_alloc_string"]
 #[allow(clippy::missing_panics_doc)]
-#[allow(clippy::significant_drop_tightening)] // False positive
 pub unsafe extern "C" fn alloc_string(len: usize) -> NonNull<()> {
     #[cfg(debug_assertions)]
     debug!("allocating string with length {len}");
@@ -481,7 +478,7 @@ pub unsafe extern "C" fn alloc_string(len: usize) -> NonNull<()> {
     let mem_layout = Layout::from_size_align(size, mem::align_of::<GcValue<()>>()).unwrap();
 
     // SAFETY: Must be ensured by caller.
-    let gc = unsafe { garbage_collector().lock().unwrap() };
+    let mut gc = unsafe { garbage_collector().lock().unwrap() };
 
     let ptr: NonNull<GcValue<()>> = gc
         .allocator
@@ -499,8 +496,10 @@ pub unsafe extern "C" fn alloc_string(len: usize) -> NonNull<()> {
 
     // SAFETY: `ptr` is a valid pointer to a `GcValue<()>`.
     unsafe {
-        drop(track_object(ptr, size, gc));
+        track_object(ptr, size, &mut gc);
     }
+
+    drop(gc);
 
     // SAFETY: `value_ptr` is directly derived from a `NonNull`.
     unsafe { NonNull::new_unchecked(value_ptr.cast()) }
