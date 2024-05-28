@@ -11,7 +11,6 @@ use std::hash::BuildHasherDefault;
 use std::mem;
 use std::ptr::NonNull;
 use std::sync::Mutex;
-use std::sync::MutexGuard;
 use std::sync::OnceLock;
 
 use continuate_common::SingleLayout;
@@ -285,6 +284,44 @@ impl<A: Allocator> GarbageCollector<A> {
 
         self.next_gc *= Self::HEAP_GROW_FACTOR;
     }
+
+    /// ## Safety
+    ///
+    /// `ptr` must be a valid pointer to a (possibly uninitialised) `GcValue<()>` allocated in `gc`.
+    unsafe fn track_object(
+        &mut self,
+        ptr: NonNull<GcValue<()>>,
+        size: usize,
+    ) {
+        self.bytes_allocated += size;
+        if cfg!(test) || self.bytes_allocated > self.next_gc {
+            // SAFETY: The only unreachable object is `ptr`, which is not yet tracked.
+            unsafe {
+                self.collect();
+            }
+        }
+
+        // SAFETY: `ptr` is a valid pointer to a `GcValue<()>`.
+        let mark_ptr: *mut bool = unsafe {
+            ptr.as_ptr()
+                .byte_add(mem::offset_of!(GcValue<()>, mark))
+                .cast()
+        };
+        // SAFETY: `mark_ptr` is valid.
+        unsafe { mark_ptr.write(false) }
+
+        // SAFETY: `ptr` is a valid pointer to a `GcValue<()>`.
+        let next_ptr: *mut Option<NonNull<GcValue<()>>> = unsafe {
+            ptr.as_ptr()
+                .byte_add(mem::offset_of!(GcValue<()>, next))
+                .cast()
+        };
+        // SAFETY: `next_ptr` is valid.
+        unsafe {
+            next_ptr.write(self.values);
+        }
+        self.values = Some(ptr);
+    }
 }
 
 // SAFETY: Every pointer in a `GarbageCollector` is owned by that collector.
@@ -317,44 +354,6 @@ pub(super) fn init_garbage_collector() {
             allocator: Global,
         })
     });
-}
-
-/// ## Safety
-///
-/// `ptr` must be a valid pointer to a (possibly uninitialised) `GcValue<()>` allocated in `gc`.
-unsafe fn track_object<A: Allocator>(
-    ptr: NonNull<GcValue<()>>,
-    size: usize,
-    gc: &mut MutexGuard<GarbageCollector<A>>,
-) {
-    gc.bytes_allocated += size;
-    if cfg!(test) || gc.bytes_allocated > gc.next_gc {
-        // SAFETY: The only unreachable object is `ptr`, which is not yet tracked.
-        unsafe {
-            gc.collect();
-        }
-    }
-
-    // SAFETY: `ptr` is a valid pointer to a `GcValue<()>`.
-    let mark_ptr: *mut bool = unsafe {
-        ptr.as_ptr()
-            .byte_add(mem::offset_of!(GcValue<()>, mark))
-            .cast()
-    };
-    // SAFETY: `mark_ptr` is valid.
-    unsafe { mark_ptr.write(false) }
-
-    // SAFETY: `ptr` is a valid pointer to a `GcValue<()>`.
-    let next_ptr: *mut Option<NonNull<GcValue<()>>> = unsafe {
-        ptr.as_ptr()
-            .byte_add(mem::offset_of!(GcValue<()>, next))
-            .cast()
-    };
-    // SAFETY: `next_ptr` is valid.
-    unsafe {
-        next_ptr.write(gc.values);
-    }
-    gc.values = Some(ptr);
 }
 
 /// ## Safety
@@ -401,7 +400,7 @@ pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull
 
     // SAFETY: `ptr` is a valid pointer to a `GcValue<()>`.
     unsafe {
-        track_object(ptr, size, &mut gc);
+        gc.track_object(ptr, size);
     }
 
     drop(gc);
@@ -496,7 +495,7 @@ pub unsafe extern "C" fn alloc_string(len: usize) -> NonNull<()> {
 
     // SAFETY: `ptr` is a valid pointer to a `GcValue<()>`.
     unsafe {
-        track_object(ptr, size, &mut gc);
+        gc.track_object(ptr, size);
     }
 
     drop(gc);
