@@ -36,8 +36,6 @@ unsafe fn alloc_value<'a, T: 'a>(layout: &'static TyLayout<'static>, value: T) -
 
 #[test]
 fn simple() {
-    init_garbage_collector();
-
     // SAFETY: `I64_LAYOUT` is valid.
     let x = unsafe { alloc_value(&I64_LAYOUT, 5i64) };
 
@@ -66,8 +64,6 @@ fn simple() {
 
 #[test]
 fn link() {
-    init_garbage_collector();
-
     // SAFETY: `I64_LAYOUT` is valid.
     let x = unsafe { alloc_value(&I64_LAYOUT, 3i64) };
 

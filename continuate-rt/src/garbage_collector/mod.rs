@@ -11,7 +11,6 @@ use std::hash::BuildHasherDefault;
 use std::mem;
 use std::ptr::NonNull;
 use std::sync::Mutex;
-use std::sync::OnceLock;
 
 use continuate_common::SingleLayout;
 use continuate_common::TyLayout;
@@ -288,11 +287,7 @@ impl<A: Allocator> GarbageCollector<A> {
     /// ## Safety
     ///
     /// `ptr` must be a valid pointer to a (possibly uninitialised) `GcValue<()>` allocated in `gc`.
-    unsafe fn track_object(
-        &mut self,
-        ptr: NonNull<GcValue<()>>,
-        size: usize,
-    ) {
+    unsafe fn track_object(&mut self, ptr: NonNull<GcValue<()>>, size: usize) {
         self.bytes_allocated += size;
         if cfg!(test) || self.bytes_allocated > self.next_gc {
             // SAFETY: The only unreachable object is `ptr`, which is not yet tracked.
@@ -327,42 +322,19 @@ impl<A: Allocator> GarbageCollector<A> {
 // SAFETY: Every pointer in a `GarbageCollector` is owned by that collector.
 unsafe impl<A: Send> Send for GarbageCollector<A> {}
 
-static GARBAGE_COLLECTOR: OnceLock<Mutex<GarbageCollector<Global>>> = OnceLock::new();
+static GARBAGE_COLLECTOR: Mutex<GarbageCollector<Global>> = Mutex::new(GarbageCollector {
+    values: None,
+    roots: IntSet::with_hasher(BuildHasherDefault::new()),
+    bytes_allocated: 0,
+    next_gc: 1024 * 1024,
+    allocator: Global,
+});
 
 /// ## Safety
 ///
-/// `GARBAGE_COLLECTOR` must be initialised.
-#[cfg_attr(debug_assertions, track_caller)]
-unsafe fn garbage_collector() -> &'static Mutex<GarbageCollector<Global>> {
-    if cfg!(debug_assertions) {
-        GARBAGE_COLLECTOR
-            .get()
-            .expect("garbage collector not initialised")
-    } else {
-        // SAFETY: Must be ensured by caller.
-        unsafe { GARBAGE_COLLECTOR.get().unwrap_unchecked() }
-    }
-}
-
-pub(super) fn init_garbage_collector() {
-    GARBAGE_COLLECTOR.get_or_init(|| {
-        Mutex::new(GarbageCollector {
-            values: None,
-            roots: IntSet::with_hasher(BuildHasherDefault::default()),
-            bytes_allocated: 0,
-            next_gc: 1024 * 1024,
-            allocator: Global,
-        })
-    });
-}
-
-/// ## Safety
-///
-/// - `layout` must be a valid layout. In particular, it must accurately describe the locations of
+/// `layout` must be a valid layout. In particular, it must accurately describe the locations of
 ///     pointers in the allocated value, and `layout.size()` and `layout.align()` must fit the
 ///     preconditions of [`Layout::from_size_align`].
-///
-/// - The garbage collector must be initialised.
 ///
 /// ## Panics
 ///
@@ -381,7 +353,7 @@ pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull
     let align = (layout.align() as usize).max(mem::align_of::<GcValue<()>>());
 
     // SAFETY: Must be ensured by caller.
-    let mut gc = unsafe { garbage_collector().lock().unwrap() };
+    let mut gc = GARBAGE_COLLECTOR.lock().unwrap();
 
     // SAFETY: Must be ensured by caller.
     let mem_layout = unsafe { Layout::from_size_align_unchecked(size, align) };
@@ -418,8 +390,6 @@ pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull
 ///
 /// - `ptr` must be valid for writes.
 ///
-/// - The garbage collector must be initialised.
-///
 /// ## Panics
 ///
 /// Panics if a garbage collection operation has previously panicked.
@@ -434,7 +404,7 @@ pub unsafe extern "C" fn mark_root(ptr: NonNull<()>) {
     // SAFETY: Garbage collected pointers are always non-null.
     let value = unsafe { NonNull::new_unchecked(value) };
     // SAFETY: Must be ensured by caller.
-    let mut gc = unsafe { garbage_collector().lock().unwrap() };
+    let mut gc = GARBAGE_COLLECTOR.lock().unwrap();
     gc.roots.insert(value.into());
 }
 
@@ -459,17 +429,12 @@ pub unsafe extern "C" fn unmark_root(ptr: NonNull<()>) {
     // SAFETY: `value` is derived from a non-null pointer.
     let value = unsafe { NonNull::new_unchecked(value) };
     // SAFETY: Must be ensured by caller.
-    unsafe {
-        garbage_collector().lock().unwrap().roots.remove(&value);
-    }
+       GARBAGE_COLLECTOR.lock().unwrap().roots.remove(&value);
 }
 
-/// ## Safety
-///
-/// The garbage collector must be initialised.
 #[export_name = "cont_rt_alloc_string"]
 #[allow(clippy::missing_panics_doc)]
-pub unsafe extern "C" fn alloc_string(len: usize) -> NonNull<()> {
+pub extern "C" fn alloc_string(len: usize) -> NonNull<()> {
     #[cfg(debug_assertions)]
     debug!("allocating string with length {len}");
 
@@ -477,7 +442,7 @@ pub unsafe extern "C" fn alloc_string(len: usize) -> NonNull<()> {
     let mem_layout = Layout::from_size_align(size, mem::align_of::<GcValue<()>>()).unwrap();
 
     // SAFETY: Must be ensured by caller.
-    let mut gc = unsafe { garbage_collector().lock().unwrap() };
+    let mut gc = GARBAGE_COLLECTOR.lock().unwrap();
 
     let ptr: NonNull<GcValue<()>> = gc
         .allocator

@@ -1,4 +1,6 @@
 #![feature(allocator_api)]
+#![feature(build_hasher_default_const_new)]
+#![feature(const_collections_with_hasher)]
 
 mod garbage_collector;
 
@@ -17,8 +19,6 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 pub extern "C" fn enable_log() {
     #[cfg(debug_assertions)]
     continuate_common::init_tracing(LevelFilter::DEBUG).expect("failed to instantiate logger");
-
-    garbage_collector::init_garbage_collector();
 
     #[cfg(debug_assertions)]
     debug!("runtime initialised");
