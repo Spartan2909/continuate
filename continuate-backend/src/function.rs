@@ -239,6 +239,7 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
         let stack_slot_data = StackSlotData {
             kind: StackSlotKind::ExplicitSlot,
             size: layout.size.try_into().unwrap(),
+            align_shift: 3,
         };
         let stack_slot = self.builder.create_sized_stack_slot(stack_slot_data);
 
@@ -305,6 +306,7 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
         let stack_slot_data = StackSlotData {
             kind: StackSlotKind::ExplicitSlot,
             size: size.try_into().unwrap(),
+            align_shift: 3,
         };
         let stack_slot = self.builder.create_sized_stack_slot(stack_slot_data);
 
