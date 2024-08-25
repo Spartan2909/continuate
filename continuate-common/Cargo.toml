@@ -7,7 +7,6 @@ rust-version.workspace = true
 
 [dependencies]
 bytemuck = "1.15.0"
-continuate-arena = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [lints]

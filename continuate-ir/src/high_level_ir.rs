@@ -1,3 +1,4 @@
+use crate::bimap::BiMap;
 use crate::common::BinaryOp;
 use crate::common::FuncRef;
 use crate::common::Ident;
@@ -7,26 +8,23 @@ use crate::common::TypeRef;
 use crate::common::UnaryOp;
 use crate::lib_std;
 use crate::lib_std::StdLib;
+use crate::HashMap;
+use crate::Vec;
 
-use std::collections::HashMap;
 use std::hash;
 
-use bimap::BiHashMap;
-
-use continuate_arena::Arena;
-use continuate_arena::ArenaRef;
-use continuate_arena::ArenaSafe;
+use bumpalo::Bump;
 
 use itertools::Itertools as _;
 
-#[derive(Debug, PartialEq, ArenaSafe)]
+#[derive(Debug, PartialEq)]
 pub enum Pattern<'arena> {
     Wildcard,
     Ident(Ident),
     Destructure {
         ty: TypeRef,
         variant: Option<usize>,
-        fields: Vec<Pattern<'arena>, ArenaRef<'arena>>,
+        fields: Vec<'arena, Pattern<'arena>>,
     },
 }
 
@@ -40,19 +38,19 @@ impl<'arena> Pattern<'arena> {
     }
 }
 
-#[derive(Debug, ArenaSafe)]
+#[derive(Debug)]
 pub enum Expr<'arena> {
     Literal(Literal),
     Ident(Ident),
     Function(FuncRef),
-    Block(Vec<Expr<'arena>, ArenaRef<'arena>>),
-    Tuple(Vec<Expr<'arena>, ArenaRef<'arena>>),
+    Block(Vec<'arena, Expr<'arena>>),
+    Tuple(Vec<'arena, Expr<'arena>>),
     Constructor {
         ty: TypeRef,
         index: Option<usize>,
-        fields: Vec<Expr<'arena>, ArenaRef<'arena>>,
+        fields: Vec<'arena, Expr<'arena>>,
     },
-    Array(Vec<Expr<'arena>, ArenaRef<'arena>>),
+    Array(Vec<'arena, Expr<'arena>>),
 
     Get {
         object: &'arena Expr<'arena>,
@@ -64,8 +62,8 @@ pub enum Expr<'arena> {
         value: &'arena Expr<'arena>,
     },
 
-    Call(&'arena Expr<'arena>, Vec<Expr<'arena>, ArenaRef<'arena>>),
-    ContApplication(&'arena Expr<'arena>, HashMap<Ident, Expr<'arena>>),
+    Call(&'arena Expr<'arena>, Vec<'arena, Expr<'arena>>),
+    ContApplication(&'arena Expr<'arena>, HashMap<'arena, Ident, Expr<'arena>>),
 
     Unary(UnaryOp, &'arena Expr<'arena>),
 
@@ -83,7 +81,7 @@ pub enum Expr<'arena> {
 
     Match {
         scrutinee: &'arena Expr<'arena>,
-        arms: Vec<(Pattern<'arena>, Expr<'arena>), ArenaRef<'arena>>,
+        arms: Vec<'arena, (Pattern<'arena>, Expr<'arena>)>,
     },
 
     Closure {
@@ -98,13 +96,13 @@ pub enum Expr<'arena> {
     Unreachable,
 }
 
-#[derive(Debug, PartialEq, Eq, ArenaSafe)]
-pub struct FunctionTy {
-    pub params: Vec<TypeRef>,
-    pub continuations: HashMap<Ident, TypeRef>,
+#[derive(Debug, PartialEq, Eq)]
+pub struct FunctionTy<'arena> {
+    pub params: Vec<'arena, TypeRef>,
+    pub continuations: HashMap<'arena, Ident, TypeRef>,
 }
 
-impl hash::Hash for FunctionTy {
+impl hash::Hash for FunctionTy<'_> {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
         self.params.hash(state);
         for (&name, &ty) in self
@@ -117,19 +115,22 @@ impl hash::Hash for FunctionTy {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, ArenaSafe)]
-pub enum Type {
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub enum Type<'arena> {
     Int,
     Float,
     String,
     Array(TypeRef, u64),
-    Tuple(Vec<TypeRef>),
-    Function(FunctionTy),
-    UserDefined(UserDefinedType),
+    Tuple(Vec<'arena, TypeRef>),
+    Function(FunctionTy<'arena>),
+    UserDefined(UserDefinedType<'arena>),
 }
 
-impl Type {
-    pub const fn function(params: Vec<TypeRef>, continuations: HashMap<Ident, TypeRef>) -> Type {
+impl<'arena> Type<'arena> {
+    pub const fn function(
+        params: Vec<'arena, TypeRef>,
+        continuations: HashMap<'arena, Ident, TypeRef>,
+    ) -> Type<'arena> {
         Type::Function(FunctionTy {
             params,
             continuations,
@@ -137,32 +138,32 @@ impl Type {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, ArenaSafe)]
-pub struct UserDefinedType {
-    pub constructor: TypeConstructor,
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct UserDefinedType<'arena> {
+    pub constructor: TypeConstructor<'arena>,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, ArenaSafe)]
-pub enum TypeConstructor {
-    Product(Vec<TypeRef>),
-    Sum(Vec<Vec<TypeRef>>),
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub enum TypeConstructor<'arena> {
+    Product(Vec<'arena, TypeRef>),
+    Sum(Vec<'arena, Vec<'arena, TypeRef>>),
 }
 
-#[derive(Debug, ArenaSafe)]
+#[derive(Debug)]
 pub struct Function<'arena> {
-    pub params: Vec<(Ident, TypeRef), ArenaRef<'arena>>,
-    pub continuations: HashMap<Ident, TypeRef>,
-    pub body: Vec<Expr<'arena>, ArenaRef<'arena>>,
-    pub captures: Vec<Ident, ArenaRef<'arena>>,
+    pub params: Vec<'arena, (Ident, TypeRef)>,
+    pub continuations: HashMap<'arena, Ident, TypeRef>,
+    pub body: Vec<'arena, Expr<'arena>>,
+    pub captures: Vec<'arena, Ident>,
     next_ident: u32,
     pub name: String,
 }
 
 impl<'arena> Function<'arena> {
-    pub fn new(name: String, arena: ArenaRef<'arena>) -> Function<'arena> {
+    pub fn new(name: String, arena: &'arena Bump) -> Function<'arena> {
         Function {
             params: Vec::new_in(arena),
-            continuations: HashMap::new(),
+            continuations: HashMap::new_in(arena),
             body: Vec::new_in(arena),
             captures: Vec::new_in(arena),
             next_ident: 0,
@@ -179,9 +180,9 @@ impl<'arena> Function<'arena> {
 
 #[derive(Debug)]
 pub struct Program<'arena> {
-    pub functions: HashMap<FuncRef, Function<'arena>>,
-    pub signatures: HashMap<FuncRef, TypeRef>,
-    pub types: BiHashMap<TypeRef, &'arena Type>,
+    pub functions: HashMap<'arena, FuncRef, Function<'arena>>,
+    pub signatures: HashMap<'arena, FuncRef, TypeRef>,
+    pub types: BiMap<'arena, TypeRef, &'arena Type<'arena>>,
     pub(crate) next_function: u32,
     pub(crate) next_ty: u64,
     lib_std: Option<StdLib>,
@@ -189,11 +190,11 @@ pub struct Program<'arena> {
 }
 
 impl<'arena> Program<'arena> {
-    pub fn new(name: String, arena: &'arena Arena<'arena>) -> Program<'arena> {
+    pub fn new(name: String, arena: &'arena Bump) -> Program<'arena> {
         let mut program = Program {
-            functions: HashMap::new(),
-            signatures: HashMap::new(),
-            types: BiHashMap::new(),
+            functions: HashMap::new_in(arena),
+            signatures: HashMap::new_in(arena),
+            types: BiMap::new(arena),
             next_function: 1,
             next_ty: 0,
             lib_std: None,
@@ -225,12 +226,12 @@ impl<'arena> Program<'arena> {
         ty_ref
     }
 
-    pub fn insert_type(&mut self, ty: Type, arena: &'arena Arena<'arena>) -> TypeRef {
+    pub fn insert_type(&mut self, ty: Type<'arena>, arena: &'arena Bump) -> TypeRef {
         if let Some(type_ref) = self.types.get_by_right(&ty) {
             *type_ref
         } else {
             let type_ref = self.ty();
-            self.types.insert(type_ref, arena.allocate(ty));
+            self.types.insert(type_ref, arena.alloc(ty));
             type_ref
         }
     }

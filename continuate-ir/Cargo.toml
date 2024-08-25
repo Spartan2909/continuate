@@ -6,10 +6,10 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-bimap = "0.6.3"
-continuate-arena = { workspace = true }
-continuate-error = { workspace = true }
-itertools = { workspace = true }
+bumpalo.workspace = true
+continuate-error.workspace = true
+hashbrown.workspace = true
+itertools.workspace = true
 
 [lints]
 workspace = true

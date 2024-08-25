@@ -5,7 +5,7 @@ use function::FunctionRuntime;
 use std::collections::HashMap;
 use std::mem;
 
-use continuate_arena::Arena;
+use bumpalo::Bump;
 
 use continuate_ir::common::FuncRef;
 use continuate_ir::common::Ident;
@@ -257,14 +257,14 @@ struct Compiler<'arena, 'a, M> {
     runtime: Runtime,
     functions: HashMap<FuncRef, (FuncId, Signature)>,
     ty_layouts: HashMap<TypeRef, (&'arena TyLayout<'arena>, DataId)>,
-    arena: &'arena Arena<'arena>,
+    arena: &'arena &'arena Bump,
 }
 
 impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
     fn new(
         program: Program<'a>,
         mut module: M,
-        arena: &'arena Arena<'arena>,
+        arena: &'arena &'arena Bump,
     ) -> Compiler<'arena, 'a, M> {
         let triple = module.isa().triple().clone();
         let runtime = Runtime::new(&mut module);
@@ -590,7 +590,7 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
 
         let global_id = self.declare_ty_layout_global(&layout);
         self.ty_layouts
-            .insert(ty_ref, (self.arena.allocate(layout), global_id));
+            .insert(ty_ref, (self.arena.alloc(layout), global_id));
     }
 
     fn calc_ty_layouts(&mut self) {
@@ -728,8 +728,9 @@ pub fn compile(program: Program, binary: bool) -> ObjectProduct {
 
     let module = ObjectModule::new(builder);
 
-    let arena = Arena::new();
-    let compiler = Compiler::new(program, module, &arena);
+    let arena = Bump::new();
+    let tmp = &arena;
+    let compiler = Compiler::new(program, module, &tmp);
     if binary {
         compiler.compile_binary()
     } else {

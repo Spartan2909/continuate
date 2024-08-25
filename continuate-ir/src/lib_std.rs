@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::common::FuncRef;
 use crate::common::Intrinsic;
 use crate::common::Literal;
@@ -10,8 +8,10 @@ use crate::high_level_ir::Program;
 use crate::high_level_ir::Type;
 use crate::high_level_ir::TypeConstructor;
 use crate::high_level_ir::UserDefinedType;
+use crate::HashMap;
+use crate::Vec;
 
-use continuate_arena::Arena;
+use bumpalo::Bump;
 
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
@@ -37,24 +37,27 @@ impl StdLib {
 
 pub(crate) fn standard_library<'arena>(
     program: &mut Program<'arena>,
-    arena: &'arena Arena<'arena>,
+    arena: &'arena Bump,
 ) -> StdLib {
+    let empty_vec = Vec::new_in(arena);
+    let mut variants = Vec::with_capacity_in(2, arena);
+    variants.extend([empty_vec.clone(), empty_vec]);
     let ty_bool = UserDefinedType {
-        constructor: TypeConstructor::Sum(vec![vec![], vec![]]),
+        constructor: TypeConstructor::Sum(variants),
     };
-    let ty_bool = arena.allocate(Type::UserDefined(ty_bool));
+    let ty_bool = arena.alloc(Type::UserDefined(ty_bool));
     let ty_bool_ref = program.ty();
     program.types.insert(ty_bool_ref, ty_bool);
 
-    let ty_int = arena.allocate(Type::Int);
+    let ty_int = arena.alloc(Type::Int);
     let ty_int_ref = program.ty();
     program.types.insert(ty_int_ref, ty_int);
 
-    let ty_float = arena.allocate(Type::Float);
+    let ty_float = arena.alloc(Type::Float);
     let ty_float_ref = program.ty();
     program.types.insert(ty_float_ref, ty_float);
 
-    let ty_string = arena.allocate(Type::String);
+    let ty_string = arena.alloc(Type::String);
     let ty_string_ref = program.ty();
     program.types.insert(ty_string_ref, ty_string);
 
@@ -63,13 +66,15 @@ pub(crate) fn standard_library<'arena>(
     fn_termination.params.push((param, ty_int_ref));
     fn_termination.body.push(Expr::Intrinsic {
         intrinsic: Intrinsic::Terminate,
-        value: arena.allocate(Expr::Ident(param)),
+        value: arena.alloc(Expr::Ident(param)),
     });
 
     let fn_termination_ref = program.function();
     program.functions.insert(fn_termination_ref, fn_termination);
 
-    let int_fn = Type::function(vec![ty_int_ref], HashMap::new());
+    let mut params = Vec::with_capacity_in(1, arena);
+    params.push(ty_int_ref);
+    let int_fn = Type::function(params, HashMap::new_in(arena));
     let int_fn_ref = program.insert_type(int_fn, arena);
 
     let mut fn_discriminant = Function::new("discriminant".to_string(), arena);
@@ -79,18 +84,18 @@ pub(crate) fn standard_library<'arena>(
     fn_discriminant.continuations.insert(cont, int_fn_ref);
     let intrinsic = Expr::Intrinsic {
         intrinsic: Intrinsic::Discriminant,
-        value: arena.allocate(Expr::Ident(param)),
+        value: arena.alloc(Expr::Ident(param)),
     };
     let discriminant = fn_discriminant.ident();
     let declare = Expr::Declare {
         ident: discriminant,
         ty: ty_int_ref,
-        expr: arena.allocate(intrinsic),
+        expr: arena.alloc(intrinsic),
     };
     fn_discriminant.body.push(declare);
     let mut args = Vec::with_capacity_in(1, arena);
     args.push(Expr::Ident(discriminant));
-    let cont_call = Expr::Call(arena.allocate(Expr::Ident(cont)), args);
+    let cont_call = Expr::Call(arena.alloc(Expr::Ident(cont)), args);
     fn_discriminant.body.push(cont_call);
 
     let fn_discriminant_ref = program.function();

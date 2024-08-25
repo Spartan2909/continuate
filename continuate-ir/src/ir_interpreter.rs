@@ -8,34 +8,36 @@ use crate::mid_level_ir::BlockId;
 use crate::mid_level_ir::Expr;
 use crate::mid_level_ir::Function;
 use crate::mid_level_ir::Program;
+use crate::HashMap;
+use crate::Vec;
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::iter;
 use std::mem;
 use std::ops;
 use std::rc::Rc;
 
-use continuate_arena::Arena;
-use continuate_arena::ArenaSafe;
+use bumpalo::Bump;
 
-#[derive(Debug, PartialEq, ArenaSafe)]
+#[derive(Debug, PartialEq)]
 pub enum Value<'arena> {
     Int(i64),
     Float(f64),
     String(String),
-    Array(RefCell<Vec<&'arena Value<'arena>>>),
-    Tuple(RefCell<Vec<&'arena Value<'arena>>>),
+    Array(RefCell<Vec<'arena, &'arena Value<'arena>>>),
+    Tuple(RefCell<Vec<'arena, &'arena Value<'arena>>>),
     Function(FuncRef),
-    ContinuedFunction(&'arena Value<'arena>, HashMap<Ident, &'arena Value<'arena>>),
+    ContinuedFunction(
+        &'arena Value<'arena>,
+        HashMap<'arena, Ident, &'arena Value<'arena>>,
+    ),
     Closure {
         func_ref: FuncRef,
         environment: SharedEnvironment<'arena>,
     },
     UserDefined {
         discriminant: Option<usize>,
-        fields: RefCell<Vec<&'arena Value<'arena>>>,
+        fields: RefCell<Vec<'arena, &'arena Value<'arena>>>,
     },
 }
 
@@ -94,7 +96,7 @@ impl<'arena> Value<'arena> {
 
     pub const fn as_user_defined(
         &self,
-    ) -> Option<(Option<usize>, &RefCell<Vec<ValueRef<'arena>>>)> {
+    ) -> Option<(Option<usize>, &RefCell<Vec<'arena, ValueRef<'arena>>>)> {
         if let Value::UserDefined {
             discriminant,
             ref fields,
@@ -109,7 +111,7 @@ impl<'arena> Value<'arena> {
     fn call(
         &self,
         params: Vec<ValueRef<'arena>>,
-        mut bound_params: HashMap<Ident, ValueRef<'arena>>,
+        mut bound_params: HashMap<'arena, Ident, ValueRef<'arena>>,
         executor: &mut Executor<'arena>,
     ) -> ControlFlow<Void> {
         match *self {
@@ -139,13 +141,17 @@ impl<'arena> Value<'arena> {
         }
     }
 
-    fn apply_continuations<I: IntoIterator<Item = (Ident, ValueRef<'arena>)>>(
-        &'arena self,
-        continuations: I,
-    ) -> Value<'arena> {
+    fn apply_continuations<I>(&'arena self, continuations: I, arena: &'arena Bump) -> Value<'arena>
+    where
+        I: IntoIterator<Item = (Ident, ValueRef<'arena>)>,
+        I::IntoIter: ExactSizeIterator,
+    {
         match self {
             Value::Function(_) | Value::Closure { .. } => {
-                Value::ContinuedFunction(self, continuations.into_iter().collect())
+                let iter = continuations.into_iter();
+                let mut new_continuations = HashMap::with_capacity_in(iter.len(), arena);
+                new_continuations.extend(iter);
+                Value::ContinuedFunction(self, new_continuations)
             }
             Value::ContinuedFunction(callee, existing_continuations) => {
                 let mut new_continuations = existing_continuations.clone();
@@ -156,15 +162,18 @@ impl<'arena> Value<'arena> {
         }
     }
 
-    pub const fn array(values: Vec<ValueRef<'arena>>) -> Value {
+    pub const fn array(values: Vec<'arena, ValueRef<'arena>>) -> Value<'arena> {
         Value::Array(RefCell::new(values))
     }
 
-    pub const fn tuple(values: Vec<ValueRef<'arena>>) -> Value {
+    pub const fn tuple(values: Vec<'arena, ValueRef<'arena>>) -> Value<'arena> {
         Value::Tuple(RefCell::new(values))
     }
 
-    pub const fn user_defined(discriminant: Option<usize>, fields: Vec<ValueRef<'arena>>) -> Value {
+    pub const fn user_defined(
+        discriminant: Option<usize>,
+        fields: Vec<'arena, ValueRef<'arena>>,
+    ) -> Value<'arena> {
         Value::UserDefined {
             discriminant,
             fields: RefCell::new(fields),
@@ -336,22 +345,22 @@ impl<T> ControlFlow<T> {
 }
 
 impl<'arena> ControlFlow<ValueRef<'arena>> {
-    fn value(value: Value<'arena>, arena: &'arena Arena<'arena>) -> ControlFlow<ValueRef<'arena>> {
-        ControlFlow::Value(arena.allocate(value))
+    fn value(value: Value<'arena>, arena: &'arena Bump) -> ControlFlow<ValueRef<'arena>> {
+        ControlFlow::Value(arena.alloc(value))
     }
 }
 
 #[derive(Debug, PartialEq)]
 pub struct Environment<'arena> {
     enclosing: Option<SharedEnvironment<'arena>>,
-    values: HashMap<Ident, ValueRef<'arena>>,
+    values: HashMap<'arena, Ident, ValueRef<'arena>>,
 }
 
 impl<'arena> Environment<'arena> {
-    fn new() -> Environment<'arena> {
+    fn new(arena: &'arena Bump) -> Environment<'arena> {
         Environment {
             enclosing: None,
-            values: HashMap::new(),
+            values: HashMap::new_in(arena),
         }
     }
 
@@ -372,23 +381,13 @@ impl<'arena> Environment<'arena> {
         }
     }
 
-    const fn from_map(map: HashMap<Ident, ValueRef<'arena>>) -> Environment<'arena> {
+    const fn from_map(map: HashMap<'arena, Ident, ValueRef<'arena>>) -> Environment<'arena> {
         Environment {
             enclosing: None,
             values: map,
         }
     }
 }
-
-// SAFETY: All of `Environment`'s fields are `ArenaSafe`, and `Environment` is not `Drop`.
-unsafe impl<'arena> ArenaSafe for Environment<'arena> {}
-
-const _: () = {
-    const fn assert_arena_safe<T: ArenaSafe>() {}
-
-    assert_arena_safe::<Option<SharedEnvironment>>();
-    assert_arena_safe::<HashMap<Ident, &Value>>();
-};
 
 type SharedEnvironment<'arena> = Rc<RefCell<Environment<'arena>>>;
 
@@ -397,7 +396,7 @@ enum Void {}
 
 struct Executor<'arena> {
     program: Program<'arena>,
-    arena: &'arena Arena<'arena>,
+    arena: &'arena Bump,
     environment: SharedEnvironment<'arena>,
     func_ref: FuncRef,
     b_true: ValueRef<'arena>,
@@ -405,29 +404,25 @@ struct Executor<'arena> {
 }
 
 impl<'arena> Executor<'arena> {
-    fn new(
-        program: Program<'arena>,
-        arena: &'arena Arena<'arena>,
-        func_ref: FuncRef,
-    ) -> Executor<'arena> {
+    fn new(program: Program<'arena>, arena: &'arena Bump, func_ref: FuncRef) -> Executor<'arena> {
         Executor {
             program,
             arena,
-            environment: Rc::new(RefCell::new(Environment::new())),
+            environment: Rc::new(RefCell::new(Environment::new(arena))),
             func_ref,
-            b_true: arena.allocate(Value::UserDefined {
+            b_true: arena.alloc(Value::UserDefined {
                 discriminant: Some(1),
-                fields: RefCell::new(vec![]),
+                fields: RefCell::new(Vec::new_in(arena)),
             }),
-            b_false: arena.allocate(Value::UserDefined {
+            b_false: arena.alloc(Value::UserDefined {
                 discriminant: Some(0),
-                fields: RefCell::new(vec![]),
+                fields: RefCell::new(Vec::new_in(arena)),
             }),
         }
     }
 
-    fn expr_list(&mut self, exprs: &[Expr<'arena>]) -> ControlFlow<Vec<ValueRef<'arena>>> {
-        let mut values = Vec::with_capacity(exprs.len());
+    fn expr_list(&mut self, exprs: &[Expr<'arena>]) -> ControlFlow<Vec<'arena, ValueRef<'arena>>> {
+        let mut values = Vec::with_capacity_in(exprs.len(), self.arena);
         for expr in exprs {
             values.push(value!(self.expr(expr)));
         }
@@ -437,15 +432,16 @@ impl<'arena> Executor<'arena> {
     fn cont_application(
         &mut self,
         func: &Expr<'arena>,
-        continuations: &HashMap<Ident, &Expr<'arena>>,
+        continuations: &HashMap<Ident, Expr<'arena>>,
     ) -> ControlFlow<ValueRef<'arena>> {
         let func = value!(self.expr(func));
-        let mut evaluated_continuations = HashMap::with_capacity(continuations.len());
-        for (&index, &continuation) in continuations {
+        let mut evaluated_continuations =
+            HashMap::with_capacity_in(continuations.len(), self.arena);
+        for (&index, continuation) in continuations {
             evaluated_continuations.insert(index, value!(self.expr(continuation)));
         }
         ControlFlow::value(
-            func.apply_continuations(evaluated_continuations),
+            func.apply_continuations(evaluated_continuations, self.arena),
             self.arena,
         )
     }
@@ -485,7 +481,7 @@ impl<'arena> Executor<'arena> {
                 _ => unreachable!(),
             };
 
-            self.arena.allocate(result.unwrap())
+            self.arena.alloc(result.unwrap())
         } else {
             let ord = left.partial_cmp(right);
             let cmp = match op {
@@ -509,7 +505,7 @@ impl<'arena> Executor<'arena> {
     }
 
     fn closure(&self, func_ref: FuncRef) -> ControlFlow<ValueRef<'arena>> {
-        let mut new_env = Environment::new();
+        let mut new_env = Environment::new(self.arena);
         new_env.enclosing = Some(Rc::clone(&self.environment));
         let old_env = mem::replace(&mut *self.environment.borrow_mut(), new_env);
         ControlFlow::value(
@@ -566,7 +562,9 @@ impl<'arena> Executor<'arena> {
             Expr::Call(callee, ref params) => {
                 let callee = value!(self.expr(callee));
                 let params = value!(self.expr_list(params));
-                callee.call(params, HashMap::new(), self).cast()
+                callee
+                    .call(params, HashMap::new_in(self.arena), self)
+                    .cast()
             }
             Expr::ContApplication(func, ref continuations) => {
                 self.cont_application(func, continuations)
@@ -635,7 +633,7 @@ impl<'arena> Executor<'arena> {
         &mut self,
         function: &Function<'arena>,
         func_ref: FuncRef,
-        params: HashMap<Ident, ValueRef<'arena>>,
+        params: HashMap<'arena, Ident, ValueRef<'arena>>,
         enclosing_environment: Option<SharedEnvironment<'arena>>,
     ) -> ControlFlow<Void> {
         self.func_ref = func_ref;
@@ -645,12 +643,12 @@ impl<'arena> Executor<'arena> {
         env.enclosing = enclosing_environment;
         for (&declaration, (_, initialiser)) in &function.declarations {
             let value = initialiser.clone().map_or(Value::Int(0), Into::into);
-            env.values.insert(declaration, self.arena.allocate(value));
+            env.values.insert(declaration, self.arena.alloc(value));
         }
         drop(env);
         let mut block = function.blocks.get(&Function::entry_point()).unwrap();
         loop {
-            for &expr in &block.exprs {
+            for expr in &block.exprs {
                 match self.expr(expr) {
                     ControlFlow::Goto(block_id) => block = function.blocks.get(&block_id).unwrap(),
                     ctrl => return ctrl.try_cast().unwrap(),
@@ -668,18 +666,15 @@ impl<'arena> Executor<'arena> {
         let termination_param = *entry_point.continuations.keys().next().unwrap();
         let termination_fn = self
             .arena
-            .allocate(Value::Function(self.program.lib_std.fn_termination));
-        self.function(
-            entry_point,
-            self.program.entry_point(),
-            iter::once((termination_param, termination_fn)).collect(),
-            None,
-        )
-        .unwrap_termination()
+            .alloc(Value::Function(self.program.lib_std.fn_termination));
+        let mut params = HashMap::with_capacity_in(1, self.arena);
+        params.insert(termination_param, &*termination_fn);
+        self.function(entry_point, self.program.entry_point(), params, None)
+            .unwrap_termination()
     }
 }
 
-pub fn run<'arena>(program: Program<'arena>, arena: &'arena Arena<'arena>) -> i64 {
+pub fn run<'arena>(program: Program<'arena>, arena: &'arena Bump) -> i64 {
     let func_ref = program.entry_point();
     Executor::new(program, arena, func_ref).run()
 }

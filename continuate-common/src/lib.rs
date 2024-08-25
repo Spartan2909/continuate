@@ -14,15 +14,12 @@ use std::slice;
 
 use bytemuck::Pod;
 
-use continuate_arena::ArenaSafeCopy;
-
 use tracing_subscriber::filter::LevelFilter;
 
 /// An FFI-safe slice.
 ///
 /// The layout of this type is a non-null pointer followed by a `usize`.
 #[repr(C)]
-#[derive(ArenaSafeCopy)]
 pub struct Slice<'a, T> {
     ptr: NonNull<T>,
     len: usize,
@@ -173,7 +170,7 @@ unsafe impl<'a, T> Sync for Slice<'a, T> where &'a [T]: Sync {}
 
 /// The layout of a primitive type, a product type, or a single variant of a sum type.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ArenaSafeCopy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SingleLayout<'a> {
     pub size: u64,
     pub align: u64,
@@ -195,7 +192,7 @@ impl<'a> SingleLayout<'a> {
 
 /// The layout of a type.
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ArenaSafeCopy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TyLayout<'a> {
     Single(SingleLayout<'a>) = 0,
     Sum {

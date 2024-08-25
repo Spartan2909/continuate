@@ -2,12 +2,9 @@ use std::cmp;
 use std::fmt;
 use std::hash;
 
-use continuate_arena::ArenaSafeCopy;
-use continuate_arena::ArenaSafeStatic;
-
 use continuate_error::Span;
 
-#[derive(Clone, Copy, ArenaSafeCopy)]
+#[derive(Clone, Copy)]
 pub struct Ident(pub(crate) u32, Span);
 
 impl Ident {
@@ -55,7 +52,7 @@ impl fmt::Debug for Ident {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, ArenaSafeCopy)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FuncRef(pub(crate) u32);
 
 impl From<FuncRef> for u32 {
@@ -71,7 +68,7 @@ impl fmt::Debug for FuncRef {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, ArenaSafeCopy)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TypeRef(pub(crate) u64);
 
 impl fmt::Debug for TypeRef {
@@ -81,20 +78,20 @@ impl fmt::Debug for TypeRef {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, ArenaSafeStatic)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
     Int(i64),
     Float(f64),
     String(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ArenaSafeCopy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
     Not,
     Neg,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ArenaSafeCopy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -116,7 +113,7 @@ impl BinaryOp {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ArenaSafeCopy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Intrinsic {
     Discriminant,
     Terminate,

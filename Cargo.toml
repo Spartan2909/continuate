@@ -6,21 +6,19 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-continuate-arena = { version = "0.1.0", path = "./continuate-arena" }
+bumpalo.workspace = true
 continuate-backend = { version = "0.1.0", path = "./continuate-backend" }
-continuate-common = { workspace = true }
+continuate-common.workspace = true
 continuate-frontend = { version = "0.1.0", path = "./continuate-frontend" }
 continuate-ir = { version = "0.1.0", path = "./continuate-ir" }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
 
 [workspace]
 members = [
-    "continuate-arena",
-    "continuate-arena-macros",
     "continuate-backend",
     "continuate-common",
     "continuate-error",
@@ -36,14 +34,17 @@ license = "MIT OR Apache-2.0"
 rust-version = "1.79"
 
 [workspace.dependencies]
+bumpalo = { version = "3.16.0", features = ["allocator_api"] }
 chumsky = { version = "1.0.0-alpha.7", features = ["label", "nightly"] }
-continuate-arena = { version = "0.1.0", path = "./continuate-arena" }
-continuate-arena-macros = { version = "0.1.0", path = "./continuate-arena-macros" }
 continate-backend = { version = "0.1.0", path = "./continuate-backend" }
 continuate-common = { version = "0.1.0", path = "./continuate-common" }
 continuate-error = { version = "0.1.0", path = "./continuate-error" }
 continuate-frontend = { version = "0.1.0", path = "./continuate-frontend" }
 continuate-ir = { version = "0.1.0", path = "./continuate-ir" }
+hashbrown = { version = "0.14.5", default-features = false, features = [
+    "inline-more",
+    "nightly",
+] }
 itertools = "0.13.0"
 tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
@@ -79,7 +80,7 @@ multiple_unsafe_ops_per_block = "deny"
 must_use_candidate = "allow"
 option_if_let_else = "allow"
 redundant_pub_crate = "allow"
-semicolon_inside_block = "warn" # Confusing name: semicolons *should* be inside the block.
+semicolon_inside_block = "warn"        # Confusing name: semicolons *should* be inside the block.
 todo = "warn"
 undocumented_unsafe_blocks = "deny"
 use_self = "allow"

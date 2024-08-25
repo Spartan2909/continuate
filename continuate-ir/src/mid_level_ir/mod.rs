@@ -1,6 +1,8 @@
 mod lowering;
 pub use lowering::lower;
 
+use crate::bimap::BiMap;
+use crate::collect_into;
 use crate::common::BinaryOp;
 use crate::common::FuncRef;
 use crate::common::Ident;
@@ -10,39 +12,36 @@ use crate::common::TypeRef;
 use crate::common::UnaryOp;
 use crate::high_level_ir::Program as HirProgram;
 use crate::lib_std::StdLib;
+use crate::try_collect_into;
+use crate::HashMap;
+use crate::Vec;
 
-use std::collections::HashMap;
 use std::fmt;
 use std::hash;
 
-use bimap::BiHashMap;
-
-use continuate_arena::Arena;
-use continuate_arena::ArenaRef;
-use continuate_arena::ArenaSafe;
-use continuate_arena::ArenaSafeCopy;
-
 use continuate_error::Error;
+
+use bumpalo::Bump;
 
 use itertools::Itertools as _;
 
-#[derive(Debug, ArenaSafe)]
+#[derive(Debug)]
 pub enum Expr<'arena> {
     Literal(Literal),
     Ident(Ident),
     Function(FuncRef),
     Tuple {
         ty: TypeRef,
-        values: Vec<Expr<'arena>, ArenaRef<'arena>>,
+        values: Vec<'arena, Expr<'arena>>,
     },
     Constructor {
         ty: TypeRef,
         index: Option<usize>,
-        fields: Vec<Expr<'arena>, ArenaRef<'arena>>,
+        fields: Vec<'arena, Expr<'arena>>,
     },
     Array {
         ty: TypeRef,
-        values: Vec<Expr<'arena>, ArenaRef<'arena>>,
+        values: Vec<'arena, Expr<'arena>>,
         value_ty: TypeRef,
     },
 
@@ -60,8 +59,8 @@ pub enum Expr<'arena> {
         value: &'arena Expr<'arena>,
     },
 
-    Call(&'arena Expr<'arena>, Vec<Expr<'arena>, ArenaRef<'arena>>),
-    ContApplication(&'arena Expr<'arena>, HashMap<Ident, &'arena Expr<'arena>>),
+    Call(&'arena Expr<'arena>, Vec<'arena, Expr<'arena>>),
+    ContApplication(&'arena Expr<'arena>, HashMap<'arena, Ident, Expr<'arena>>),
 
     Unary {
         operator: UnaryOp,
@@ -84,14 +83,14 @@ pub enum Expr<'arena> {
 
     Switch {
         scrutinee: &'arena Expr<'arena>,
-        arms: HashMap<i64, BlockId>,
+        arms: HashMap<'arena, i64, BlockId>,
         otherwise: BlockId,
     },
     Goto(BlockId),
 
     Closure {
         func_ref: FuncRef,
-        captures: HashMap<Ident, TypeRef>,
+        captures: HashMap<'arena, Ident, TypeRef>,
     },
 
     Intrinsic {
@@ -103,13 +102,13 @@ pub enum Expr<'arena> {
     Unreachable,
 }
 
-#[derive(Debug, PartialEq, Eq, ArenaSafe)]
-pub struct FunctionTy {
-    pub params: Vec<TypeRef>,
-    pub continuations: HashMap<Ident, TypeRef>,
+#[derive(Debug, PartialEq, Eq)]
+pub struct FunctionTy<'arena> {
+    pub params: Vec<'arena, TypeRef>,
+    pub continuations: HashMap<'arena, Ident, TypeRef>,
 }
 
-impl hash::Hash for FunctionTy {
+impl hash::Hash for FunctionTy<'_> {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
         self.params.hash(state);
         for (&name, &ty) in self
@@ -122,21 +121,24 @@ impl hash::Hash for FunctionTy {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, ArenaSafe)]
-pub enum Type {
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub enum Type<'arena> {
     Int,
     Float,
     String,
     Array(TypeRef, u64),
-    Tuple(Vec<TypeRef>),
-    Function(FunctionTy),
-    UserDefined(UserDefinedType),
+    Tuple(Vec<'arena, TypeRef>),
+    Function(FunctionTy<'arena>),
+    UserDefined(UserDefinedType<'arena>),
     Unknown,
     None,
 }
 
-impl Type {
-    pub const fn function(params: Vec<TypeRef>, continuations: HashMap<Ident, TypeRef>) -> Type {
+impl<'arena> Type<'arena> {
+    pub const fn function(
+        params: Vec<'arena, TypeRef>,
+        continuations: HashMap<'arena, Ident, TypeRef>,
+    ) -> Type<'arena> {
         Type::Function(FunctionTy {
             params,
             continuations,
@@ -160,12 +162,12 @@ impl Type {
     }
 
     /// Ensure that `self` fits in `other`.
-    pub(crate) fn unify<'arena>(
+    pub(crate) fn unify(
         &'arena self,
         other: &'arena Type,
         program: &mut Program<'arena>,
-        arena: &'arena Arena<'arena>,
-    ) -> Result<&'arena Type, Error> {
+        arena: &'arena Bump,
+    ) -> Result<&'arena Type<'arena>, Error> {
         if self == other {
             return Ok(self);
         }
@@ -183,16 +185,17 @@ impl Type {
                     .1)
             }
             (Type::Tuple(t1), Type::Tuple(t2)) if t1.len() == t2.len() => {
-                let types: Result<_, _> = t1
-                    .iter()
-                    .zip(t2.iter())
-                    .map(|(ty_1, ty_2)| -> Result<TypeRef, Error> {
-                        let ty_1 = *program.types.get_by_left(ty_1).unwrap();
-                        let ty_2 = *program.types.get_by_left(ty_2).unwrap();
-                        let ty = ty_1.unify(ty_2, program, arena)?;
-                        Ok(*program.types.get_by_right(ty).unwrap())
-                    })
-                    .collect();
+                let types: Result<_, _> = try_collect_into(
+                    t1.iter()
+                        .zip(t2.iter())
+                        .map(|(ty_1, ty_2)| -> Result<TypeRef, Error> {
+                            let ty_1 = *program.types.get_by_left(ty_1).unwrap();
+                            let ty_2 = *program.types.get_by_left(ty_2).unwrap();
+                            let ty = ty_1.unify(ty_2, program, arena)?;
+                            Ok(*program.types.get_by_right(ty).unwrap())
+                        }),
+                    Vec::new_in(arena),
+                );
                 Ok(program.insert_type(Type::Tuple(types?), arena).1)
             }
             (
@@ -205,36 +208,39 @@ impl Type {
                     continuations: continuations_2,
                 }),
             ) if params_1.len() == params_2.len() => {
-                let params: Result<_, _> = params_1
-                    .iter()
-                    .zip(params_2.iter())
-                    .map(|(ty_1, ty_2)| -> Result<TypeRef, Error> {
-                        let ty_1 = *program.types.get_by_left(ty_1).unwrap();
-                        let ty_2 = *program.types.get_by_left(ty_2).unwrap();
-                        let ty = ty_1.unify(ty_2, program, arena)?;
-                        Ok(*program.types.get_by_right(ty).unwrap())
-                    })
-                    .collect();
+                let params: Result<_, _> = try_collect_into(
+                    params_1.iter().zip(params_2.iter()).map(
+                        |(ty_1, ty_2)| -> Result<TypeRef, Error> {
+                            let ty_1 = *program.types.get_by_left(ty_1).unwrap();
+                            let ty_2 = *program.types.get_by_left(ty_2).unwrap();
+                            let ty = ty_1.unify(ty_2, program, arena)?;
+                            Ok(*program.types.get_by_right(ty).unwrap())
+                        },
+                    ),
+                    Vec::new_in(arena),
+                );
 
-                let continuations: Result<_, Error> = continuations_1
-                    .iter()
-                    .sorted_unstable_by_key(|(ident, _)| ident.0)
-                    .zip(
-                        continuations_2
-                            .iter()
-                            .sorted_unstable_by_key(|(ident, _)| ident.0),
-                    )
-                    .map(|((&ident_1, ty_1), (&ident_2, ty_2))| {
-                        if ident_1 != ident_2 {
-                            Err("mismatched continuation")?;
-                        }
+                let continuations: Result<_, Error> = try_collect_into(
+                    continuations_1
+                        .iter()
+                        .sorted_unstable_by_key(|(ident, _)| ident.0)
+                        .zip(
+                            continuations_2
+                                .iter()
+                                .sorted_unstable_by_key(|(ident, _)| ident.0),
+                        )
+                        .map(|((&ident_1, ty_1), (&ident_2, ty_2))| {
+                            if ident_1 != ident_2 {
+                                Err("mismatched continuation")?;
+                            }
 
-                        let ty_1 = *program.types.get_by_left(ty_1).unwrap();
-                        let ty_2 = *program.types.get_by_left(ty_2).unwrap();
-                        let ty = ty_1.unify(ty_2, program, arena)?;
-                        Ok((ident_1, *program.types.get_by_right(ty).unwrap()))
-                    })
-                    .collect();
+                            let ty_1 = *program.types.get_by_left(ty_1).unwrap();
+                            let ty_2 = *program.types.get_by_left(ty_2).unwrap();
+                            let ty = ty_1.unify(ty_2, program, arena)?;
+                            Ok((ident_1, *program.types.get_by_right(ty).unwrap()))
+                        }),
+                    HashMap::new_in(arena),
+                );
 
                 let ty = Type::function(params?, continuations?);
                 Ok(program.insert_type(ty, arena).1)
@@ -262,19 +268,19 @@ impl Type {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, ArenaSafe)]
-pub struct UserDefinedType {
-    pub constructor: TypeConstructor,
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct UserDefinedType<'arena> {
+    pub constructor: TypeConstructor<'arena>,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, ArenaSafe)]
-pub enum TypeConstructor {
-    Product(Vec<TypeRef>),
-    Sum(Vec<Vec<TypeRef>>),
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub enum TypeConstructor<'arena> {
+    Product(Vec<'arena, TypeRef>),
+    Sum(Vec<'arena, Vec<'arena, TypeRef>>),
 }
 
-impl TypeConstructor {
-    pub const fn as_sum(&self) -> Option<&Vec<Vec<TypeRef>>> {
+impl<'arena> TypeConstructor<'arena> {
+    pub const fn as_sum(&self) -> Option<&Vec<'arena, Vec<'arena, TypeRef>>> {
         if let TypeConstructor::Sum(variants) = self {
             Some(variants)
         } else {
@@ -283,7 +289,7 @@ impl TypeConstructor {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ArenaSafeCopy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BlockId(pub(crate) u64);
 
 impl fmt::Debug for BlockId {
@@ -292,37 +298,39 @@ impl fmt::Debug for BlockId {
     }
 }
 
-#[derive(Debug, Default, ArenaSafe)]
+#[derive(Debug)]
 pub struct Block<'arena> {
-    pub exprs: Vec<&'arena Expr<'arena>>,
+    pub exprs: Vec<'arena, Expr<'arena>>,
 }
 
 impl<'arena> Block<'arena> {
-    pub const fn new() -> Block<'arena> {
-        Block { exprs: vec![] }
+    pub const fn new(arena: &'arena Bump) -> Block<'arena> {
+        Block {
+            exprs: Vec::new_in(arena),
+        }
     }
 }
 
-#[derive(Debug, ArenaSafe)]
+#[derive(Debug)]
 pub struct Function<'arena> {
-    pub params: Vec<(Ident, TypeRef), ArenaRef<'arena>>,
-    pub continuations: HashMap<Ident, TypeRef>,
-    pub declarations: HashMap<Ident, (TypeRef, Option<Literal>)>,
-    pub blocks: HashMap<BlockId, Block<'arena>>,
-    pub captures: HashMap<Ident, TypeRef>,
+    pub params: Vec<'arena, (Ident, TypeRef)>,
+    pub continuations: HashMap<'arena, Ident, TypeRef>,
+    pub declarations: HashMap<'arena, Ident, (TypeRef, Option<Literal>)>,
+    pub blocks: HashMap<'arena, BlockId, Block<'arena>>,
+    pub captures: HashMap<'arena, Ident, TypeRef>,
     next_ident: u32,
     next_block: u64,
     pub name: String,
 }
 
 impl<'arena> Function<'arena> {
-    pub fn new(name: String, arena: ArenaRef<'arena>) -> Function<'arena> {
+    pub fn new(name: String, arena: &'arena Bump) -> Function<'arena> {
         Function {
             params: Vec::new_in(arena),
-            continuations: HashMap::new(),
-            declarations: HashMap::new(),
-            blocks: HashMap::new(),
-            captures: HashMap::new(),
+            continuations: HashMap::new_in(arena),
+            declarations: HashMap::new_in(arena),
+            blocks: HashMap::new_in(arena),
+            captures: HashMap::new_in(arena),
             next_ident: 0,
             next_block: 1,
             name,
@@ -348,9 +356,9 @@ impl<'arena> Function<'arena> {
             .copied()
     }
 
-    pub fn ty(&self) -> FunctionTy {
+    pub fn ty(&self, arena: &'arena Bump) -> FunctionTy {
         FunctionTy {
-            params: self.params.iter().map(|&(_, ty)| ty).collect(),
+            params: collect_into(self.params.iter().map(|&(_, ty)| ty), Vec::new_in(arena)),
             continuations: self.continuations.clone(),
         }
     }
@@ -368,9 +376,9 @@ impl<'arena> Function<'arena> {
 
 #[derive(Debug)]
 pub struct Program<'arena> {
-    pub functions: HashMap<FuncRef, &'arena Function<'arena>>,
-    pub signatures: HashMap<FuncRef, TypeRef>,
-    pub types: BiHashMap<TypeRef, &'arena Type>,
+    pub functions: HashMap<'arena, FuncRef, &'arena Function<'arena>>,
+    pub signatures: HashMap<'arena, FuncRef, TypeRef>,
+    pub types: BiMap<'arena, TypeRef, &'arena Type<'arena>>,
     pub lib_std: StdLib,
     next_function: u32,
     next_ty: u64,
@@ -378,11 +386,11 @@ pub struct Program<'arena> {
 }
 
 impl<'arena> Program<'arena> {
-    pub fn new(program: &HirProgram) -> Program<'arena> {
+    pub fn new(program: &HirProgram, arena: &'arena Bump) -> Program<'arena> {
         Program {
-            functions: HashMap::new(),
-            signatures: HashMap::new(),
-            types: BiHashMap::new(),
+            functions: HashMap::new_in(arena),
+            signatures: HashMap::new_in(arena),
+            types: BiMap::new(arena),
             lib_std: *program.lib_std(),
             next_function: program.next_function,
             next_ty: program.next_ty,
@@ -410,15 +418,15 @@ impl<'arena> Program<'arena> {
     #[allow(clippy::missing_panics_doc)] // Cannot panic
     pub fn insert_type(
         &mut self,
-        ty: Type,
-        arena: &'arena Arena<'arena>,
-    ) -> (TypeRef, &'arena Type) {
+        ty: Type<'arena>,
+        arena: &'arena Bump,
+    ) -> (TypeRef, &'arena Type<'arena>) {
         if let Some(type_ref) = self.types.get_by_right(&ty) {
             let ty = *self.types.get_by_left(type_ref).unwrap();
             (*type_ref, ty)
         } else {
             let type_ref = self.ty();
-            let ty = arena.allocate(ty);
+            let ty = arena.alloc(ty);
             self.types.insert(type_ref, ty);
             (type_ref, ty)
         }

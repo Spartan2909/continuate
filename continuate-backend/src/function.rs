@@ -23,6 +23,7 @@ use continuate_ir::mid_level_ir::Program;
 use continuate_ir::mid_level_ir::Type as MirType;
 use continuate_ir::mid_level_ir::TypeConstructor;
 use continuate_ir::mid_level_ir::UserDefinedType;
+// use continuate_ir::HashMap;
 
 use continuate_common::SingleLayout;
 use continuate_common::TyLayout;
@@ -406,15 +407,15 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
         Some(value)
     }
 
-    fn simple_callee<'a, 'b>(
-        callee: &'b Expr<'a>,
-    ) -> Result<(Callable, HashMap<Ident, &'a Expr<'a>>), &'b Expr<'a>> {
+    fn simple_callee<'a>(
+        callee: &'a Expr<'a>,
+    ) -> Result<(Callable, HashMap<Ident, &'a Expr<'a>>), &'a Expr<'a>> {
         match *callee {
             Expr::Ident(ident) => Ok((Callable::Variable(ident), HashMap::new())),
             Expr::Function(func_ref) => Ok((Callable::FuncRef(func_ref), HashMap::new())),
             Expr::ContApplication(callee, ref continuations) => {
                 let (callable, mut new_continuations) = Self::simple_callee(callee)?;
-                new_continuations.extend(continuations);
+                new_continuations.extend(continuations.iter().map(|(&ident, expr)| (ident, expr)));
                 Ok((callable, new_continuations))
             }
             _ => Err(callee),
@@ -597,15 +598,13 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
         Some(value)
     }
 
-    fn expr_switch(
-        &mut self,
-        scrutinee: &Expr,
-        arms: &HashMap<i64, BlockId>,
-        otherwise: BlockId,
-    ) -> Option<Value> {
+    fn expr_switch<I>(&mut self, scrutinee: &Expr, arms: I, otherwise: BlockId) -> Option<Value>
+    where
+        I: IntoIterator<Item = (i64, BlockId)>,
+    {
         let scrutinee = self.expr(scrutinee)?;
         let mut switch = Switch::new();
-        for (&val, &block_id) in arms {
+        for (val, block_id) in arms {
             switch.set_entry(val as u128, self.block_map[&block_id]);
         }
         switch.emit(self.builder, scrutinee, self.block_map[&otherwise]);
@@ -706,7 +705,12 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
                 scrutinee,
                 ref arms,
                 otherwise,
-            } => self.expr_switch(scrutinee, arms, otherwise),
+            } => self.expr_switch(
+                scrutinee,
+                arms.iter()
+                    .map(|(&discriminant, &block)| (discriminant, block)),
+                otherwise,
+            ),
             Expr::Goto(block_id) => self.expr_goto(block_id),
             Expr::Closure { .. } => todo!(),
             Expr::Intrinsic {
@@ -759,7 +763,7 @@ impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function,
         for (&block_id, block) in &self.mir_function.blocks {
             self.builder.switch_to_block(self.block_map[&block_id]);
 
-            for &expr in &block.exprs {
+            for expr in &block.exprs {
                 self.expr(expr);
             }
         }
