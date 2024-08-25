@@ -57,7 +57,6 @@ use itertools::Itertools as _;
 use tracing::info;
 use tracing::warn;
 
-use target_lexicon::CallingConvention;
 use target_lexicon::Endianness;
 use target_lexicon::PointerWidth;
 use target_lexicon::Triple;
