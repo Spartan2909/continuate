@@ -181,7 +181,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let user_defined = *self.program.types.get_by_left(&ty).unwrap();
         let user_defined = user_defined
             .as_user_defined()
-            .ok_or(format!("cannot construct {user_defined:?}"))?;
+            .ok_or_else(|| format!("cannot construct {user_defined:?}"))?;
         let ty_fields = match (&user_defined.constructor, index) {
             (TypeConstructor::Product(ty_fields), None) => ty_fields,
             (TypeConstructor::Sum(variants), Some(index)) => &variants[index],
@@ -248,7 +248,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let user_defined = *self.program.types.get_by_left(&object_ty).unwrap();
         let user_defined = user_defined
             .as_user_defined()
-            .ok_or(format!("cannot access field of {user_defined:?}"))?;
+            .ok_or_else(|| format!("cannot access field of {user_defined:?}"))?;
         let TypeConstructor::Product(ty_fields) = &user_defined.constructor else {
             return Err("cannot access field of sum".into());
         };
@@ -303,7 +303,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let callee_ty = *self.program.types.get_by_left(&callee_ty).unwrap();
         let callee_ty = callee_ty
             .as_function()
-            .ok_or(format!("cannot call {callee_ty:?}"))?;
+            .ok_or_else(|| format!("cannot call {callee_ty:?}"))?;
 
         if !callee_ty.continuations.is_empty() {
             Err("cannot call function with outstanding continuations")?;
@@ -337,7 +337,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let callee_ty = *self.program.types.get_by_left(&callee_ty).unwrap();
         let callee_ty = callee_ty
             .as_function()
-            .ok_or(format!("cannot apply continuations to {callee_ty:?}"))?;
+            .ok_or_else(|| format!("cannot apply continuations to {callee_ty:?}"))?;
 
         let mut outstanding_continuations = callee_ty.continuations.clone();
         let mut new_continuations = HashMap::with_capacity_in(continuations.len(), self.arena);
