@@ -283,12 +283,7 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
 
     #[tracing::instrument(skip(self))]
     fn c_int_ty(&self) -> Type {
-        if self.triple.default_calling_convention() == Ok(CallingConvention::AppleAarch64) {
-            warn!("Apple ARM support is potentially incomplete");
-            types::I32
-        } else {
-            Type::int(self.triple.data_model().unwrap().int_size().bits().into()).unwrap()
-        }
+        Type::int(self.triple.data_model().unwrap().int_size().bits().into()).unwrap()
     }
 
     #[tracing::instrument(skip_all)]
