@@ -309,37 +309,18 @@ impl<T> ControlFlow<T> {
     where
         T: Into<U>,
     {
-        if let ControlFlow::Value(value) = self {
-            ControlFlow::Value(value.into())
-        } else {
-            // SAFETY: `self` is not `ControlFlow::Value`.
-            unsafe { self.cast_unchecked() }
+        match self {
+            ControlFlow::Goto(id) => ControlFlow::Goto(id),
+            ControlFlow::Terminate(n) => ControlFlow::Terminate(n),
+            ControlFlow::Value(value) => ControlFlow::Value(value.into()),
         }
     }
 
     fn try_cast<U>(self) -> Option<ControlFlow<U>> {
-        if matches!(self, ControlFlow::Value(_)) {
-            None
-        } else {
-            // SAFETY: `self` is not `ControlFlow::Value`.
-            let ctrl = unsafe { self.cast_unchecked() };
-            Some(ctrl)
-        }
-    }
-
-    /// ## Safety
-    ///
-    /// If `self` is `ControlFlow::Value`, it must be valid to reinterpret values of `T` as `U`.
-    unsafe fn cast_unchecked<U>(self) -> ControlFlow<U> {
         match self {
-            ControlFlow::Goto(id) => ControlFlow::Goto(id),
-            ControlFlow::Terminate(n) => ControlFlow::Terminate(n),
-            ControlFlow::Value(value) => {
-                // SAFETY: Must be ensured by caller.
-                let output_value = unsafe { mem::transmute_copy(&value) };
-                mem::forget(value);
-                ControlFlow::Value(output_value)
-            }
+            ControlFlow::Goto(id) => Some(ControlFlow::Goto(id)),
+            ControlFlow::Terminate(n) => Some(ControlFlow::Terminate(n)),
+            ControlFlow::Value(_) => None,
         }
     }
 }

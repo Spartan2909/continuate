@@ -27,14 +27,16 @@ use strum::EnumDiscriminants;
 pub struct SourceId(NonZeroU32);
 
 impl SourceId {
-    const DUMMY: SourceId = {
-        // SAFETY: 1 is not 0.
-        unsafe { SourceId(NonZeroU32::new_unchecked(1)) }
+    const DUMMY: SourceId = if let Some(id) = NonZeroU32::new(1) {
+        SourceId(id)
+    } else {
+        unreachable!()
     };
 
-    const START: SourceId = {
-        // SAFETY: 2 is not 0.
-        unsafe { SourceId(NonZeroU32::new_unchecked(2)) }
+    const START: SourceId = if let Some(id) = NonZeroU32::new(2) {
+        SourceId(id)
+    } else {
+        unreachable!()
     };
 
     fn next(&mut self) -> SourceId {
