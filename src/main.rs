@@ -119,6 +119,12 @@ fn main() {
     let main_fn_ref = program.entry_point();
     program.functions.insert(main_fn_ref, main_fn);
 
+    let mut main_fn_continuations = HashMap::with_capacity_in(1, &hir_arena);
+    main_fn_continuations.insert(termination_cont, int_fn_ref);
+    let main_fn_ty = Type::function(Vec::new_in(&hir_arena), main_fn_continuations);
+    let main_fn_ty = program.insert_type(main_fn_ty, &hir_arena);
+    program.signatures.insert(main_fn_ref, main_fn_ty);
+
     let mir_arena = Bump::new();
 
     let mir_program = mid_level_ir::lower(&program, &mir_arena).unwrap();

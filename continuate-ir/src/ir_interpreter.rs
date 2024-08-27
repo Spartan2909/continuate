@@ -540,9 +540,13 @@ impl<'arena> Executor<'arena> {
                 object.set(field, value);
                 ControlFlow::Value(value)
             }
-            Expr::Call(callee, ref params) => {
+            Expr::Call {
+                callee,
+                callee_ty: _,
+                ref args,
+            } => {
                 let callee = value!(self.expr(callee));
-                let params = value!(self.expr_list(params));
+                let params = value!(self.expr_list(args));
                 callee
                     .call(params, HashMap::new_in(self.arena), self)
                     .cast()

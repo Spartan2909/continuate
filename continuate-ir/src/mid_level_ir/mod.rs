@@ -59,7 +59,11 @@ pub enum Expr<'arena> {
         value: &'arena Expr<'arena>,
     },
 
-    Call(&'arena Expr<'arena>, Vec<'arena, Expr<'arena>>),
+    Call {
+        callee: &'arena Expr<'arena>,
+        callee_ty: &'arena FunctionTy<'arena>,
+        args: Vec<'arena, Expr<'arena>>,
+    },
     ContApplication(&'arena Expr<'arena>, HashMap<'arena, Ident, Expr<'arena>>),
 
     Unary {

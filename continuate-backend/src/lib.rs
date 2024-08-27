@@ -8,9 +8,7 @@ use std::mem;
 use bumpalo::Bump;
 
 use continuate_ir::common::FuncRef;
-use continuate_ir::common::Ident;
 use continuate_ir::common::TypeRef;
-use continuate_ir::lib_std::StdLib;
 use continuate_ir::mid_level_ir::Function as MirFunction;
 use continuate_ir::mid_level_ir::FunctionTy;
 use continuate_ir::mid_level_ir::Program;
@@ -22,6 +20,7 @@ use continuate_common::SingleLayout;
 use continuate_common::Slice;
 use continuate_common::TyLayout;
 
+use cranelift::codegen::ir::entities::Value;
 use cranelift::codegen::ir::types;
 use cranelift::codegen::ir::AbiParam;
 use cranelift::codegen::ir::Function;
@@ -131,8 +130,8 @@ const fn u64_as_endianness(value: u64, endianness: Endianness) -> [u8; 8] {
 }
 
 enum Callable {
-    FuncRef(FuncRef),
-    Variable(Ident),
+    Static(FuncRef),
+    Dynamic(Value),
 }
 
 fn ptr_ty(triple: &Triple) -> Type {
@@ -141,6 +140,21 @@ fn ptr_ty(triple: &Triple) -> Type {
 
 fn fat_ptr_ty(triple: &Triple) -> Type {
     Type::int(ptr_ty(triple).bits() as u16 * 2).unwrap()
+}
+
+fn fat_ptr(
+    thin_ptr: Value,
+    metadata: Value,
+    triple: &Triple,
+    builder: &mut FunctionBuilder,
+) -> Value {
+    let fat_ptr_ty = fat_ptr_ty(triple);
+
+    let rotation_places = i64::from(ptr_ty(triple).bits());
+    let fat_ptr = builder.ins().uextend(fat_ptr_ty, thin_ptr);
+    let fat_ptr = builder.ins().rotl_imm(fat_ptr, rotation_places);
+    let metadata = builder.ins().uextend(fat_ptr_ty, metadata);
+    builder.ins().bor(fat_ptr, metadata)
 }
 
 fn int_as_target_usize<T: Into<u64>>(i: T, sink: &mut Vec<u8>, triple: &Triple) {
@@ -195,15 +209,22 @@ fn dangling_static_ptr<M: Module>(
     ptr
 }
 
-fn ty_for(ty: TypeRef, triple: &Triple, lib_std: &StdLib) -> Type {
-    if ty == lib_std.ty_int {
+fn ty_for(ty: TypeRef, triple: &Triple, program: &Program) -> Type {
+    if ty == program.lib_std.ty_int {
         types::I64
-    } else if ty == lib_std.ty_float {
+    } else if ty == program.lib_std.ty_float {
         types::F64
-    } else if ty == lib_std.ty_bool {
+    } else if ty == program.lib_std.ty_bool {
         types::I8
-    } else if ty == lib_std.ty_string {
-        types::I128
+    } else if ty == program.lib_std.ty_string
+        || program
+            .types
+            .get_by_left(&ty)
+            .unwrap()
+            .as_function()
+            .is_some()
+    {
+        fat_ptr_ty(triple)
     } else {
         ptr_ty(triple)
     }
@@ -230,19 +251,21 @@ fn signature_from_function_ty(
     program: &Program,
 ) -> Signature {
     let mut signature = Signature::new(call_conv);
-    signature.params = function_ty
-        .params
-        .iter()
-        .copied()
-        .chain(
-            function_ty
-                .continuations
-                .iter()
-                .sorted_by_key(|&(&param, _)| param)
-                .map(|(_, &param_ty)| param_ty),
-        )
-        .map(|param_ty| AbiParam::new(ty_for(param_ty, triple, &program.lib_std)))
-        .collect();
+    signature.params.push(AbiParam::new(ptr_ty(triple)));
+    signature.params.extend(
+        function_ty
+            .params
+            .iter()
+            .copied()
+            .map(|param_ty| AbiParam::new(ty_for(param_ty, triple, program))),
+    );
+    signature.params.extend(
+        function_ty
+            .continuations
+            .iter()
+            .sorted_by_key(|&(&param, _)| param)
+            .map(|(_, &param_ty)| AbiParam::new(ty_for(param_ty, triple, program))),
+    );
     signature.returns.push(AbiParam::new(types::I64));
     signature
 }
@@ -596,27 +619,20 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
 
     fn declare_functions(&mut self) {
         for (&func_ref, &function) in &self.program.functions {
-            let params: Vec<_> = function
-                .params
-                .iter()
-                .copied()
-                .chain(
-                    function
-                        .continuations
-                        .iter()
-                        .map(|(&param, &param_ty)| (param, param_ty))
-                        .sorted_by_key(|&(param, _)| param),
-                )
-                .map(|(param, param_ty)| {
-                    (param, ty_for(param_ty, &self.triple, &self.program.lib_std))
-                })
-                .collect();
-
-            let mut sig = Signature::new(CallConv::Tail);
-            for &(_, param_ty) in &params {
-                sig.params.push(AbiParam::new(param_ty));
-            }
-            sig.returns.push(AbiParam::new(types::I64));
+            let function_ty = self.program.signatures[&func_ref];
+            let function_ty = self
+                .program
+                .types
+                .get_by_left(&function_ty)
+                .unwrap()
+                .as_function()
+                .unwrap();
+            let sig = signature_from_function_ty(
+                function_ty,
+                CallConv::Tail,
+                &self.triple,
+                &self.program,
+            );
 
             let id = self
                 .module
@@ -685,7 +701,11 @@ impl<'arena, 'a> Compiler<'arena, 'a, ObjectModule> {
         let termination = self.functions[&termination_ref].0;
         let termination = self.module.declare_func_in_func(termination, builder.func);
         let termination_addr = builder.ins().func_addr(ptr_ty(&self.triple), termination);
-        let result = builder.ins().call(entry_point, &[termination_addr]);
+        let metadata = builder.ins().iconst(ptr_ty(&self.triple), 0);
+        let termination = fat_ptr(termination_addr, metadata, &self.triple, &mut builder);
+        let zero = builder.ins().iconst(ptr_ty(&self.triple), 0);
+
+        let result = builder.ins().call(entry_point, &[zero, termination]);
         let rvals = builder.inst_results(result);
         debug_assert_eq!(rvals.len(), 1);
         let rval = rvals[0];
@@ -710,6 +730,7 @@ pub fn compile(program: Program, binary: bool) -> ObjectProduct {
     let mut flags = settings::builder();
     flags.enable("preserve_frame_pointers").unwrap();
     flags.enable("is_pic").unwrap();
+    flags.enable("enable_llvm_abi_extensions").unwrap();
     let isa = isa::lookup(target_lexicon::HOST)
         .unwrap()
         .finish(Flags::new(flags))

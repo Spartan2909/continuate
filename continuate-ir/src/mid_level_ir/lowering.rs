@@ -321,7 +321,11 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
         let mut new_params = Vec::with_capacity_in(params.len(), self.arena);
         new_params.extend(params.into_iter().map(|(expr, _)| expr));
-        let expr = Expr::Call(self.arena.alloc(callee), new_params);
+        let expr = Expr::Call {
+            callee: self.arena.alloc(callee),
+            callee_ty,
+            args: new_params,
+        };
         let (ty, _) = self.program.insert_type(Type::None, self.arena);
         Ok((expr, ty))
     }

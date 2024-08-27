@@ -72,6 +72,14 @@ pub(crate) fn standard_library<'arena>(
     let fn_termination_ref = program.function();
     program.functions.insert(fn_termination_ref, fn_termination);
 
+    let mut fn_termination_params = Vec::with_capacity_in(1, arena);
+    fn_termination_params.push(ty_int_ref);
+    let fn_termination_ty = Type::function(fn_termination_params, HashMap::new_in(arena));
+    let fn_termination_ty = program.insert_type(fn_termination_ty, arena);
+    program
+        .signatures
+        .insert(fn_termination_ref, fn_termination_ty);
+
     let mut params = Vec::with_capacity_in(1, arena);
     params.push(ty_int_ref);
     let int_fn = Type::function(params, HashMap::new_in(arena));
@@ -102,6 +110,16 @@ pub(crate) fn standard_library<'arena>(
     program
         .functions
         .insert(fn_discriminant_ref, fn_discriminant);
+
+    let mut fn_discriminant_params = Vec::with_capacity_in(1, arena);
+    fn_discriminant_params.push(ty_bool_ref);
+    let mut fn_discriminant_conts = HashMap::with_capacity_in(1, arena);
+    fn_discriminant_conts.insert(cont, int_fn_ref);
+    let fn_discriminant_ty = Type::function(fn_discriminant_params, fn_discriminant_conts);
+    let fn_discriminant_ty = program.insert_type(fn_discriminant_ty, arena);
+    program
+        .signatures
+        .insert(fn_discriminant_ref, fn_discriminant_ty);
 
     StdLib {
         ty_bool: ty_bool_ref,
