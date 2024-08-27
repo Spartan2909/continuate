@@ -477,9 +477,9 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         Ok((expr, ty))
     }
 
-    fn order_patterns<'b, 'c>(
-        fields: &'b [Pattern<'c>],
-    ) -> impl Iterator<Item = (usize, &'b Pattern<'c>)> {
+    fn order_patterns<'b>(
+        fields: &'b [Pattern<'b>],
+    ) -> impl Iterator<Item = (usize, &'b Pattern<'b>)> {
         fields
             .iter()
             .enumerate()
@@ -829,9 +829,9 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         }
     }
 
-    fn function<'b, 'c>(
+    fn function(
         &mut self,
-        function: &'b HirFunction<'c>,
+        function: &HirFunction,
         captures: HashMap<'arena, Ident, TypeRef>,
     ) -> Result<Function<'arena>> {
         let mut mir_function = Function::new(function.name.clone(), self.arena);
