@@ -10,7 +10,6 @@ crate-type = ["staticlib"]
 
 [dependencies]
 continuate-common.workspace = true
-mimalloc = "0.1.42"
 nohash = "0.2.0"
 tracing.workspace = true
 tracing-subscriber.workspace = true

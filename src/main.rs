@@ -37,7 +37,7 @@ fn link_command() -> process::Command {
     command.args([
         "./target/debug/continuate_rt.lib",
         "./out/object.o",
-        "ucrt.lib",
+        "libcmt.lib",
         "Ws2_32.lib",
         "Synchronization.lib",
         "Userenv.lib",
