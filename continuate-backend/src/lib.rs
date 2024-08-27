@@ -376,7 +376,7 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
             .unwrap();
     }
 
-    fn compund_ty_layout(&self, types: &[&[TypeRef]]) -> SingleLayout<'arena> {
+    fn compound_ty_layout(&self, types: &[&[TypeRef]]) -> SingleLayout<'arena> {
         let mut size = 0;
         let mut align = 1;
         let mut field_locations = Vec::with_capacity(types.len());
@@ -559,13 +559,13 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
             MirType::Tuple(ref types)
             | MirType::UserDefined(UserDefinedType {
                 constructor: TypeConstructor::Product(ref types),
-            }) => self.compund_ty_layout(&[types]).into(),
+            }) => self.compound_ty_layout(&[types]).into(),
             MirType::UserDefined(UserDefinedType {
                 constructor: TypeConstructor::Sum(ref variants),
             }) => {
                 let layouts: Vec<_> = variants
                     .iter()
-                    .map(|types| self.compund_ty_layout(&[&[self.program.lib_std.ty_int], types]))
+                    .map(|types| self.compound_ty_layout(&[&[self.program.lib_std.ty_int], types]))
                     .collect();
                 let size = layouts.iter().fold(8, |size, layout| size.max(layout.size));
                 let align = layouts
