@@ -102,16 +102,16 @@ impl<'a, T> Slice<'a, T> {
     }
 }
 
-impl<'a, T> Clone for Slice<'a, T> {
+impl<T> Clone for Slice<'_, T> {
     #[inline(always)]
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<'a, T> Copy for Slice<'a, T> {}
+impl<T> Copy for Slice<'_, T> {}
 
-impl<'a, T: fmt::Debug> fmt::Debug for Slice<'a, T> {
+impl<T: fmt::Debug> fmt::Debug for Slice<'_, T> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&**self, f)
@@ -125,16 +125,16 @@ impl<'a, T> From<&'a [T]> for Slice<'a, T> {
     }
 }
 
-impl<'a, T: PartialEq> PartialEq for Slice<'a, T> {
+impl<T: PartialEq> PartialEq for Slice<'_, T> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
         **self == **other
     }
 }
 
-impl<'a, T: Eq> Eq for Slice<'a, T> {}
+impl<T: Eq> Eq for Slice<'_, T> {}
 
-impl<'a, T> ops::Deref for Slice<'a, T> {
+impl<T> ops::Deref for Slice<'_, T> {
     type Target = [T];
 
     #[inline]
@@ -153,7 +153,7 @@ impl<'a, T> IntoIterator for Slice<'a, T> {
     }
 }
 
-impl<'a, T> ops::Index<usize> for Slice<'a, T> {
+impl<T> ops::Index<usize> for Slice<'_, T> {
     type Output = T;
 
     #[inline]

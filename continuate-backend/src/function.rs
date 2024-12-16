@@ -100,7 +100,7 @@ pub(super) struct FunctionCompiler<'arena, 'function, 'builder, M> {
     pub(super) temp_roots: Vec<Value>,
 }
 
-impl<'arena, 'function, 'builder, M: Module> FunctionCompiler<'arena, 'function, 'builder, M> {
+impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
     fn cranelift_endianness(&self) -> ir::Endianness {
         use ir::Endianness as E;
         match self.triple.endianness().unwrap() {

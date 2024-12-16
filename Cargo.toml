@@ -31,7 +31,7 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 license = "MIT OR Apache-2.0"
-rust-version = "1.79"
+rust-version = "1.85"
 
 [workspace.dependencies]
 bumpalo = { version = "3.16.0", features = ["allocator_api"] }

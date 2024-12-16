@@ -33,7 +33,7 @@ impl<T: ?Sized> Wrapper<T> {
     }
 }
 
-impl<'arena, K, Q> Borrow<Wrapper<Q>> for Ref<'arena, K>
+impl<K, Q> Borrow<Wrapper<Q>> for Ref<'_, K>
 where
     K: Borrow<Q>,
     Q: ?Sized,
@@ -79,7 +79,7 @@ impl<'arena, L, R> BiMap<'arena, L, R> {
     }
 }
 
-impl<'arena, L: Eq + Hash, R: Eq + Hash> BiMap<'arena, L, R> {
+impl<L: Eq + Hash, R: Eq + Hash> BiMap<'_, L, R> {
     pub fn get_by_left<Q>(&self, left: &Q) -> Option<&R>
     where
         L: Borrow<Q>,

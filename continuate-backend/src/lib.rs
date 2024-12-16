@@ -389,10 +389,7 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
         }
 
         self.context.clear();
-        #[cfg(debug_assertions)]
-        {
-            self.context.want_disasm = true;
-        }
+        self.context.want_disasm = cfg!(debug_assertions);
         self.context.func = function;
         self.module
             .define_function(func_id, &mut self.context)
@@ -659,7 +656,7 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
     }
 }
 
-impl<'arena, 'a> Compiler<'arena, 'a, ObjectModule> {
+impl Compiler<'_, '_, ObjectModule> {
     fn compile_library(mut self) -> ObjectProduct {
         self.compile_module(&mut FunctionBuilderContext::new());
 

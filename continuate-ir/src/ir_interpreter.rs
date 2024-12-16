@@ -181,7 +181,7 @@ impl<'arena> Value<'arena> {
     }
 }
 
-impl<'arena> PartialOrd for Value<'arena> {
+impl PartialOrd for Value<'_> {
     /// ## Panics
     ///
     /// May panic if any [`RefCell`]s in `self` or `other` are mutably borrowed.
@@ -263,7 +263,7 @@ impl<'arena> ops::Rem for &Value<'arena> {
     }
 }
 
-impl<'arena> From<Literal> for Value<'arena> {
+impl From<Literal> for Value<'_> {
     fn from(value: Literal) -> Self {
         match value {
             Literal::Int(n) => Value::Int(n),
@@ -273,7 +273,7 @@ impl<'arena> From<Literal> for Value<'arena> {
     }
 }
 
-impl<'arena> From<Void> for &Value<'arena> {
+impl From<Void> for &Value<'_> {
     fn from(value: Void) -> Self {
         match value {}
     }
@@ -474,7 +474,7 @@ impl<'arena> Executor<'arena> {
                 BinaryOp::Ge => Ordering::is_ge,
                 _ => unreachable!(),
             };
-            let result = ord.map_or(false, cmp);
+            let result = ord.is_some_and(cmp);
 
             if result {
                 self.b_true

@@ -28,7 +28,7 @@ pub enum Pattern<'arena> {
     },
 }
 
-impl<'arena> Pattern<'arena> {
+impl Pattern<'_> {
     pub const fn as_ident(&self) -> Option<Ident> {
         if let Pattern::Ident(ident) = self {
             Some(*ident)
@@ -205,7 +205,7 @@ impl<'arena> Program<'arena> {
     }
 
     #[allow(clippy::missing_panics_doc)] // Will not panic.
-    pub fn lib_std(&self) -> &StdLib {
+    pub const fn lib_std(&self) -> &StdLib {
         self.lib_std.as_ref().unwrap()
     }
 

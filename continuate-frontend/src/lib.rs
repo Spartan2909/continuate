@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod lexer;
 pub mod parser;
 
@@ -17,7 +19,7 @@ pub struct Ident<'src> {
 }
 
 impl<'src> Ident<'src> {
-    pub const fn new(string: &'src str, span: Span) -> Ident {
+    pub const fn new(string: &'src str, span: Span) -> Ident<'src> {
         Ident { string, span }
     }
 }
