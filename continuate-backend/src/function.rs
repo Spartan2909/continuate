@@ -726,7 +726,7 @@ impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
                 value_ty,
             } => self.expr_intrinsic(intrinsic, value, value_ty),
             Expr::Unreachable => {
-                self.builder.ins().trap(TrapCode::UnreachableCodeReached);
+                self.builder.ins().trap(TrapCode::unwrap_user(1));
                 None
             }
         }

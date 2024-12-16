@@ -10,7 +10,7 @@ crate-type = ["staticlib"]
 
 [dependencies]
 continuate-common.workspace = true
-nohash = "0.2.0"
+nohash-hasher = "0.2.0"
 tracing.workspace = true
 tracing-subscriber.workspace = true
 

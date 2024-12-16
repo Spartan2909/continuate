@@ -1,7 +1,7 @@
 #![feature(allocator_api)]
 
 pub type HashMap<'a, K, V> =
-    hashbrown::HashMap<K, V, hashbrown::hash_map::DefaultHashBuilder, &'a bumpalo::Bump>;
+    hashbrown::HashMap<K, V, hashbrown::DefaultHashBuilder, &'a bumpalo::Bump>;
 
 pub type Vec<'a, T> = std::vec::Vec<T, &'a bumpalo::Bump>;
 

@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-ariadne = { version = "0.4.1", features = ["auto-color"] }
+ariadne = { version = "0.5.0", features = ["auto-color"] }
 chumsky.workspace = true
 strum = { version = "0.26.3", features = ["derive"] }
 

@@ -361,12 +361,8 @@ struct SingleError {
 
 impl SingleError {
     fn report(&self) -> Report<'static, Span> {
-        let mut builder = Report::build(
-            ReportKind::Error,
-            self.span.source,
-            self.span.start as usize,
-        )
-        .with_code(ErrorCode::from(&self.inner));
+        let mut builder =
+            Report::build(ReportKind::Error, self.span).with_code(ErrorCode::from(&self.inner));
 
         if let Some(note) = &self.note {
             builder.set_note(note);
