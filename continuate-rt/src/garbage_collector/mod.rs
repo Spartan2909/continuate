@@ -15,7 +15,7 @@ use std::sync::Mutex;
 use continuate_common::SingleLayout;
 use continuate_common::TyLayout;
 
-use nohash::IntSet;
+use nohash_hasher::IntSet;
 
 #[cfg(debug_assertions)]
 use tracing::debug;
@@ -108,7 +108,7 @@ impl<T> Borrow<NonNull<GcValue<T>>> for HashableGcValue<T> {
 // SAFETY: `HashableGcValue` cannot be used from safe code.
 unsafe impl<T> Send for HashableGcValue<T> {}
 
-impl<T> nohash::IsEnabled for HashableGcValue<T> {}
+impl<T> nohash_hasher::IsEnabled for HashableGcValue<T> {}
 
 struct GarbageCollector<A> {
     values: Option<NonNull<GcValue<()>>>,
@@ -429,7 +429,7 @@ pub unsafe extern "C" fn unmark_root(ptr: NonNull<()>) {
     // SAFETY: `value` is derived from a non-null pointer.
     let value = unsafe { NonNull::new_unchecked(value) };
     // SAFETY: Must be ensured by caller.
-       GARBAGE_COLLECTOR.lock().unwrap().roots.remove(&value);
+    GARBAGE_COLLECTOR.lock().unwrap().roots.remove(&value);
 }
 
 #[export_name = "cont_rt_alloc_string"]
