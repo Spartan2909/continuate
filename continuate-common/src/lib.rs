@@ -1,4 +1,5 @@
 #![feature(allocator_api)]
+#![feature(non_null_from_ref)]
 #![warn(clippy::missing_inline_in_public_items)]
 
 use std::alloc::Allocator;
@@ -29,10 +30,8 @@ pub struct Slice<'a, T> {
 impl<'a, T> Slice<'a, T> {
     #[inline]
     pub const fn new(slice: &'a [T]) -> Slice<'a, T> {
-        // SAFETY: `slice.as_ptr()` always returns a non-null pointer.
-        let ptr = unsafe { NonNull::new_unchecked(slice.as_ptr().cast_mut()) };
         Slice {
-            ptr,
+            ptr: NonNull::from_ref(slice).cast(),
             len: slice.len(),
             _marker: PhantomData,
         }
@@ -173,6 +172,7 @@ unsafe impl<'a, T> Sync for Slice<'a, T> where &'a [T]: Sync {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SingleLayout<'a> {
     pub size: u64,
+    /// The value of this field must not be greater than one word on the target.
     pub align: u64,
     pub field_locations: Slice<'a, u64>,
     pub gc_pointer_locations: Slice<'a, u64>,

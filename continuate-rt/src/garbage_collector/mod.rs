@@ -110,7 +110,7 @@ unsafe impl<T> Send for HashableGcValue<T> {}
 
 impl<T> nohash_hasher::IsEnabled for HashableGcValue<T> {}
 
-struct GarbageCollector<A> {
+struct GarbageCollector<A: ?Sized> {
     values: Option<NonNull<GcValue<()>>>,
     roots: IntSet<HashableGcValue<()>>,
     bytes_allocated: usize,
@@ -167,7 +167,7 @@ unsafe fn mark_object(value: *mut GcValue<()>) {
     }
 }
 
-impl<A: Allocator> GarbageCollector<A> {
+impl<A: Allocator + ?Sized> GarbageCollector<A> {
     const HEAP_GROW_FACTOR: usize = 2;
 
     /// ## Safety
@@ -297,20 +297,12 @@ impl<A: Allocator> GarbageCollector<A> {
         }
 
         // SAFETY: `ptr` is a valid pointer to a `GcValue<()>`.
-        let mark_ptr: *mut bool = unsafe {
-            ptr.as_ptr()
-                .byte_add(mem::offset_of!(GcValue<()>, mark))
-                .cast()
-        };
+        let mark_ptr = unsafe { &raw mut (*ptr.as_ptr()).mark };
         // SAFETY: `mark_ptr` is valid.
         unsafe { mark_ptr.write(false) }
 
         // SAFETY: `ptr` is a valid pointer to a `GcValue<()>`.
-        let next_ptr: *mut Option<NonNull<GcValue<()>>> = unsafe {
-            ptr.as_ptr()
-                .byte_add(mem::offset_of!(GcValue<()>, next))
-                .cast()
-        };
+        let next_ptr = unsafe { &raw mut (*ptr.as_ptr()).next };
         // SAFETY: `next_ptr` is valid.
         unsafe {
             next_ptr.write(self.values);
@@ -320,7 +312,7 @@ impl<A: Allocator> GarbageCollector<A> {
 }
 
 // SAFETY: Every pointer in a `GarbageCollector` is owned by that collector.
-unsafe impl<A: Send> Send for GarbageCollector<A> {}
+unsafe impl<A: Send + ?Sized> Send for GarbageCollector<A> {}
 
 static GARBAGE_COLLECTOR: Mutex<GarbageCollector<Global>> = Mutex::new(GarbageCollector {
     values: None,
@@ -348,7 +340,6 @@ pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull
     let size = layout
         .size()
         .expect("cannot allocate string with 'cont_rt_alloc_gc'");
-    debug_assert!(size >= 8);
     let size = size as usize + mem::size_of::<GcValue<()>>();
     let align = (layout.align() as usize).max(mem::align_of::<GcValue<()>>());
 
@@ -378,7 +369,7 @@ pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull
     drop(gc);
 
     // SAFETY: See above.
-    let value_ptr = unsafe { ptr.as_ptr().byte_add(mem::offset_of!(GcValue<()>, value)) };
+    let value_ptr = unsafe { &raw mut (*ptr.as_ptr()).value };
     // SAFETY: `value_ptr` is directly derived from a `NonNull`.
     unsafe { NonNull::new_unchecked(value_ptr.cast()) }
 }
@@ -441,7 +432,6 @@ pub extern "C" fn alloc_string(len: usize) -> NonNull<()> {
     let size = len + mem::size_of::<GcValue<()>>();
     let mem_layout = Layout::from_size_align(size, mem::align_of::<GcValue<()>>()).unwrap();
 
-    // SAFETY: Must be ensured by caller.
     let mut gc = GARBAGE_COLLECTOR.lock().unwrap();
 
     let ptr: NonNull<GcValue<()>> = gc
