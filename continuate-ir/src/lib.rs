@@ -2,6 +2,7 @@
 
 pub type HashMap<'a, K, V> =
     hashbrown::HashMap<K, V, hashbrown::DefaultHashBuilder, &'a bumpalo::Bump>;
+pub type HashSet<'a, K> = hashbrown::HashSet<K, hashbrown::DefaultHashBuilder, &'a bumpalo::Bump>;
 
 pub type Vec<'a, T> = std::vec::Vec<T, &'a bumpalo::Bump>;
 

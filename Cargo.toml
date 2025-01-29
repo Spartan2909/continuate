@@ -11,6 +11,7 @@ continuate-backend = { version = "0.1.0", path = "./continuate-backend" }
 continuate-common.workspace = true
 continuate-frontend = { version = "0.1.0", path = "./continuate-frontend" }
 continuate-ir = { version = "0.1.0", path = "./continuate-ir" }
+continuate-utils.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
@@ -25,6 +26,7 @@ members = [
     "continuate-frontend",
     "continuate-ir",
     "continuate-rt",
+    "continuate-utils",
 ]
 resolver = "2"
 
@@ -41,6 +43,7 @@ continuate-common = { version = "0.1.0", path = "./continuate-common" }
 continuate-error = { version = "0.1.0", path = "./continuate-error" }
 continuate-frontend = { version = "0.1.0", path = "./continuate-frontend" }
 continuate-ir = { version = "0.1.0", path = "./continuate-ir" }
+continuate-utils = { version = "0.1.0", path = "./continuate-utils" }
 hashbrown = { version = "0.15.2", default-features = false, features = [
     "inline-more",
     "nightly",

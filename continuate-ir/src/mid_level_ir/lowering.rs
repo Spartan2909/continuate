@@ -63,7 +63,6 @@ struct Lowerer<'a, 'arena> {
     arena: &'arena Bump,
     program: Program<'arena>,
     environment: HashMap<'arena, Ident, TypeRef>,
-    ty_bool: TypeRef,
     current_block: BlockId,
     hir_program: &'a HirProgram<'a>,
 }
@@ -109,6 +108,8 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                 ),
             ),
             HirType::UserDefined(ref ty) => Type::UserDefined(self.user_defined_ty(ty)),
+            HirType::Unknown => unreachable!(),
+            HirType::None => Type::None,
         }
     }
 
@@ -420,8 +421,8 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                 l @ (Type::Int | Type::Float | Type::String),
                 BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge,
                 r @ (Type::Int | Type::Float | Type::String),
-            ) if l == r => self.ty_bool,
-            (l, BinaryOp::Eq | BinaryOp::Ne, r) if l == r => self.ty_bool,
+            ) if l == r => self.program.lib_std.ty_bool,
+            (l, BinaryOp::Eq | BinaryOp::Ne, r) if l == r => self.program.lib_std.ty_bool,
             _ => Err(format!(
                 "cannot apply {operator:?} to {left_ty:?} and {right_ty:?}"
             ))?,
@@ -779,15 +780,17 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             HirExpr::Function(func_ref) => {
                 Ok((Expr::Function(func_ref), self.program.signatures[&func_ref]))
             }
-            HirExpr::Block(ref exprs) => self.expr_block(exprs, block, function),
-            HirExpr::Tuple(ref elements) => self.expr_tuple(elements, block, function),
+            HirExpr::Block(ref exprs, _) => self.expr_block(exprs, block, function),
+            HirExpr::Tuple(ref elements, _) => self.expr_tuple(elements, block, function),
             HirExpr::Constructor {
                 ty,
                 index,
                 ref fields,
             } => self.expr_constructor(ty, index, fields, block, function),
-            HirExpr::Array(ref array) => self.expr_array(array, block, function),
-            HirExpr::Get { object, field } => {
+            HirExpr::Array { ref exprs, .. } => self.expr_array(exprs, block, function),
+            HirExpr::Get {
+                ref object, field, ..
+            } => {
                 let (expr, ty) = self.expr_get(object, field, block, function)?;
                 Ok((
                     Expr::Get {
@@ -800,32 +803,48 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                 ))
             }
             HirExpr::Set {
-                object,
+                ref object,
                 field,
-                value,
+                ref value,
+                ..
             } => self.expr_set(object, field, value, block, function),
-            HirExpr::Call(callee, ref params) => self.expr_call(callee, params, block, function),
-            HirExpr::ContApplication(callee, ref continuations) => {
-                self.expr_cont_application(callee, continuations, block, function)
-            }
-            HirExpr::Unary(operator, operand) => {
-                self.expr_unary(operator, operand, block, function)
-            }
-            HirExpr::Binary(left, operator, right) => {
-                self.expr_binary(left, operator, right, block, function)
-            }
-            HirExpr::Declare { ident, ty, expr } => {
-                self.expr_declare(ident, ty, expr, block, function)
-            }
-            HirExpr::Assign { ident, expr } => self.expr_assign(ident, expr, block, function),
+            HirExpr::Call {
+                ref callee,
+                args: ref params,
+                ..
+            } => self.expr_call(callee, params, block, function),
+            HirExpr::ContApplication {
+                ref callee,
+                ref continuations,
+                ..
+            } => self.expr_cont_application(callee, continuations, block, function),
+            HirExpr::Unary {
+                op: operator,
+                right: ref operand,
+                ..
+            } => self.expr_unary(operator, operand, block, function),
+            HirExpr::Binary {
+                ref left,
+                op: operator,
+                ref right,
+                ..
+            } => self.expr_binary(left, operator, right, block, function),
+            HirExpr::Declare {
+                ident,
+                ty,
+                ref expr,
+            } => self.expr_declare(ident, ty, expr, block, function),
+            HirExpr::Assign { ident, ref expr } => self.expr_assign(ident, expr, block, function),
             HirExpr::Match {
-                scrutinee,
+                ref scrutinee,
                 ref arms,
             } => self.expr_match(scrutinee, arms, block, function),
-            HirExpr::Closure { func } => self.expr_closure(func),
-            HirExpr::Intrinsic { intrinsic, value } => {
-                self.expr_intrinsic(intrinsic, value, block, function)
-            }
+            HirExpr::Closure { func, .. } => self.expr_closure(func),
+            HirExpr::Intrinsic {
+                intrinsic,
+                ref value,
+                ..
+            } => self.expr_intrinsic(intrinsic, value, block, function),
             HirExpr::Unreachable => Ok((
                 Expr::Unreachable,
                 self.program.insert_type(Type::None, self.arena).0,
@@ -883,12 +902,14 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             arena,
             program: Program::new(program, arena),
             environment: HashMap::new_in(arena),
-            ty_bool: program.lib_std().ty_bool,
             current_block: Function::entry_point(),
             hir_program: program,
         };
 
         for (&type_ref, &ty) in &program.types {
+            if *ty == HirType::Unknown {
+                continue;
+            }
             let ty = lowerer.arena.alloc(lowerer.lower_ty(ty));
             lowerer.program.types.insert(type_ref, ty);
         }

@@ -10,6 +10,7 @@ use bumpalo::Bump;
 use continuate_ir::collect_into;
 use continuate_ir::common::BinaryOp;
 use continuate_ir::common::Literal;
+use continuate_ir::high_level_ir::typeck;
 use continuate_ir::high_level_ir::Expr;
 use continuate_ir::high_level_ir::Function;
 use continuate_ir::high_level_ir::Program;
@@ -60,7 +61,7 @@ fn main() {
     let mut int_fn_params = Vec::with_capacity_in(1, &hir_arena);
     int_fn_params.push(ty_int);
     let int_fn = Type::function(int_fn_params, HashMap::new_in(&hir_arena));
-    let int_fn_ref = program.insert_type(int_fn, &hir_arena);
+    let int_fn_ref = program.insert_type(int_fn, &hir_arena).0;
 
     let mut sum_fn = Function::new("test::sum".to_string(), &hir_arena);
     let cont = sum_fn.ident();
@@ -69,14 +70,24 @@ fn main() {
     sum_fn.params.extend([(param_1, ty_int), (param_2, ty_int)]);
     sum_fn.continuations.insert(cont, int_fn_ref);
 
-    let l = hir_arena.alloc(Expr::Ident(param_1));
-    let r = hir_arena.alloc(Expr::Ident(param_2));
-    let sum = Expr::Binary(l, BinaryOp::Add, r);
+    let l = Box::new_in(Expr::Ident(param_1), &hir_arena);
+    let r = Box::new_in(Expr::Ident(param_2), &hir_arena);
+    let sum = Expr::Binary {
+        left: l,
+        left_ty: program.lib_std().ty_unknown,
+        op: BinaryOp::Add,
+        right: r,
+        right_ty: program.lib_std().ty_unknown,
+    };
 
-    let cont_ref = hir_arena.alloc(Expr::Ident(cont));
+    let cont_ref = Box::new_in(Expr::Ident(cont), &hir_arena);
     let mut args = Vec::with_capacity_in(1, &hir_arena);
     args.push(sum);
-    sum_fn.body.push(Expr::Call(cont_ref, args));
+    sum_fn.body.push(Expr::Call {
+        callee: cont_ref,
+        callee_ty: program.lib_std().ty_unknown,
+        args,
+    });
 
     let sum_fn_ref = program.function();
     program.functions.insert(sum_fn_ref, sum_fn);
@@ -87,7 +98,7 @@ fn main() {
         sum_fn_params,
         collect_into(iter::once((cont, int_fn_ref)), HashMap::new_in(&hir_arena)),
     );
-    let sum_fn_ty = program.insert_type(sum_fn_ty, &hir_arena);
+    let sum_fn_ty = program.insert_type(sum_fn_ty, &hir_arena).0;
 
     program.signatures.insert(sum_fn_ref, sum_fn_ty);
 
@@ -99,22 +110,30 @@ fn main() {
     let assign_string = Expr::Declare {
         ident: main_fn.ident(),
         ty: program.lib_std().ty_string,
-        expr: hir_arena.alloc(string),
+        expr: Box::new_in(string, &hir_arena),
     };
     main_fn.body.push(assign_string);
 
     let three = Expr::Literal(Literal::Int(3));
     let seven = Expr::Literal(Literal::Int(7));
 
-    let callee = hir_arena.alloc(Expr::Function(sum_fn_ref));
+    let callee = Box::new_in(Expr::Function(sum_fn_ref), &hir_arena);
     let cont_ref = Expr::Ident(termination_cont);
-    let application = hir_arena.alloc(Expr::ContApplication(
-        callee,
-        collect_into(iter::once((cont, cont_ref)), HashMap::new_in(&hir_arena)),
-    ));
+    let application = Box::new_in(
+        Expr::ContApplication {
+            callee,
+            callee_ty: program.lib_std().ty_unknown,
+            continuations: collect_into(iter::once((cont, cont_ref)), HashMap::new_in(&hir_arena)),
+        },
+        &hir_arena,
+    );
     let mut args = Vec::with_capacity_in(2, &hir_arena);
     args.extend([three, seven]);
-    main_fn.body.push(Expr::Call(application, args));
+    main_fn.body.push(Expr::Call {
+        callee: application,
+        callee_ty: program.lib_std().ty_unknown,
+        args,
+    });
 
     let main_fn_ref = program.entry_point();
     program.functions.insert(main_fn_ref, main_fn);
@@ -122,8 +141,10 @@ fn main() {
     let mut main_fn_continuations = HashMap::with_capacity_in(1, &hir_arena);
     main_fn_continuations.insert(termination_cont, int_fn_ref);
     let main_fn_ty = Type::function(Vec::new_in(&hir_arena), main_fn_continuations);
-    let main_fn_ty = program.insert_type(main_fn_ty, &hir_arena);
+    let main_fn_ty = program.insert_type(main_fn_ty, &hir_arena).0;
     program.signatures.insert(main_fn_ref, main_fn_ty);
+
+    typeck(&hir_arena, &mut program).unwrap();
 
     let mir_arena = Bump::new();
 

@@ -5,7 +5,7 @@ use std::io;
 use std::io::Write;
 use std::iter;
 use std::mem;
-use std::num::NonZeroU32;
+use std::num::NonZeroUsize;
 use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
@@ -24,16 +24,16 @@ use chumsky::util::MaybeRef;
 use strum::EnumDiscriminants;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SourceId(NonZeroU32);
+pub struct SourceId(NonZeroUsize);
 
 impl SourceId {
-    const DUMMY: SourceId = if let Some(id) = NonZeroU32::new(1) {
+    const DUMMY: SourceId = if let Some(id) = NonZeroUsize::new(1) {
         SourceId(id)
     } else {
         unreachable!()
     };
 
-    const START: SourceId = if let Some(id) = NonZeroU32::new(2) {
+    const START: SourceId = if let Some(id) = NonZeroUsize::new(2) {
         SourceId(id)
     } else {
         unreachable!()
@@ -43,6 +43,10 @@ impl SourceId {
         let id = *self;
         self.0 = id.0.checked_add(1).unwrap();
         id
+    }
+
+    const fn as_usize(self) -> usize {
+        NonZeroUsize::get(self.0)
     }
 }
 
@@ -156,8 +160,8 @@ impl ariadne::Cache<SourceId> for &SourceCache {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Span {
-    start: u32,
-    end: u32,
+    start: usize,
+    end: usize,
     source: SourceId,
 }
 
@@ -174,41 +178,31 @@ impl Span {
     /// ## Panics
     ///
     /// Panics if `start` or `end` exceed `u32::MAX`.
-    pub fn new(start: usize, end: usize, source: SourceId) -> Span {
-        Span {
-            start: start.try_into().unwrap(),
-            end: end.try_into().unwrap(),
-            source,
-        }
+    pub const fn new(start: usize, end: usize, source: SourceId) -> Span {
+        Span { start, end, source }
     }
 
-    fn is_dummy(self) -> bool {
-        self.source == SourceId::DUMMY
+    const fn is_dummy(self) -> bool {
+        self.source.as_usize() == SourceId::DUMMY.as_usize()
     }
 
     pub fn contains_span(self, other: Span) -> bool {
         self.source == other.source && self.start <= other.start && self.end >= other.end
     }
 
-    /// ## Panics
-    ///
-    /// Panics if `n` exceeds `u32::MAX`.
     #[must_use = "This method returns a new span without modifying the original one"]
-    pub fn first_n(self, n: usize) -> Span {
+    pub const fn first_n(self, n: usize) -> Span {
         Span {
             start: self.start,
-            end: self.start + u32::try_from(n).unwrap(),
+            end: self.start + n,
             source: self.source,
         }
     }
 
-    /// ## Panics
-    ///
-    /// Panics if `n` exceeds `u32::MAX`.
     #[must_use = "This method returns a new span without modifying the original one"]
-    pub fn last_n(self, n: usize) -> Span {
+    pub const fn last_n(self, n: usize) -> Span {
         Span {
-            start: self.end - u32::try_from(n).unwrap(),
+            start: self.end - n,
             end: self.end,
             source: self.source,
         }
@@ -217,14 +211,14 @@ impl Span {
     #[inline]
     pub const fn range(self) -> Range<usize> {
         Range {
-            start: self.start as usize,
-            end: self.end as usize,
+            start: self.start,
+            end: self.end,
         }
     }
 
     #[inline]
     pub const fn len(self) -> usize {
-        (self.end - self.start) as usize
+        self.end - self.start
     }
 
     #[inline]
@@ -255,8 +249,8 @@ impl span::Span for Span {
 
     fn new(context: SourceId, range: Range<usize>) -> Self {
         Span {
-            start: range.start.try_into().unwrap(),
-            end: range.end.try_into().unwrap(),
+            start: range.start,
+            end: range.end,
             source: context,
         }
     }
@@ -266,11 +260,11 @@ impl span::Span for Span {
     }
 
     fn start(&self) -> Self::Offset {
-        self.start as usize
+        self.start
     }
 
     fn end(&self) -> Self::Offset {
-        self.end as usize
+        self.end
     }
 
     fn union(&self, other: Self) -> Self {
@@ -286,11 +280,11 @@ impl ariadne::Span for Span {
     }
 
     fn start(&self) -> usize {
-        self.start as usize
+        self.start
     }
 
     fn end(&self) -> usize {
-        self.end as usize
+        self.end
     }
 }
 

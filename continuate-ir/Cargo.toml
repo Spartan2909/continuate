@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 bumpalo.workspace = true
 continuate-error.workspace = true
+continuate-utils.workspace = true
 hashbrown.workspace = true
 itertools.workspace = true
 
