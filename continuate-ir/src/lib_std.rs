@@ -3,6 +3,9 @@ use crate::common::Intrinsic;
 use crate::common::Literal;
 use crate::common::TypeRef;
 use crate::high_level_ir::Expr;
+use crate::high_level_ir::ExprCall;
+use crate::high_level_ir::ExprDeclare;
+use crate::high_level_ir::ExprIntrinsic;
 use crate::high_level_ir::Function;
 use crate::high_level_ir::Program;
 use crate::high_level_ir::Type;
@@ -69,11 +72,11 @@ pub(crate) fn standard_library<'arena>(
     let mut fn_termination = Function::new("termination".to_string(), arena);
     let param = fn_termination.ident();
     fn_termination.params.push((param, ty_int_ref));
-    fn_termination.body.push(Expr::Intrinsic {
+    fn_termination.body.push(Expr::Intrinsic(ExprIntrinsic {
         intrinsic: Intrinsic::Terminate,
         value: Box::new_in(Expr::Ident(param), arena),
         value_ty: ty_unknown_ref,
-    });
+    }));
 
     let fn_termination_ref = program.function();
     program.functions.insert(fn_termination_ref, fn_termination);
@@ -96,25 +99,25 @@ pub(crate) fn standard_library<'arena>(
     fn_discriminant.params.push((param, ty_bool_ref)); // TODO: Should be generic.
     let cont = fn_discriminant.ident();
     fn_discriminant.continuations.insert(cont, int_fn_ref);
-    let intrinsic = Expr::Intrinsic {
+    let intrinsic = Expr::Intrinsic(ExprIntrinsic {
         intrinsic: Intrinsic::Discriminant,
         value: Box::new_in(Expr::Ident(param), arena),
         value_ty: ty_unknown_ref,
-    };
+    });
     let discriminant = fn_discriminant.ident();
-    let declare = Expr::Declare {
+    let declare = Expr::Declare(ExprDeclare {
         ident: discriminant,
         ty: ty_int_ref,
         expr: Box::new_in(intrinsic, arena),
-    };
+    });
     fn_discriminant.body.push(declare);
     let mut args = Vec::with_capacity_in(1, arena);
     args.push(Expr::Ident(discriminant));
-    let cont_call = Expr::Call {
+    let cont_call = Expr::Call(ExprCall {
         callee: Box::new_in(Expr::Ident(cont), arena),
         callee_ty: ty_unknown_ref,
         args,
-    };
+    });
     fn_discriminant.body.push(cont_call);
 
     let fn_discriminant_ref = program.function();

@@ -12,6 +12,10 @@ use continuate_ir::common::BinaryOp;
 use continuate_ir::common::Literal;
 use continuate_ir::high_level_ir::typeck;
 use continuate_ir::high_level_ir::Expr;
+use continuate_ir::high_level_ir::ExprBinary;
+use continuate_ir::high_level_ir::ExprCall;
+use continuate_ir::high_level_ir::ExprContApplication;
+use continuate_ir::high_level_ir::ExprDeclare;
 use continuate_ir::high_level_ir::Function;
 use continuate_ir::high_level_ir::Program;
 use continuate_ir::high_level_ir::Type;
@@ -72,22 +76,22 @@ fn main() {
 
     let l = Box::new_in(Expr::Ident(param_1), &hir_arena);
     let r = Box::new_in(Expr::Ident(param_2), &hir_arena);
-    let sum = Expr::Binary {
+    let sum = Expr::Binary(ExprBinary {
         left: l,
         left_ty: program.lib_std().ty_unknown,
         op: BinaryOp::Add,
         right: r,
         right_ty: program.lib_std().ty_unknown,
-    };
+    });
 
     let cont_ref = Box::new_in(Expr::Ident(cont), &hir_arena);
     let mut args = Vec::with_capacity_in(1, &hir_arena);
     args.push(sum);
-    sum_fn.body.push(Expr::Call {
+    sum_fn.body.push(Expr::Call(ExprCall {
         callee: cont_ref,
         callee_ty: program.lib_std().ty_unknown,
         args,
-    });
+    }));
 
     let sum_fn_ref = program.function();
     program.functions.insert(sum_fn_ref, sum_fn);
@@ -107,11 +111,11 @@ fn main() {
     main_fn.continuations.insert(termination_cont, int_fn_ref);
 
     let string = Expr::Literal(Literal::String("hello".to_string()));
-    let assign_string = Expr::Declare {
+    let assign_string = Expr::Declare(ExprDeclare {
         ident: main_fn.ident(),
         ty: program.lib_std().ty_string,
         expr: Box::new_in(string, &hir_arena),
-    };
+    });
     main_fn.body.push(assign_string);
 
     let three = Expr::Literal(Literal::Int(3));
@@ -120,20 +124,20 @@ fn main() {
     let callee = Box::new_in(Expr::Function(sum_fn_ref), &hir_arena);
     let cont_ref = Expr::Ident(termination_cont);
     let application = Box::new_in(
-        Expr::ContApplication {
+        Expr::ContApplication(ExprContApplication {
             callee,
             callee_ty: program.lib_std().ty_unknown,
             continuations: collect_into(iter::once((cont, cont_ref)), HashMap::new_in(&hir_arena)),
-        },
+        }),
         &hir_arena,
     );
     let mut args = Vec::with_capacity_in(2, &hir_arena);
     args.extend([three, seven]);
-    main_fn.body.push(Expr::Call {
+    main_fn.body.push(Expr::Call(ExprCall {
         callee: application,
         callee_ty: program.lib_std().ty_unknown,
         args,
-    });
+    }));
 
     let main_fn_ref = program.entry_point();
     program.functions.insert(main_fn_ref, main_fn);

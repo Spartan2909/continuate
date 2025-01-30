@@ -9,6 +9,21 @@ use crate::common::Literal;
 use crate::common::TypeRef;
 use crate::common::UnaryOp;
 use crate::high_level_ir::Expr;
+use crate::high_level_ir::ExprArray;
+use crate::high_level_ir::ExprAssign;
+use crate::high_level_ir::ExprBinary;
+use crate::high_level_ir::ExprBlock;
+use crate::high_level_ir::ExprCall;
+use crate::high_level_ir::ExprClosure;
+use crate::high_level_ir::ExprConstructor;
+use crate::high_level_ir::ExprContApplication;
+use crate::high_level_ir::ExprDeclare;
+use crate::high_level_ir::ExprGet;
+use crate::high_level_ir::ExprIntrinsic;
+use crate::high_level_ir::ExprMatch;
+use crate::high_level_ir::ExprSet;
+use crate::high_level_ir::ExprTuple;
+use crate::high_level_ir::ExprUnary;
 use crate::high_level_ir::Function;
 use crate::high_level_ir::FunctionTy;
 use crate::high_level_ir::Pattern;
@@ -108,8 +123,8 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
             .ok_or_else(|| format!("cannot find {ident:?}").into())
     }
 
-    fn expr_block(&mut self, exprs: &mut [Expr<'arena>], ty: TypeRef) -> Result<TypeRef> {
-        let Some((tail, block)) = exprs.split_last_mut() else {
+    fn expr_block(&mut self, expr: &mut ExprBlock<'arena>) -> Result<TypeRef> {
+        let Some((tail, block)) = expr.exprs.split_last_mut() else {
             return Ok(self
                 .program
                 .insert_type(Type::Tuple(Vec::new_in(self.arena)), self.arena)
@@ -122,32 +137,27 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
 
         let block_ty_ref = self.expr(tail)?;
         let block_ty = self.program.types.get_by_left(&block_ty_ref).unwrap();
-        let ty = self.program.types.get_by_left(&ty).unwrap();
+        let ty = self.program.types.get_by_left(&expr.ty).unwrap();
         let unified = block_ty.unify(ty, self.program, self.arena)?;
         Ok(*self.program.types.get_by_right(unified).unwrap())
     }
 
-    fn expr_tuple(&mut self, exprs: &mut [Expr<'arena>], ty: TypeRef) -> Result<TypeRef> {
-        let types = self.exprs(exprs)?;
+    fn expr_tuple(&mut self, expr: &mut ExprTuple<'arena>) -> Result<TypeRef> {
+        let types = self.exprs(&mut expr.exprs)?;
         let result_ty = self.program.insert_type(Type::Tuple(types), self.arena).1;
-        let ty = self.program.types.get_by_left(&ty).unwrap();
+        let ty = self.program.types.get_by_left(&expr.ty).unwrap();
         let result_ty = result_ty.unify(ty, self.program, self.arena)?;
 
         Ok(*self.program.types.get_by_right(result_ty).unwrap())
     }
 
-    fn expr_constructor(
-        &mut self,
-        ty: TypeRef,
-        index: Option<usize>,
-        fields: &mut [Expr<'arena>],
-    ) -> Result<TypeRef> {
-        let fields = self.exprs(fields)?;
-        let user_defined = self.program.types.get_by_left(&ty).unwrap();
+    fn expr_constructor(&mut self, expr: &mut ExprConstructor<'arena>) -> Result<TypeRef> {
+        let fields = self.exprs(&mut expr.fields)?;
+        let user_defined = self.program.types.get_by_left(&expr.ty).unwrap();
         let user_defined = user_defined
             .as_user_defined()
             .ok_or_else(|| format!("cannot construct {user_defined:?}"))?;
-        let ty_fields = match (&user_defined.constructor, index) {
+        let ty_fields = match (&user_defined.constructor, expr.index) {
             (TypeConstructor::Product(ty_fields), None) => ty_fields,
             (TypeConstructor::Sum(variants), Some(index)) => &variants[index],
             _ => unreachable!(),
@@ -163,31 +173,29 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
             given_field_ty.unify(field_ty, self.program, self.arena)?;
         }
 
-        Ok(ty)
+        Ok(expr.ty)
     }
 
-    fn expr_array(&mut self, exprs: &mut [Expr<'arena>], ty: &mut TypeRef) -> Result<TypeRef> {
-        let elem_ty = self.exprs(exprs)?.into_iter().try_fold(*ty, |acc, ty| {
-            let acc = self.program.types.get_by_left(&acc).unwrap();
-            let ty = self.program.types.get_by_left(&ty).unwrap();
-            let ty = ty.unify(acc, self.program, self.arena)?;
-            Result::Ok(*self.program.types.get_by_right(ty).unwrap())
-        })?;
-        *ty = elem_ty;
+    fn expr_array(&mut self, expr: &mut ExprArray<'arena>) -> Result<TypeRef> {
+        let elem_ty = self
+            .exprs(&mut expr.exprs)?
+            .into_iter()
+            .try_fold(expr.ty, |acc, ty| {
+                let acc = self.program.types.get_by_left(&acc).unwrap();
+                let ty = self.program.types.get_by_left(&ty).unwrap();
+                let ty = ty.unify(acc, self.program, self.arena)?;
+                Result::Ok(*self.program.types.get_by_right(ty).unwrap())
+            })?;
+        expr.ty = elem_ty;
         let ty = self
             .program
-            .insert_type(Type::Array(elem_ty, exprs.len() as u64), self.arena);
+            .insert_type(Type::Array(elem_ty, expr.exprs.len() as u64), self.arena);
         Ok(ty.0)
     }
 
-    fn expr_get(
-        &mut self,
-        object: &mut Expr<'arena>,
-        object_ty: TypeRef,
-        field: usize,
-    ) -> Result<TypeRef> {
-        let object_ty = *self.program.types.get_by_left(&object_ty).unwrap();
-        let found_ty = self.expr(object)?;
+    fn expr_get(&mut self, expr: &mut ExprGet<'arena>) -> Result<TypeRef> {
+        let object_ty = *self.program.types.get_by_left(&expr.object_ty).unwrap();
+        let found_ty = self.expr(&mut expr.object)?;
         let found_ty = self.program.types.get_by_left(&found_ty).unwrap();
         let object_ty = found_ty.unify(object_ty, self.program, self.arena)?;
         let Type::UserDefined(UserDefinedType {
@@ -197,52 +205,40 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
             Err(format!("cannot take field of {object_ty:?}"))?
         };
 
-        Ok(fields[field])
+        Ok(fields[expr.field])
     }
 
-    fn expr_set(
-        &mut self,
-        object: &mut Expr<'arena>,
-        object_ty: &mut TypeRef,
-        field: usize,
-        value: &mut Expr<'arena>,
-        value_ty: &mut TypeRef,
-    ) -> Result<TypeRef> {
-        let ty = *self.program.types.get_by_left(object_ty).unwrap();
-        let found_ty = self.expr(object)?;
+    fn expr_set(&mut self, expr: &mut ExprSet<'arena>) -> Result<TypeRef> {
+        let ty = *self.program.types.get_by_left(&expr.object_ty).unwrap();
+        let found_ty = self.expr(&mut expr.object)?;
         let found_ty = self.program.types.get_by_left(&found_ty).unwrap();
         let ty = found_ty.unify(ty, self.program, self.arena)?;
-        *object_ty = *self.program.types.get_by_right(ty).unwrap();
+        expr.object_ty = *self.program.types.get_by_right(ty).unwrap();
 
         let Type::UserDefined(UserDefinedType {
             constructor: TypeConstructor::Product(fields),
         }) = ty
         else {
-            Err(format!("cannot take field of {object_ty:?}"))?
+            Err(format!("cannot take field of {:?}", expr.object_ty))?
         };
 
-        let field_ty = fields[field];
+        let field_ty = fields[expr.field];
         let field_ty = *self.program.types.get_by_left(&field_ty).unwrap();
 
-        let ty = self.expr(value)?;
+        let ty = self.expr(&mut expr.value)?;
         let ty = self.program.types.get_by_left(&ty).unwrap();
         let ty = ty.unify(field_ty, self.program, self.arena)?;
         let ty = *self.program.types.get_by_right(ty).unwrap();
-        *value_ty = ty;
+        expr.value_ty = ty;
         Ok(ty)
     }
 
-    fn expr_call(
-        &mut self,
-        callee: &mut Expr<'arena>,
-        callee_ty: &mut TypeRef,
-        args: &mut [Expr<'arena>],
-    ) -> Result<TypeRef> {
-        let ty = self.expr(callee)?;
+    fn expr_call(&mut self, expr: &mut ExprCall<'arena>) -> Result<TypeRef> {
+        let ty = self.expr(&mut expr.callee)?;
         let ty = self.program.types.get_by_left(&ty).unwrap();
-        let expected_ty = self.program.types.get_by_left(callee_ty).unwrap();
+        let expected_ty = self.program.types.get_by_left(&expr.callee_ty).unwrap();
         let ty = ty.unify(expected_ty, self.program, self.arena)?;
-        *callee_ty = *self.program.types.get_by_right(ty).unwrap();
+        expr.callee_ty = *self.program.types.get_by_right(ty).unwrap();
         let Type::Function(FunctionTy {
             params,
             continuations,
@@ -255,15 +251,15 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
             Err("cannot call a function with remaining continuations")?;
         }
 
-        if args.len() != params.len() {
+        if expr.args.len() != params.len() {
             Err(format!(
                 "incorrect number of arguments (expected {}, got {})",
                 params.len(),
-                args.len()
+                expr.args.len()
             ))?;
         }
 
-        for (param, arg) in params.iter().zip(args) {
+        for (param, arg) in params.iter().zip(&mut expr.args) {
             let arg = self.expr(arg)?;
             let arg = self.program.types.get_by_left(&arg).unwrap();
             let param = self.program.types.get_by_left(param).unwrap();
@@ -273,17 +269,12 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
         Ok(self.program.insert_type(Type::None, self.arena).0)
     }
 
-    fn expr_cont_application(
-        &mut self,
-        callee: &mut Expr<'arena>,
-        callee_ty: &mut TypeRef,
-        continuations: &mut HashMap<Ident, Expr<'arena>>,
-    ) -> Result<TypeRef> {
-        let ty = self.expr(callee)?;
+    fn expr_cont_application(&mut self, expr: &mut ExprContApplication<'arena>) -> Result<TypeRef> {
+        let ty = self.expr(&mut expr.callee)?;
         let ty = self.program.types.get_by_left(&ty).unwrap();
-        let expected_ty = self.program.types.get_by_left(callee_ty).unwrap();
+        let expected_ty = self.program.types.get_by_left(&expr.callee_ty).unwrap();
         let ty = ty.unify(expected_ty, self.program, self.arena)?;
-        *callee_ty = *self.program.types.get_by_right(ty).unwrap();
+        expr.callee_ty = *self.program.types.get_by_right(ty).unwrap();
         let Type::Function(FunctionTy {
             params,
             continuations: ty_continuations,
@@ -293,7 +284,7 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
         };
 
         let mut ty_continuations = ty_continuations.clone();
-        for (ident, cont) in continuations {
+        for (ident, cont) in &mut expr.continuations {
             let cont = self.expr(cont)?;
             let cont = self.program.types.get_by_left(&cont).unwrap();
             let expected = ty_continuations
@@ -307,46 +298,34 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
         Ok(self.program.insert_type(ty, self.arena).0)
     }
 
-    fn expr_unary(
-        &mut self,
-        op: UnaryOp,
-        right: &mut Expr<'arena>,
-        right_ty: &mut TypeRef,
-    ) -> Result<TypeRef> {
-        let expected = *self.program.types.get_by_left(right_ty).unwrap();
-        let right = self.expr(right)?;
+    fn expr_unary(&mut self, expr: &mut ExprUnary<'arena>) -> Result<TypeRef> {
+        let expected = *self.program.types.get_by_left(&expr.right_ty).unwrap();
+        let right = self.expr(&mut expr.right)?;
         let right = self.program.types.get_by_left(&right).unwrap();
         let right = right.unify(expected, self.program, self.arena)?;
         let right_ref = *self.program.types.get_by_right(right).unwrap();
-        *right_ty = right_ref;
-        match (op, right) {
+        expr.right_ty = right_ref;
+        match (expr.op, right) {
             (UnaryOp::Neg, Type::Int | Type::Float) => Ok(right_ref),
             (UnaryOp::Not, _) if right_ref == self.program.lib_std().ty_bool => Ok(right_ref),
-            _ => Err(format!("invalid use of {op:?}"))?,
+            _ => Err(format!("invalid use of {:?}", expr.op))?,
         }
     }
 
-    fn expr_binary(
-        &mut self,
-        left: &mut Expr<'arena>,
-        left_ty: &mut TypeRef,
-        op: BinaryOp,
-        right: &mut Expr<'arena>,
-        right_ty: &mut TypeRef,
-    ) -> Result<TypeRef> {
-        let expected = *self.program.types.get_by_left(left_ty).unwrap();
-        let left = self.expr(left)?;
+    fn expr_binary(&mut self, expr: &mut ExprBinary<'arena>) -> Result<TypeRef> {
+        let expected = *self.program.types.get_by_left(&expr.left_ty).unwrap();
+        let left = self.expr(&mut expr.left)?;
         let left = self.program.types.get_by_left(&left).unwrap();
         let left = left.unify(expected, self.program, self.arena)?;
-        *left_ty = *self.program.types.get_by_right(left).unwrap();
+        expr.left_ty = *self.program.types.get_by_right(left).unwrap();
 
-        let expected = *self.program.types.get_by_left(right_ty).unwrap();
-        let right = self.expr(right)?;
+        let expected = *self.program.types.get_by_left(&expr.right_ty).unwrap();
+        let right = self.expr(&mut expr.right)?;
         let right = self.program.types.get_by_left(&right).unwrap();
         let right = right.unify(expected, self.program, self.arena)?;
-        *right_ty = *self.program.types.get_by_right(right).unwrap();
+        expr.right_ty = *self.program.types.get_by_right(right).unwrap();
 
-        match (left, op, right) {
+        match (left, expr.op, right) {
             (
                 l @ (Type::Int | Type::Float | Type::String),
                 BinaryOp::Add,
@@ -356,36 +335,35 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
                 l @ (Type::Int | Type::Float),
                 BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem,
                 r @ (Type::Int | Type::Float),
-            ) if l == r => Ok(*left_ty),
+            ) if l == r => Ok(expr.left_ty),
             (
                 l @ (Type::Int | Type::Float | Type::String),
                 BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge,
                 r @ (Type::Int | Type::Float | Type::String),
             ) if l == r => Ok(self.program.lib_std().ty_bool),
             (l, BinaryOp::Eq | BinaryOp::Ne, r) if l == r => Ok(self.program.lib_std().ty_bool),
-            _ => Err(format!("cannot apply {op:?} to {left_ty:?} and {right_ty:?}").into()),
+            _ => Err(format!(
+                "cannot apply {:?} to {:?} and {:?}",
+                expr.op, expr.left_ty, expr.right_ty
+            )
+            .into()),
         }
     }
 
-    fn expr_declare(
-        &mut self,
-        ident: Ident,
-        ty: &mut TypeRef,
-        expr: &mut Expr<'arena>,
-    ) -> Result<TypeRef> {
-        let expr_ty = self.expr(expr)?;
+    fn expr_declare(&mut self, expr: &mut ExprDeclare<'arena>) -> Result<TypeRef> {
+        let expr_ty = self.expr(&mut expr.expr)?;
         let expr_ty = self.program.types.get_by_left(&expr_ty).unwrap();
-        let expected = self.program.types.get_by_left(ty).unwrap();
+        let expected = self.program.types.get_by_left(&expr.ty).unwrap();
         let expr_ty = expr_ty.unify(expected, self.program, self.arena)?;
-        *ty = *self.program.types.get_by_right(expr_ty).unwrap();
-        self.environment.insert(ident, *ty);
-        Ok(*ty)
+        expr.ty = *self.program.types.get_by_right(expr_ty).unwrap();
+        self.environment.insert(expr.ident, expr.ty);
+        Ok(expr.ty)
     }
 
-    fn expr_assign(&mut self, ident: Ident, expr: &mut Expr<'arena>) -> Result<TypeRef> {
-        let expected = self.environment.get(&ident).unwrap();
+    fn expr_assign(&mut self, expr: &mut ExprAssign<'arena>) -> Result<TypeRef> {
+        let expected = self.environment.get(&expr.ident).unwrap();
         let expected = *self.program.types.get_by_left(expected).unwrap();
-        let ty = self.expr(expr)?;
+        let ty = self.expr(&mut expr.expr)?;
         let ty = self.program.types.get_by_left(&ty).unwrap();
         let ty = ty.unify(expected, self.program, self.arena)?;
         Ok(*self.program.types.get_by_right(ty).unwrap())
@@ -434,15 +412,11 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
         }
     }
 
-    fn expr_match(
-        &mut self,
-        expr: &mut Expr<'arena>,
-        arms: &mut [(Pattern<'arena>, Expr<'arena>)],
-    ) -> Result<TypeRef> {
-        let expr_ty = self.expr(expr)?;
+    fn expr_match(&mut self, expr: &mut ExprMatch<'arena>) -> Result<TypeRef> {
+        let expr_ty = self.expr(&mut expr.scrutinee)?;
         let mut exhaustive = Exhaustive::Exhaustive;
         let mut output_ty = self.program.insert_type(Type::Unknown, self.arena).1;
-        for (pat, expr) in arms {
+        for (pat, expr) in &mut expr.arms {
             exhaustive = exhaustive.union(self.pattern(expr_ty, pat)?, self.arena);
             let expr_ty = self.expr(expr)?;
             let expr_ty = self.program.types.get_by_left(&expr_ty).unwrap();
@@ -451,12 +425,8 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
         Ok(*self.program.types.get_by_right(output_ty).unwrap())
     }
 
-    fn expr_closure(
-        &mut self,
-        func: FuncRef,
-        captures: &mut Option<HashMap<'arena, Ident, TypeRef>>,
-    ) -> TypeRef {
-        let actual_func = self.program.functions.get(&func).unwrap();
+    fn expr_closure(&mut self, expr: &mut ExprClosure<'arena>) -> TypeRef {
+        let actual_func = self.program.functions.get(&expr.func).unwrap();
         let new_captures = collect_into(
             actual_func
                 .captures
@@ -467,109 +437,52 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
         {
             let mut captures = HashMap::new_in(self.arena);
             captures.clone_from(&new_captures);
-            self.closures.push((func, captures));
+            self.closures.push((expr.func, captures));
         }
-        *captures = Some(new_captures);
-        self.program.signatures[&func]
+        expr.captures = Some(new_captures);
+        self.program.signatures[&expr.func]
     }
 
-    fn expr_intrinsic(
-        &mut self,
-        intrinsic: Intrinsic,
-        value: &mut Expr<'arena>,
-        value_ty: &mut TypeRef,
-    ) -> Result<TypeRef> {
-        let ty = self.expr(value)?;
+    fn expr_intrinsic(&mut self, expr: &mut ExprIntrinsic<'arena>) -> Result<TypeRef> {
+        let ty = self.expr(&mut expr.value)?;
         let ty = self.program.types.get_by_left(&ty).unwrap();
-        let expected = self.program.types.get_by_left(value_ty).unwrap();
+        let expected = self.program.types.get_by_left(&expr.value_ty).unwrap();
         let ty = ty.unify(expected, self.program, self.arena)?;
-        *value_ty = *self.program.types.get_by_right(ty).unwrap();
-        match intrinsic {
+        expr.value_ty = *self.program.types.get_by_right(ty).unwrap();
+        match expr.intrinsic {
             Intrinsic::Discriminant => Ok(self.program.lib_std().ty_int),
             Intrinsic::Terminate => Ok(self.program.insert_type(Type::None, self.arena).0),
         }
     }
 
     fn expr(&mut self, expr: &mut Expr<'arena>) -> Result<TypeRef> {
-        match *expr {
-            Expr::Literal(ref literal) => Ok(self.expr_literal(literal)),
-            Expr::Ident(ident) => self.expr_ident(ident),
-            Expr::Function(func_ref) => Ok(self.program.signatures[&func_ref]),
-            Expr::Block(ref mut exprs, ref mut ty) => {
-                let checked_ty = self.expr_block(exprs, *ty)?;
-                *ty = checked_ty;
+        match expr {
+            Expr::Literal(literal) => Ok(self.expr_literal(literal)),
+            Expr::Ident(ident) => self.expr_ident(*ident),
+            Expr::Function(func_ref) => Ok(self.program.signatures[func_ref]),
+            Expr::Block(expr) => {
+                let checked_ty = self.expr_block(expr)?;
+                expr.ty = checked_ty;
                 Ok(checked_ty)
             }
-            Expr::Tuple(ref mut exprs, ref mut ty) => {
-                let checked_ty = self.expr_tuple(exprs, *ty)?;
-                *ty = checked_ty;
+            Expr::Tuple(expr) => {
+                let checked_ty = self.expr_tuple(expr)?;
+                expr.ty = checked_ty;
                 Ok(checked_ty)
             }
-            Expr::Constructor {
-                ty,
-                index,
-                ref mut fields,
-            } => self.expr_constructor(ty, index, fields),
-            Expr::Array {
-                ref mut exprs,
-                ref mut ty,
-            } => self.expr_array(exprs, ty),
-            Expr::Get {
-                ref mut object,
-                object_ty,
-                field,
-            } => self.expr_get(object, object_ty, field),
-            Expr::Set {
-                ref mut object,
-                ref mut object_ty,
-                field,
-                ref mut value,
-                ref mut value_ty,
-            } => self.expr_set(object, object_ty, field, value, value_ty),
-            Expr::Call {
-                ref mut callee,
-                ref mut callee_ty,
-                ref mut args,
-            } => self.expr_call(callee, callee_ty, args),
-            Expr::ContApplication {
-                ref mut callee,
-                ref mut callee_ty,
-                ref mut continuations,
-            } => self.expr_cont_application(callee, callee_ty, continuations),
-            Expr::Unary {
-                op,
-                ref mut right,
-                ref mut right_ty,
-            } => self.expr_unary(op, right, right_ty),
-            Expr::Binary {
-                ref mut left,
-                ref mut left_ty,
-                op,
-                ref mut right,
-                ref mut right_ty,
-            } => self.expr_binary(left, left_ty, op, right, right_ty),
-            Expr::Declare {
-                ident,
-                ref mut ty,
-                ref mut expr,
-            } => self.expr_declare(ident, ty, expr),
-            Expr::Assign {
-                ident,
-                ref mut expr,
-            } => self.expr_assign(ident, expr),
-            Expr::Match {
-                ref mut scrutinee,
-                ref mut arms,
-            } => self.expr_match(scrutinee, arms),
-            Expr::Closure {
-                func,
-                ref mut captures,
-            } => Ok(self.expr_closure(func, captures)),
-            Expr::Intrinsic {
-                intrinsic,
-                ref mut value,
-                ref mut value_ty,
-            } => self.expr_intrinsic(intrinsic, value, value_ty),
+            Expr::Constructor(expr) => self.expr_constructor(expr),
+            Expr::Array(expr) => self.expr_array(expr),
+            Expr::Get(expr) => self.expr_get(expr),
+            Expr::Set(expr) => self.expr_set(expr),
+            Expr::Call(expr) => self.expr_call(expr),
+            Expr::ContApplication(expr) => self.expr_cont_application(expr),
+            Expr::Unary(expr) => self.expr_unary(expr),
+            Expr::Binary(expr) => self.expr_binary(expr),
+            Expr::Declare(expr) => self.expr_declare(expr),
+            Expr::Assign(expr) => self.expr_assign(expr),
+            Expr::Match(expr) => self.expr_match(expr),
+            Expr::Closure(expr) => Ok(self.expr_closure(expr)),
+            Expr::Intrinsic(expr) => self.expr_intrinsic(expr),
             Expr::Unreachable => Ok(self.program.insert_type(Type::None, self.arena).0),
         }
     }

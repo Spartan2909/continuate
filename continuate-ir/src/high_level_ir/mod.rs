@@ -51,83 +51,125 @@ pub enum Expr<'arena> {
     Literal(Literal),
     Ident(Ident),
     Function(FuncRef),
-    Block(Vec<'arena, Expr<'arena>>, TypeRef),
-    Tuple(Vec<'arena, Expr<'arena>>, TypeRef),
-    Constructor {
-        ty: TypeRef,
-        index: Option<usize>,
-        fields: Vec<'arena, Expr<'arena>>,
-    },
-    Array {
-        exprs: Vec<'arena, Expr<'arena>>,
-        ty: TypeRef,
-    },
-
-    Get {
-        object: Box<'arena, Expr<'arena>>,
-        object_ty: TypeRef,
-        field: usize,
-    },
-    Set {
-        object: Box<'arena, Expr<'arena>>,
-        object_ty: TypeRef,
-        field: usize,
-        value: Box<'arena, Expr<'arena>>,
-        value_ty: TypeRef,
-    },
-
-    Call {
-        callee: Box<'arena, Expr<'arena>>,
-        callee_ty: TypeRef,
-        args: Vec<'arena, Expr<'arena>>,
-    },
-    ContApplication {
-        callee: Box<'arena, Expr<'arena>>,
-        callee_ty: TypeRef,
-        continuations: HashMap<'arena, Ident, Expr<'arena>>,
-    },
-
-    Unary {
-        op: UnaryOp,
-        right: Box<'arena, Expr<'arena>>,
-        right_ty: TypeRef,
-    },
-
-    Binary {
-        left: Box<'arena, Expr<'arena>>,
-        left_ty: TypeRef,
-        op: BinaryOp,
-        right: Box<'arena, Expr<'arena>>,
-        right_ty: TypeRef,
-    },
-
-    Declare {
-        ident: Ident,
-        ty: TypeRef,
-        expr: Box<'arena, Expr<'arena>>,
-    },
-    Assign {
-        ident: Ident,
-        expr: Box<'arena, Expr<'arena>>,
-    },
-
-    Match {
-        scrutinee: Box<'arena, Expr<'arena>>,
-        arms: Vec<'arena, (Pattern<'arena>, Expr<'arena>)>,
-    },
-
-    Closure {
-        func: FuncRef,
-        captures: Option<HashMap<'arena, Ident, TypeRef>>,
-    },
-
-    Intrinsic {
-        intrinsic: Intrinsic,
-        value: Box<'arena, Expr<'arena>>,
-        value_ty: TypeRef,
-    },
-
+    Block(ExprBlock<'arena>),
+    Tuple(ExprTuple<'arena>),
+    Constructor(ExprConstructor<'arena>),
+    Array(ExprArray<'arena>),
+    Get(ExprGet<'arena>),
+    Set(ExprSet<'arena>),
+    Call(ExprCall<'arena>),
+    ContApplication(ExprContApplication<'arena>),
+    Unary(ExprUnary<'arena>),
+    Binary(ExprBinary<'arena>),
+    Declare(ExprDeclare<'arena>),
+    Assign(ExprAssign<'arena>),
+    Match(ExprMatch<'arena>),
+    Closure(ExprClosure<'arena>),
+    Intrinsic(ExprIntrinsic<'arena>),
     Unreachable,
+}
+
+#[derive(Debug)]
+pub struct ExprBlock<'arena> {
+    pub exprs: Vec<'arena, Expr<'arena>>,
+    pub ty: TypeRef,
+}
+
+#[derive(Debug)]
+pub struct ExprTuple<'arena> {
+    pub exprs: Vec<'arena, Expr<'arena>>,
+    pub ty: TypeRef,
+}
+
+#[derive(Debug)]
+pub struct ExprConstructor<'arena> {
+    pub ty: TypeRef,
+    pub index: Option<usize>,
+    pub fields: Vec<'arena, Expr<'arena>>,
+}
+
+#[derive(Debug)]
+pub struct ExprArray<'arena> {
+    pub exprs: Vec<'arena, Expr<'arena>>,
+    pub ty: TypeRef,
+}
+
+#[derive(Debug)]
+pub struct ExprGet<'arena> {
+    pub object: Box<'arena, Expr<'arena>>,
+    pub object_ty: TypeRef,
+    pub field: usize,
+}
+
+#[derive(Debug)]
+pub struct ExprSet<'arena> {
+    pub object: Box<'arena, Expr<'arena>>,
+    pub object_ty: TypeRef,
+    pub field: usize,
+    pub value: Box<'arena, Expr<'arena>>,
+    pub value_ty: TypeRef,
+}
+
+#[derive(Debug)]
+pub struct ExprCall<'arena> {
+    pub callee: Box<'arena, Expr<'arena>>,
+    pub callee_ty: TypeRef,
+    pub args: Vec<'arena, Expr<'arena>>,
+}
+
+#[derive(Debug)]
+pub struct ExprContApplication<'arena> {
+    pub callee: Box<'arena, Expr<'arena>>,
+    pub callee_ty: TypeRef,
+    pub continuations: HashMap<'arena, Ident, Expr<'arena>>,
+}
+
+#[derive(Debug)]
+pub struct ExprUnary<'arena> {
+    pub op: UnaryOp,
+    pub right: Box<'arena, Expr<'arena>>,
+    pub right_ty: TypeRef,
+}
+
+#[derive(Debug)]
+pub struct ExprBinary<'arena> {
+    pub left: Box<'arena, Expr<'arena>>,
+    pub left_ty: TypeRef,
+    pub op: BinaryOp,
+    pub right: Box<'arena, Expr<'arena>>,
+    pub right_ty: TypeRef,
+}
+
+#[derive(Debug)]
+pub struct ExprDeclare<'arena> {
+    pub ident: Ident,
+    pub ty: TypeRef,
+    pub expr: Box<'arena, Expr<'arena>>,
+}
+
+#[derive(Debug)]
+pub struct ExprAssign<'arena> {
+    pub ident: Ident,
+    pub expr: Box<'arena, Expr<'arena>>,
+}
+
+#[derive(Debug)]
+pub struct ExprMatch<'arena> {
+    pub scrutinee: Box<'arena, Expr<'arena>>,
+    pub arms: Vec<'arena, (Pattern<'arena>, Expr<'arena>)>,
+}
+
+#[derive(Debug)]
+pub struct ExprClosure<'arena> {
+    pub func: FuncRef,
+    pub captures: Option<HashMap<'arena, Ident, TypeRef>>,
+}
+
+#[derive(Debug)]
+pub struct ExprIntrinsic<'arena> {
+    pub intrinsic: Intrinsic,
+    pub value: Box<'arena, Expr<'arena>>,
+    pub value_ty: TypeRef,
 }
 
 #[derive(Debug, PartialEq, Eq)]
