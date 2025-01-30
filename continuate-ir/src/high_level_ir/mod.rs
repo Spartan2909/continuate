@@ -1,7 +1,6 @@
 mod typeck;
 pub use typeck::typeck;
 
-use crate::bimap::BiMap;
 use crate::common::BinaryOp;
 use crate::common::FuncRef;
 use crate::common::Ident;
@@ -11,9 +10,6 @@ use crate::common::TypeRef;
 use crate::common::UnaryOp;
 use crate::lib_std;
 use crate::lib_std::StdLib;
-use crate::try_collect_into;
-use crate::HashMap;
-use crate::Vec;
 
 use std::hash;
 
@@ -21,7 +17,11 @@ use bumpalo::Bump;
 
 use continuate_error::Result;
 
+use continuate_utils::bimap::BiMap;
+use continuate_utils::try_collect_into;
 use continuate_utils::Box;
+use continuate_utils::HashMap;
+use continuate_utils::Vec;
 
 use itertools::Itertools as _;
 
@@ -92,6 +92,7 @@ pub struct ExprConstructor<'arena> {
 pub struct ExprArray<'arena> {
     pub exprs: Vec<'arena, Expr<'arena>>,
     pub ty: TypeRef,
+    pub element_ty: TypeRef,
 }
 
 #[derive(Debug)]
@@ -156,6 +157,8 @@ pub struct ExprAssign<'arena> {
 #[derive(Debug)]
 pub struct ExprMatch<'arena> {
     pub scrutinee: Box<'arena, Expr<'arena>>,
+    pub scrutinee_ty: TypeRef,
+    pub ty: TypeRef,
     pub arms: Vec<'arena, (Pattern<'arena>, Expr<'arena>)>,
 }
 

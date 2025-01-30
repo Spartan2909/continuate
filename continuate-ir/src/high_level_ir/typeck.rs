@@ -1,6 +1,5 @@
 use std::mem;
 
-use crate::collect_into;
 use crate::common::BinaryOp;
 use crate::common::FuncRef;
 use crate::common::Ident;
@@ -31,14 +30,16 @@ use crate::high_level_ir::Program;
 use crate::high_level_ir::Type;
 use crate::high_level_ir::TypeConstructor;
 use crate::high_level_ir::UserDefinedType;
-use crate::try_collect_into;
-use crate::HashMap;
-use crate::HashSet;
-use crate::Vec;
 
 use bumpalo::Bump;
 
 use continuate_error::Result;
+
+use continuate_utils::collect_into;
+use continuate_utils::try_collect_into;
+use continuate_utils::HashMap;
+use continuate_utils::HashSet;
+use continuate_utils::Vec;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)]
@@ -191,11 +192,12 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
                 let ty = ty.unify(acc, self.program, self.arena)?;
                 Result::Ok(*self.program.types.get_by_right(ty).unwrap())
             })?;
-        expr.ty = elem_ty;
-        let ty = self
+        expr.element_ty = elem_ty;
+        expr.ty = self
             .program
-            .insert_type(Type::Array(elem_ty, expr.exprs.len() as u64), self.arena);
-        Ok(ty.0)
+            .insert_type(Type::Array(elem_ty, expr.exprs.len() as u64), self.arena)
+            .0;
+        Ok(expr.ty)
     }
 
     fn expr_get(&mut self, expr: &mut ExprGet<'arena>) -> Result<TypeRef> {
@@ -419,6 +421,7 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
 
     fn expr_match(&mut self, expr: &mut ExprMatch<'arena>) -> Result<TypeRef> {
         let expr_ty = self.expr(&mut expr.scrutinee)?;
+        expr.scrutinee_ty = expr_ty;
         let mut exhaustive = Exhaustive::Exhaustive;
         let mut output_ty = self.program.insert_type(Type::Unknown, self.arena).1;
         for (pat, expr) in &mut expr.arms {
@@ -427,7 +430,8 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
             let expr_ty = self.program.types.get_by_left(&expr_ty).unwrap();
             output_ty = expr_ty.unify(output_ty, self.program, self.arena)?;
         }
-        Ok(*self.program.types.get_by_right(output_ty).unwrap())
+        expr.ty = *self.program.types.get_by_right(output_ty).unwrap();
+        Ok(expr.ty)
     }
 
     fn expr_closure(&mut self, expr: &mut ExprClosure<'arena>) -> TypeRef {

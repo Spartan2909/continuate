@@ -7,7 +7,6 @@ use std::process::Stdio;
 
 use bumpalo::Bump;
 
-use continuate_ir::collect_into;
 use continuate_ir::common::BinaryOp;
 use continuate_ir::common::Literal;
 use continuate_ir::high_level_ir::typeck;
@@ -20,7 +19,9 @@ use continuate_ir::high_level_ir::Function;
 use continuate_ir::high_level_ir::Program;
 use continuate_ir::high_level_ir::Type;
 use continuate_ir::mid_level_ir;
-use continuate_ir::HashMap;
+
+use continuate_utils::collect_into;
+use continuate_utils::HashMap;
 
 use tracing_subscriber::filter::LevelFilter;
 

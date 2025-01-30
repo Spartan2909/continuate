@@ -1,8 +1,6 @@
 mod lowering;
 pub use lowering::lower;
 
-use crate::bimap::BiMap;
-use crate::collect_into;
 use crate::common::BinaryOp;
 use crate::common::FuncRef;
 use crate::common::Ident;
@@ -12,16 +10,19 @@ use crate::common::TypeRef;
 use crate::common::UnaryOp;
 use crate::high_level_ir::Program as HirProgram;
 use crate::lib_std::StdLib;
-use crate::try_collect_into;
-use crate::HashMap;
-use crate::Vec;
 
 use std::fmt;
 use std::hash;
 
+use bumpalo::Bump;
+
 use continuate_error::Error;
 
-use bumpalo::Bump;
+use continuate_utils::bimap::BiMap;
+use continuate_utils::collect_into;
+use continuate_utils::try_collect_into;
+use continuate_utils::HashMap;
+use continuate_utils::Vec;
 
 use itertools::Itertools as _;
 

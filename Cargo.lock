@@ -205,6 +205,7 @@ name = "continuate-utils"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "hashbrown 0.15.2",
 ]
 
 [[package]]

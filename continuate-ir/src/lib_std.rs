@@ -11,12 +11,12 @@ use crate::high_level_ir::Program;
 use crate::high_level_ir::Type;
 use crate::high_level_ir::TypeConstructor;
 use crate::high_level_ir::UserDefinedType;
-use crate::HashMap;
-use crate::Vec;
 
 use bumpalo::Bump;
 
 use continuate_utils::Box;
+use continuate_utils::HashMap;
+use continuate_utils::Vec;
 
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]

@@ -8,8 +8,6 @@ use crate::mid_level_ir::BlockId;
 use crate::mid_level_ir::Expr;
 use crate::mid_level_ir::Function;
 use crate::mid_level_ir::Program;
-use crate::HashMap;
-use crate::Vec;
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
@@ -18,6 +16,9 @@ use std::ops;
 use std::rc::Rc;
 
 use bumpalo::Bump;
+
+use continuate_utils::HashMap;
+use continuate_utils::Vec;
 
 #[derive(Debug, PartialEq)]
 pub enum Value<'arena> {
