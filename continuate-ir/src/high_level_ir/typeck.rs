@@ -123,8 +123,8 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
             .ok_or_else(|| format!("cannot find {ident:?}").into())
     }
 
-    fn expr_block(&mut self, expr: &mut ExprBlock<'arena>) -> Result<TypeRef> {
-        let Some((tail, block)) = expr.exprs.split_last_mut() else {
+    fn block(&mut self, exprs: &mut [Expr<'arena>], ty: TypeRef) -> Result<TypeRef> {
+        let Some((tail, block)) = exprs.split_last_mut() else {
             return Ok(self
                 .program
                 .insert_type(Type::Tuple(Vec::new_in(self.arena)), self.arena)
@@ -137,9 +137,14 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
 
         let block_ty_ref = self.expr(tail)?;
         let block_ty = self.program.types.get_by_left(&block_ty_ref).unwrap();
-        let ty = self.program.types.get_by_left(&expr.ty).unwrap();
+        let ty = self.program.types.get_by_left(&ty).unwrap();
         let unified = block_ty.unify(ty, self.program, self.arena)?;
         Ok(*self.program.types.get_by_right(unified).unwrap())
+    }
+
+    fn expr_block(&mut self, expr: &mut ExprBlock<'arena>) -> Result<TypeRef> {
+        expr.ty = self.block(&mut expr.exprs, expr.ty)?;
+        Ok(expr.ty)
     }
 
     fn expr_tuple(&mut self, expr: &mut ExprTuple<'arena>) -> Result<TypeRef> {
@@ -147,8 +152,8 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
         let result_ty = self.program.insert_type(Type::Tuple(types), self.arena).1;
         let ty = self.program.types.get_by_left(&expr.ty).unwrap();
         let result_ty = result_ty.unify(ty, self.program, self.arena)?;
-
-        Ok(*self.program.types.get_by_right(result_ty).unwrap())
+        expr.ty = *self.program.types.get_by_right(result_ty).unwrap();
+        Ok(expr.ty)
     }
 
     fn expr_constructor(&mut self, expr: &mut ExprConstructor<'arena>) -> Result<TypeRef> {
@@ -503,9 +508,8 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
             self.environment.insert(param, ty);
         }
 
-        for expr in &mut function.body {
-            self.expr(expr)?;
-        }
+        let ty_none = self.program.insert_type(Type::None, self.arena).0;
+        self.block(&mut function.body, ty_none)?;
 
         Ok(())
     }
