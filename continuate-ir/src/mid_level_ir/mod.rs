@@ -16,11 +16,8 @@ use std::hash;
 
 use bumpalo::Bump;
 
-use continuate_error::Error;
-
 use continuate_utils::bimap::BiMap;
 use continuate_utils::collect_into;
-use continuate_utils::try_collect_into;
 use continuate_utils::HashMap;
 use continuate_utils::Vec;
 
@@ -166,97 +163,6 @@ impl<'arena> Type<'arena> {
         }
     }
 
-    /// Ensure that `self` fits in `other`.
-    pub(crate) fn unify(
-        &'arena self,
-        other: &'arena Type,
-        program: &mut Program<'arena>,
-        arena: &'arena Bump,
-    ) -> Result<&'arena Type<'arena>, Error> {
-        if self == other {
-            return Ok(self);
-        }
-
-        match (self, other) {
-            (Type::Array(ty_1, len_1), Type::Array(ty_2, len_2)) if len_1 == len_2 => {
-                let ty_1 = *program.types.get_by_left(ty_1).unwrap();
-                let ty_2 = *program.types.get_by_left(ty_2).unwrap();
-                let ty = ty_1.unify(ty_2, program, arena)?;
-                Ok(program
-                    .insert_type(
-                        Type::Array(*program.types.get_by_right(ty).unwrap(), *len_1),
-                        arena,
-                    )
-                    .1)
-            }
-            (Type::Tuple(t1), Type::Tuple(t2)) if t1.len() == t2.len() => {
-                let types: Result<_, _> = try_collect_into(
-                    t1.iter()
-                        .zip(t2.iter())
-                        .map(|(ty_1, ty_2)| -> Result<TypeRef, Error> {
-                            let ty_1 = *program.types.get_by_left(ty_1).unwrap();
-                            let ty_2 = *program.types.get_by_left(ty_2).unwrap();
-                            let ty = ty_1.unify(ty_2, program, arena)?;
-                            Ok(*program.types.get_by_right(ty).unwrap())
-                        }),
-                    Vec::new_in(arena),
-                );
-                Ok(program.insert_type(Type::Tuple(types?), arena).1)
-            }
-            (
-                Type::Function(FunctionTy {
-                    params: params_1,
-                    continuations: continuations_1,
-                }),
-                Type::Function(FunctionTy {
-                    params: params_2,
-                    continuations: continuations_2,
-                }),
-            ) if params_1.len() == params_2.len() => {
-                let params: Result<_, _> = try_collect_into(
-                    params_1.iter().zip(params_2.iter()).map(
-                        |(ty_1, ty_2)| -> Result<TypeRef, Error> {
-                            let ty_1 = *program.types.get_by_left(ty_1).unwrap();
-                            let ty_2 = *program.types.get_by_left(ty_2).unwrap();
-                            let ty = ty_1.unify(ty_2, program, arena)?;
-                            Ok(*program.types.get_by_right(ty).unwrap())
-                        },
-                    ),
-                    Vec::new_in(arena),
-                );
-
-                let continuations: Result<_, Error> = try_collect_into(
-                    continuations_1
-                        .iter()
-                        .sorted_unstable_by_key(|(ident, _)| ident.0)
-                        .zip(
-                            continuations_2
-                                .iter()
-                                .sorted_unstable_by_key(|(ident, _)| ident.0),
-                        )
-                        .map(|((&ident_1, ty_1), (&ident_2, ty_2))| {
-                            if ident_1 != ident_2 {
-                                Err("mismatched continuation")?;
-                            }
-
-                            let ty_1 = *program.types.get_by_left(ty_1).unwrap();
-                            let ty_2 = *program.types.get_by_left(ty_2).unwrap();
-                            let ty = ty_1.unify(ty_2, program, arena)?;
-                            Ok((ident_1, *program.types.get_by_right(ty).unwrap()))
-                        }),
-                    HashMap::new_in(arena),
-                );
-
-                let ty = Type::function(params?, continuations?);
-                Ok(program.insert_type(ty, arena).1)
-            }
-            (Type::UserDefined(u1), Type::UserDefined(u2)) if u1 == u2 => Ok(self),
-            (Type::Unknown | Type::None, _) => Ok(other),
-            (_, Type::Unknown) => Ok(self),
-            _ => Err(format!("expected {other:?}, found {self:?}").into()),
-        }
-    }
-
     pub(crate) fn field(&self, variant: Option<usize>, field: usize) -> Option<TypeRef> {
         let user_defined = self.as_user_defined()?;
         match (variant, &user_defined.constructor) {
@@ -266,10 +172,6 @@ impl<'arena> Type<'arena> {
             }
             _ => None,
         }
-    }
-
-    pub(crate) fn variants(&self) -> Option<usize> {
-        Some(self.as_user_defined()?.constructor.as_sum()?.len())
     }
 }
 

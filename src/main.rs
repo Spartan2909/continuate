@@ -153,7 +153,7 @@ fn main() {
 
     let mir_arena = Bump::new();
 
-    let mir_program = mid_level_ir::lower(&program, &mir_arena).unwrap();
+    let mir_program = mid_level_ir::lower(&program, &mir_arena);
 
     drop(program);
     drop(hir_arena);
