@@ -16,6 +16,7 @@ use ariadne::Label;
 use ariadne::Report;
 use ariadne::ReportKind;
 
+use chumsky::error::RichPattern;
 use chumsky::input::Input;
 use chumsky::label;
 use chumsky::span;
@@ -161,7 +162,7 @@ impl ariadne::Cache<SourceId> for &SourceCache {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Span {
     start: usize,
-    end: usize,
+    len: u32,
     source: SourceId,
 }
 
@@ -170,60 +171,69 @@ impl Span {
     pub const fn dummy() -> Span {
         Span {
             start: 0,
-            end: 0,
+            len: 0,
             source: SourceId::DUMMY,
         }
     }
 
     /// ## Panics
     ///
-    /// Panics if `start` or `end` exceed `u32::MAX`.
+    /// Panics if `end > start` or if `end - start > u32::MAX`.
     pub const fn new(start: usize, end: usize, source: SourceId) -> Span {
-        Span { start, end, source }
+        let len = end.checked_sub(start).unwrap();
+        assert!(len <= u32::MAX as usize, "span length too long");
+
+        Span {
+            start,
+            len: len as u32,
+            source,
+        }
     }
 
-    const fn is_dummy(self) -> bool {
+    const fn is_dummy(&self) -> bool {
         self.source.as_usize() == SourceId::DUMMY.as_usize()
     }
 
-    pub fn contains_span(self, other: Span) -> bool {
-        self.source == other.source && self.start <= other.start && self.end >= other.end
+    pub fn contains_span(&self, other: &Span) -> bool {
+        let self_end = self.start + self.len as usize;
+        let other_end = other.start + other.len as usize;
+        self.source == other.source && self.start <= other.start && self_end >= other_end
     }
 
     #[must_use = "This method returns a new span without modifying the original one"]
-    pub const fn first_n(self, n: usize) -> Span {
+    pub const fn first_n(&self, n: usize) -> Span {
         Span {
             start: self.start,
-            end: self.start + n,
+            len: n as u32,
             source: self.source,
         }
     }
 
     #[must_use = "This method returns a new span without modifying the original one"]
-    pub const fn last_n(self, n: usize) -> Span {
+    pub const fn last_n(&self, n: usize) -> Span {
         Span {
-            start: self.end - n,
-            end: self.end,
+            start: self.start + self.len as usize - n,
+            len: n as u32,
             source: self.source,
         }
     }
 
     #[inline]
-    pub const fn range(self) -> Range<usize> {
+    pub const fn range(&self) -> Range<usize> {
         Range {
             start: self.start,
-            end: self.end,
+            end: self.start + self.len as usize,
         }
     }
 
     #[inline]
-    pub const fn len(self) -> usize {
-        self.end - self.start
+    pub const fn len(&self) -> usize {
+        self.len as usize
     }
 
     #[inline]
-    pub const fn is_empty(self) -> bool {
-        self.start == self.end
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
     }
 
     pub fn union(self, other: Span) -> Option<Span> {
@@ -232,9 +242,13 @@ impl Span {
         } else if other.is_dummy() {
             Some(self)
         } else if self.source == other.source {
+            let self_end = self.start + self.len as usize;
+            let other_end = other.start + other.len as usize;
+            let end = self_end.max(other_end);
+            let start = self.start.min(other.start);
             Some(Span {
-                start: self.start.min(other.start),
-                end: self.end.min(other.end),
+                start,
+                len: (end - start) as u32,
                 source: self.source,
             })
         } else {
@@ -250,7 +264,7 @@ impl span::Span for Span {
     fn new(context: SourceId, range: Range<usize>) -> Self {
         Span {
             start: range.start,
-            end: range.end,
+            len: (range.end - range.start) as u32,
             source: context,
         }
     }
@@ -264,7 +278,7 @@ impl span::Span for Span {
     }
 
     fn end(&self) -> Self::Offset {
-        self.end
+        self.start + self.len as usize
     }
 
     fn union(&self, other: Self) -> Self {
@@ -284,7 +298,11 @@ impl ariadne::Span for Span {
     }
 
     fn end(&self) -> usize {
-        self.end
+        self.start + self.len as usize
+    }
+
+    fn len(&self) -> usize {
+        self.len as usize
     }
 }
 
@@ -573,9 +591,25 @@ impl Default for Error {
 impl<'a, I> chumsky::error::Error<'a, I> for Error
 where
     I: Input<'a, Span = Span>,
-    I::Token: ToString,
+    I::Token: fmt::Display,
 {
-    fn expected_found<E: IntoIterator<Item = Option<MaybeRef<'a, I::Token>>>>(
+    fn merge(mut self, mut other: Self) -> Self {
+        self.errors.append(&mut other.errors);
+        self
+    }
+}
+
+fn to_string_as_pattern<'a, T: fmt::Display + 'a, L: Into<RichPattern<'a, T>>>(token: L) -> String {
+    Into::<RichPattern<'a, T>>::into(token).to_string()
+}
+
+impl<'a, 'b, I, L> label::LabelError<'a, I, L> for Error
+where
+    I: Input<'a, Span = Span>,
+    I::Token: fmt::Display + 'b,
+    L: Into<RichPattern<'b, I::Token>>,
+{
+    fn expected_found<E: IntoIterator<Item = L>>(
         expected: E,
         found: Option<MaybeRef<'a, I::Token>>,
         span: I::Span,
@@ -583,25 +617,14 @@ where
         Self::unexpected_token(
             expected
                 .into_iter()
-                .map(|token| token.map(|token| (*token).to_string())),
+                .map(|token| Some(to_string_as_pattern(token))),
             found.map(|token| (*token).to_string()),
             span,
         )
     }
 
-    fn merge(mut self, mut other: Self) -> Self {
-        self.errors.append(&mut other.errors);
-        self
-    }
-}
-
-impl<'a, I, L> label::LabelError<'a, I, L> for Error
-where
-    I: Input<'a, Span = Span>,
-    I::Token: ToString,
-    L: ToString,
-{
     fn label_with(&mut self, label: L) {
+        let label = to_string_as_pattern(label);
         for error in &mut self.errors {
             if let ErrorInner::UnexpectedToken {
                 ref mut expected,
@@ -610,10 +633,10 @@ where
             } = error.inner
             {
                 expected.clear();
-                expected.insert(Some(label.to_string()));
+                expected.insert(Some(label.clone()));
             } else {
                 error.inner = ErrorInner::UnexpectedToken {
-                    expected: iter::once(Some(label.to_string())).collect(),
+                    expected: iter::once(Some(label.clone())).collect(),
                     found: error.inner.take_found(),
                     span: error.inner.span().unwrap_or_else(Span::dummy),
                 }

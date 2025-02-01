@@ -17,8 +17,12 @@ use continuate_error::Span;
 
 type ParserExtra = chumsky::extra::Full<Error, (), ()>;
 
-type ParserInput<'tokens, 'src> =
-    chumsky::input::SpannedInput<Token<'src>, Span, &'tokens [(Token<'src>, Span)]>;
+type ParserInput<'tokens, 'src> = chumsky::input::MappedInput<
+    Token<'src>,
+    Span,
+    &'tokens [(Token<'src>, Span)],
+    for<'a> fn(&'a (Token<'src>, Span)) -> (&'a Token<'src>, &'a Span),
+>;
 
 /// Parse a token that matches the given pattern.
 macro_rules! filter_matches {

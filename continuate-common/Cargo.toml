@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-bytemuck = "1.17.0"
+bytemuck = "1.21.0"
 tracing-subscriber = { workspace = true }
 
 [lints]

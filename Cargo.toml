@@ -7,10 +7,10 @@ rust-version.workspace = true
 
 [dependencies]
 bumpalo.workspace = true
-continuate-backend = { version = "0.1.0", path = "./continuate-backend" }
+continuate-backend.workspace = true 
 continuate-common.workspace = true
-continuate-frontend = { version = "0.1.0", path = "./continuate-frontend" }
-continuate-ir = { version = "0.1.0", path = "./continuate-ir" }
+continuate-frontend.workspace = true
+continuate-ir.workspace = true
 continuate-utils.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -36,9 +36,9 @@ license = "MIT OR Apache-2.0"
 rust-version = "1.85"
 
 [workspace.dependencies]
-bumpalo = { version = "3.16.0", features = ["allocator_api"] }
-chumsky = { version = "1.0.0-alpha.7", features = ["label", "nightly"] }
-continate-backend = { version = "0.1.0", path = "./continuate-backend" }
+bumpalo = { version = "3.17.0", default-features = false, features = ["allocator_api"] }
+chumsky = { version = "1.0.0-alpha.8", features = ["nightly"] }
+continuate-backend = { version = "0.1.0", path = "./continuate-backend" }
 continuate-common = { version = "0.1.0", path = "./continuate-common" }
 continuate-error = { version = "0.1.0", path = "./continuate-error" }
 continuate-frontend = { version = "0.1.0", path = "./continuate-frontend" }
@@ -48,7 +48,7 @@ hashbrown = { version = "0.15.2", default-features = false, features = [
     "inline-more",
     "nightly",
 ] }
-itertools = "0.13.0"
+itertools = "0.14.0"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
 
