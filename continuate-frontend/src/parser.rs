@@ -303,7 +303,7 @@ enum CallRhs<'src> {
 }
 
 fn call_rhs<'tokens, 'src>(
-) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, CallRhs<'src>, ParserExtra> + Clone + 'tokens
+) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, CallRhs<'src>, ParserExtra> + Clone
 where
     'src: 'tokens,
 {
@@ -337,7 +337,7 @@ where
 }
 
 fn expr<'tokens, 'src>(
-) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, Expr<'src>, ParserExtra> + Clone + 'tokens
+) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, Expr<'src>, ParserExtra> + Clone
 where
     'src: 'tokens,
 {
