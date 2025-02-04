@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 pub mod lexer;
 pub mod parser;
 
@@ -55,6 +53,20 @@ impl<'src> From<Ident<'src>> for Path<'src> {
             span,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub enum Type<'src> {
+    Path(Path<'src>),
+    Tuple {
+        items: Vec<Type<'src>>,
+        span: Span,
+    },
+    Function {
+        params: Vec<Type<'src>>,
+        continuations: Vec<(Ident<'src>, Type<'src>)>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -156,7 +168,7 @@ pub enum Expr<'src> {
 
     Declare {
         name: Ident<'src>,
-        ty: Option<Path<'src>>,
+        ty: Option<Type<'src>>,
         value: Box<Expr<'src>>,
         span: Span,
     },
@@ -169,16 +181,16 @@ pub enum Expr<'src> {
 #[derive(Debug, Clone)]
 pub struct Function<'src> {
     pub name: Ident<'src>,
-    pub params: Vec<(Ident<'src>, Path<'src>)>,
-    pub continuations: Vec<(Ident<'src>, Path<'src>)>,
+    pub params: Vec<(Ident<'src>, Type<'src>)>,
+    pub continuations: Vec<(Ident<'src>, Type<'src>)>,
     pub body: Vec<Expr<'src>>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub enum UserDefinedTyFields<'src> {
-    Named(Vec<(Ident<'src>, Path<'src>)>),
-    Anonymous(Vec<Path<'src>>),
+    Named(Vec<(Ident<'src>, Type<'src>)>),
+    Anonymous(Vec<Type<'src>>),
     Unit,
 }
 

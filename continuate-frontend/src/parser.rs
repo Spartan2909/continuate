@@ -11,6 +11,7 @@ use crate::PathIdentSegment;
 use crate::PathSegment;
 use crate::Pattern;
 use crate::Program;
+use crate::Type;
 use crate::UnaryOp;
 use crate::UserDefinedTy;
 use crate::UserDefinedTyFields;
@@ -87,6 +88,72 @@ where
             segments,
             span: e.span(),
         })
+}
+
+enum TupleResult<Item> {
+    Tuple { items: Vec<Item>, span: Span },
+    Single(Item),
+}
+
+fn tuple<'tokens, 'src, Item>(
+    item: impl Parser<'tokens, ParserInput<'tokens, 'src>, Item, ParserExtra> + Clone,
+) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, TupleResult<Item>, ParserExtra> + Clone
+where
+    'src: 'tokens,
+{
+    item.clone()
+        .then_ignore(filter_matches!(Token::Comma(_)))
+        .repeated()
+        .collect::<Vec<_>>()
+        .then(item.or_not())
+        .delimited_by(just(Token::OpenParen), just(Token::CloseParen))
+        .map_with(|(mut items, trailing), e| {
+            if let Some(trailing) = trailing {
+                if items.is_empty() {
+                    // Single item, no trailing comma, so not a tuple
+                    return TupleResult::Single(trailing);
+                }
+
+                items.push(trailing);
+            }
+            TupleResult::Tuple {
+                items,
+                span: e.span(),
+            }
+        })
+}
+
+fn ty<'tokens, 'src>(
+) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, Type<'src>, ParserExtra> + Clone
+where
+    'src: 'tokens,
+{
+    recursive(|ty| {
+        path()
+            .map(Type::Path)
+            .or(tuple(ty.clone()).map(|result| match result {
+                TupleResult::Tuple { items, span } => Type::Tuple { items, span },
+                TupleResult::Single(ty) => ty,
+            }))
+            .or(just(Token::Fn)
+                .ignore_then(
+                    items(ty.clone()).delimited_by(just(Token::OpenParen), just(Token::CloseParen)),
+                )
+                .then(
+                    items(
+                        ident()
+                            .then_ignore(filter_matches!(Token::Colon(_)))
+                            .then(ty),
+                    )
+                    .delimited_by(just(Token::OpenBracket), just(Token::CloseBracket))
+                    .or_not(),
+                )
+                .map_with(|(params, continuations), e| Type::Function {
+                    params,
+                    continuations: continuations.unwrap_or(vec![]),
+                    span: e.span(),
+                }))
+    })
 }
 
 fn named_constructor_elements<'tokens, 'src, Elem>(
@@ -201,26 +268,6 @@ where
             span: e.span(),
         });
 
-    let tuple = expr()
-        .then_ignore(filter_matches!(Token::Comma(_)))
-        .repeated()
-        .collect::<Vec<_>>()
-        .then(expr().or_not())
-        .delimited_by(just(Token::OpenParen), just(Token::CloseParen))
-        .map_with(|(mut exprs, trailing), e| {
-            if let Some(trailing) = trailing {
-                if exprs.is_empty() {
-                    // Single item, no trailing comma, so not a tuple
-                    return trailing;
-                }
-                exprs.push(trailing);
-            }
-            Expr::Tuple {
-                exprs,
-                span: e.span(),
-            }
-        });
-
     let constructor_or_ident = path()
         .then(
             named_constructor_elements(expr())
@@ -268,7 +315,10 @@ where
     choice((
         literal.map(Expr::Literal),
         array,
-        tuple,
+        tuple(expr()).map(|result| match result {
+            TupleResult::Tuple { items, span } => Expr::Tuple { exprs: items, span },
+            TupleResult::Single(expr) => expr,
+        }),
         constructor_or_ident,
         match_expr,
         block,
@@ -438,11 +488,7 @@ where
 
         assign.or(just(Token::Let)
             .ignore_then(ident())
-            .then(
-                filter_matches!(Token::Colon(_))
-                    .ignore_then(path())
-                    .or_not(),
-            )
+            .then(filter_matches!(Token::Colon(_)).ignore_then(ty()).or_not())
             .then_ignore(operator!(Token::Eq, BinaryOp::Eq))
             .then(expr)
             .map_with(|((name, ty), val), e| Expr::Declare {
@@ -466,7 +512,7 @@ where
             items(
                 ident()
                     .then_ignore(filter_matches!(Token::Colon(_)))
-                    .then(path()),
+                    .then(ty()),
             )
             .delimited_by(just(Token::OpenParen), just(Token::CloseParen)),
         )
@@ -474,7 +520,7 @@ where
             items(
                 ident()
                     .then_ignore(filter_matches!(Token::Colon(_)))
-                    .then(path()),
+                    .then(ty()),
             )
             .delimited_by(just(Token::OpenBracket), just(Token::CloseBracket)),
         )
@@ -507,11 +553,11 @@ where
             items(
                 ident()
                     .then_ignore(filter_matches!(Token::Colon(_)))
-                    .then(path()),
+                    .then(ty()),
             )
             .delimited_by(just(Token::OpenBrace), just(Token::CloseBrace))
             .map(UserDefinedTyFields::Named)
-            .or(items(path())
+            .or(items(ty())
                 .delimited_by(just(Token::OpenParen), just(Token::CloseParen))
                 .map(UserDefinedTyFields::Anonymous))
             .or_not(),
@@ -539,7 +585,8 @@ fn user_defined_ty<'tokens, 'src>(
 where
     'src: 'tokens,
 {
-    product_ty()
+    just(Token::Struct)
+        .ignore_then(product_ty())
         .map_with(|(name, fields), e| UserDefinedTy::Product {
             name,
             fields,
