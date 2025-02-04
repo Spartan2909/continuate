@@ -44,6 +44,8 @@ pub enum Token<'src> {
     #[token("\n")]
     Newline,
 
+    #[token("enum")]
+    Enum,
     #[token("fn")]
     Fn,
     #[token("if")]
@@ -54,10 +56,10 @@ pub enum Token<'src> {
     Match,
     #[token("package")]
     Package,
+    #[token("struct")]
+    Struct,
     #[token("super")]
     Super,
-    #[token("type")]
-    Type,
 
     #[regex(r"([a-zA-Z]\w*|[a-zA-Z_]\w+)")]
     Ident(&'src str),
@@ -123,13 +125,14 @@ impl fmt::Display for Token<'_> {
 
             Token::Newline => f.write_str("\n"),
 
+            Token::Enum => f.write_str("enum"),
             Token::Fn => f.write_str("fn"),
             Token::If => f.write_str("if"),
             Token::Let => f.write_str("let"),
             Token::Match => f.write_str("match"),
             Token::Package => f.write_str("package"),
+            Token::Struct => f.write_str("struct"),
             Token::Super => f.write_str("super"),
-            Token::Type => f.write_str("type"),
 
             Token::Ident(ident) => f.write_str(ident),
 

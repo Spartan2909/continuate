@@ -156,7 +156,7 @@ pub enum Expr<'src> {
 
     Declare {
         name: Ident<'src>,
-        ty: Path<'src>,
+        ty: Option<Path<'src>>,
         value: Box<Expr<'src>>,
         span: Span,
     },
@@ -164,4 +164,45 @@ pub enum Expr<'src> {
         name: Ident<'src>,
         value: Box<Expr<'src>>,
     },
+}
+
+#[derive(Debug, Clone)]
+pub struct Function<'src> {
+    pub name: Ident<'src>,
+    pub params: Vec<(Ident<'src>, Path<'src>)>,
+    pub continuations: Vec<(Ident<'src>, Path<'src>)>,
+    pub body: Vec<Expr<'src>>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum UserDefinedTyFields<'src> {
+    Named(Vec<(Ident<'src>, Path<'src>)>),
+    Anonymous(Vec<Path<'src>>),
+    Unit,
+}
+
+#[derive(Debug, Clone)]
+pub enum UserDefinedTy<'src> {
+    Product {
+        name: Ident<'src>,
+        fields: UserDefinedTyFields<'src>,
+        span: Span,
+    },
+    Sum {
+        name: Ident<'src>,
+        variants: Vec<(Ident<'src>, UserDefinedTyFields<'src>)>,
+        span: Span,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum Item<'src> {
+    Function(Function<'src>),
+    UserDefinedTy(UserDefinedTy<'src>),
+}
+
+#[derive(Debug, Clone)]
+pub struct Program<'src> {
+    pub items: Vec<Item<'src>>,
 }

@@ -2,13 +2,18 @@ use crate::lexer::Spacing;
 use crate::lexer::Token;
 use crate::BinaryOp;
 use crate::Expr;
+use crate::Function;
 use crate::Ident;
+use crate::Item;
 use crate::Literal;
 use crate::Path;
 use crate::PathIdentSegment;
 use crate::PathSegment;
 use crate::Pattern;
+use crate::Program;
 use crate::UnaryOp;
+use crate::UserDefinedTy;
+use crate::UserDefinedTyFields;
 
 use chumsky::prelude::*;
 
@@ -189,18 +194,6 @@ where
     }
     .labelled("literal");
 
-    let let_expr = just(Token::Let)
-        .ignore_then(ident())
-        .then_ignore(filter_matches!(Token::Colon(_)))
-        .then(path())
-        .then(expr())
-        .map_with(|((name, ty), val), e| Expr::Declare {
-            name,
-            ty,
-            value: Box::new(val),
-            span: e.span(),
-        });
-
     let array = items(expr())
         .delimited_by(just(Token::OpenBracket), just(Token::CloseBracket))
         .map_with(|exprs, e| Expr::Array {
@@ -274,7 +267,6 @@ where
 
     choice((
         literal.map(Expr::Literal),
-        let_expr,
         array,
         tuple,
         constructor_or_ident,
@@ -336,40 +328,46 @@ where
     choice((get_or_set, call, cont_application))
 }
 
+fn call<'tokens, 'src>(
+) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, Expr<'src>, ParserExtra> + Clone
+where
+    'src: 'tokens,
+{
+    atom().foldl(call_rhs().repeated(), |object, rhs| match rhs {
+        CallRhs::Get { field } => Expr::Get {
+            object: Box::new(object),
+            field,
+        },
+        CallRhs::Set { field, value } => Expr::Set {
+            object: Box::new(object),
+            field,
+            value: Box::new(value),
+        },
+        CallRhs::Call {
+            arguments,
+            paren_span,
+        } => Expr::Call {
+            callee: Box::new(object),
+            arguments,
+            paren_span,
+        },
+        CallRhs::ContApplication {
+            arguments,
+            bracket_span,
+        } => Expr::ContApplication {
+            callee: Box::new(object),
+            arguments,
+            bracket_span,
+        },
+    })
+}
+
 fn expr<'tokens, 'src>(
 ) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, Expr<'src>, ParserExtra> + Clone
 where
     'src: 'tokens,
 {
     recursive(|expr| {
-        let call = atom().foldl(call_rhs().repeated(), |object, rhs| match rhs {
-            CallRhs::Get { field } => Expr::Get {
-                object: Box::new(object),
-                field,
-            },
-            CallRhs::Set { field, value } => Expr::Set {
-                object: Box::new(object),
-                field,
-                value: Box::new(value),
-            },
-            CallRhs::Call {
-                arguments,
-                paren_span,
-            } => Expr::Call {
-                callee: Box::new(object),
-                arguments,
-                paren_span,
-            },
-            CallRhs::ContApplication {
-                arguments,
-                bracket_span,
-            } => Expr::ContApplication {
-                callee: Box::new(object),
-                arguments,
-                bracket_span,
-            },
-        });
-
         let unary = recursive(|unary| {
             operator!(Token::Dash, UnaryOp::Neg)
                 .or(operator!(Token::Bang, UnaryOp::Not))
@@ -378,7 +376,7 @@ where
                     operator,
                     operand: Box::new(operand),
                 })
-                .or(call)
+                .or(call())
         });
 
         let factor = unary.clone().foldl(
@@ -430,13 +428,132 @@ where
                 }
             });
 
-        comparison.or(ident()
+        let assign = comparison.or(ident()
             .then_ignore(filter_matches!(Token::Eq(_)))
-            .then(expr)
+            .then(expr.clone())
             .map(|(name, value)| Expr::Assign {
                 name,
                 value: Box::new(value),
+            }));
+
+        assign.or(just(Token::Let)
+            .ignore_then(ident())
+            .then(
+                filter_matches!(Token::Colon(_))
+                    .ignore_then(path())
+                    .or_not(),
+            )
+            .then_ignore(operator!(Token::Eq, BinaryOp::Eq))
+            .then(expr)
+            .map_with(|((name, ty), val), e| Expr::Declare {
+                name,
+                ty,
+                value: Box::new(val),
+                span: e.span(),
             }))
     })
     .labelled("expression")
+}
+
+fn function<'tokens, 'src>(
+) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, Function<'src>, ParserExtra> + Clone
+where
+    'src: 'tokens,
+{
+    just(Token::Fn)
+        .ignore_then(ident())
+        .then(
+            items(
+                ident()
+                    .then_ignore(filter_matches!(Token::Colon(_)))
+                    .then(path()),
+            )
+            .delimited_by(just(Token::OpenParen), just(Token::CloseParen)),
+        )
+        .then(
+            items(
+                ident()
+                    .then_ignore(filter_matches!(Token::Colon(_)))
+                    .then(path()),
+            )
+            .delimited_by(just(Token::OpenBracket), just(Token::CloseBracket)),
+        )
+        .then(block().map(|(mut body, tail, _)| {
+            if let Some(tail) = tail {
+                body.push(tail);
+            }
+            body
+        }))
+        .map_with(|(((name, params), continuations), body), e| Function {
+            name,
+            params,
+            continuations,
+            body,
+            span: e.span(),
+        })
+}
+
+fn product_ty<'tokens, 'src>() -> impl Parser<
+    'tokens,
+    ParserInput<'tokens, 'src>,
+    (Ident<'src>, UserDefinedTyFields<'src>),
+    ParserExtra,
+> + Clone
+where
+    'src: 'tokens,
+{
+    ident()
+        .then(
+            items(
+                ident()
+                    .then_ignore(filter_matches!(Token::Colon(_)))
+                    .then(path()),
+            )
+            .delimited_by(just(Token::OpenBrace), just(Token::CloseBrace))
+            .map(UserDefinedTyFields::Named)
+            .or(items(path())
+                .delimited_by(just(Token::OpenParen), just(Token::CloseParen))
+                .map(UserDefinedTyFields::Anonymous))
+            .or_not(),
+        )
+        .map(|(name, fields)| (name, fields.unwrap_or(UserDefinedTyFields::Unit)))
+}
+
+fn sum_ty<'tokens, 'src>(
+) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, UserDefinedTy<'src>, ParserExtra> + Clone
+where
+    'src: 'tokens,
+{
+    just(Token::Enum)
+        .ignore_then(ident())
+        .then(items(product_ty()).delimited_by(just(Token::OpenBrace), just(Token::CloseBrace)))
+        .map_with(|(name, variants), e| UserDefinedTy::Sum {
+            name,
+            variants,
+            span: e.span(),
+        })
+}
+
+fn user_defined_ty<'tokens, 'src>(
+) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, UserDefinedTy<'src>, ParserExtra> + Clone
+where
+    'src: 'tokens,
+{
+    product_ty()
+        .map_with(|(name, fields), e| UserDefinedTy::Product {
+            name,
+            fields,
+            span: e.span(),
+        })
+        .or(sum_ty())
+}
+
+pub fn parse<'src>(input: &[(Token<'src>, Span)], eoi: Span) -> ParseResult<Program<'src>, Error> {
+    function()
+        .map(Item::Function)
+        .or(user_defined_ty().map(Item::UserDefinedTy))
+        .repeated()
+        .collect()
+        .map(|items| Program { items })
+        .parse(Input::map(input, eoi, |(token, span)| (token, span)))
 }
