@@ -54,7 +54,7 @@ impl<'a> Scope<'a> {
 
     fn define_path(&mut self, path: Path<'a>) {
         let span = path.span;
-        self.paths.insert(path, span);
+        assert!(self.paths.insert(path, span).is_none(), "path shadowed");
     }
 }
 
