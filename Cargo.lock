@@ -186,6 +186,7 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "continuate-error",
+ "continuate-frontend",
  "continuate-utils",
  "hashbrown 0.15.2",
  "itertools",

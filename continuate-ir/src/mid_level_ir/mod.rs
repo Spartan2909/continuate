@@ -6,7 +6,6 @@ use crate::common::FuncRef;
 use crate::common::Ident;
 use crate::common::Intrinsic;
 use crate::common::Literal;
-use crate::common::TypeRef;
 use crate::common::UnaryOp;
 use crate::high_level_ir::Program as HirProgram;
 use crate::lib_std::StdLib;
@@ -16,9 +15,9 @@ use std::hash;
 
 use bumpalo::Bump;
 
-use continuate_utils::bimap::BiMap;
 use continuate_utils::collect_into;
 use continuate_utils::HashMap;
+use continuate_utils::HashSet;
 use continuate_utils::Vec;
 
 use itertools::Itertools as _;
@@ -29,29 +28,29 @@ pub enum Expr<'arena> {
     Ident(Ident),
     Function(FuncRef),
     Tuple {
-        ty: TypeRef,
+        ty: &'arena Type<'arena>,
         values: Vec<'arena, Expr<'arena>>,
     },
     Constructor {
-        ty: TypeRef,
+        ty: &'arena Type<'arena>,
         index: Option<usize>,
         fields: Vec<'arena, Expr<'arena>>,
     },
     Array {
-        ty: TypeRef,
+        ty: &'arena Type<'arena>,
         values: Vec<'arena, Expr<'arena>>,
-        value_ty: TypeRef,
+        value_ty: &'arena Type<'arena>,
     },
 
     Get {
         object: &'arena Expr<'arena>,
-        object_ty: TypeRef,
+        object_ty: &'arena Type<'arena>,
         object_variant: Option<usize>,
         field: usize,
     },
     Set {
         object: &'arena Expr<'arena>,
-        object_ty: TypeRef,
+        object_ty: &'arena Type<'arena>,
         object_variant: Option<usize>,
         field: usize,
         value: &'arena Expr<'arena>,
@@ -67,15 +66,15 @@ pub enum Expr<'arena> {
     Unary {
         operator: UnaryOp,
         operand: &'arena Expr<'arena>,
-        operand_ty: TypeRef,
+        operand_ty: &'arena Type<'arena>,
     },
 
     Binary {
         left: &'arena Expr<'arena>,
-        left_ty: TypeRef,
+        left_ty: &'arena Type<'arena>,
         operator: BinaryOp,
         right: &'arena Expr<'arena>,
-        right_ty: TypeRef,
+        right_ty: &'arena Type<'arena>,
     },
 
     Assign {
@@ -92,13 +91,13 @@ pub enum Expr<'arena> {
 
     Closure {
         func_ref: FuncRef,
-        captures: HashMap<'arena, Ident, TypeRef>,
+        captures: HashMap<'arena, Ident, &'arena Type<'arena>>,
     },
 
     Intrinsic {
         intrinsic: Intrinsic,
         value: &'arena Expr<'arena>,
-        value_ty: TypeRef,
+        value_ty: &'arena Type<'arena>,
     },
 
     Unreachable,
@@ -106,8 +105,8 @@ pub enum Expr<'arena> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct FunctionTy<'arena> {
-    pub params: Vec<'arena, TypeRef>,
-    pub continuations: HashMap<'arena, Ident, TypeRef>,
+    pub params: Vec<'arena, &'arena Type<'arena>>,
+    pub continuations: HashMap<'arena, Ident, &'arena Type<'arena>>,
 }
 
 impl hash::Hash for FunctionTy<'_> {
@@ -125,11 +124,12 @@ impl hash::Hash for FunctionTy<'_> {
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum Type<'arena> {
+    Bool,
     Int,
     Float,
     String,
-    Array(TypeRef, u64),
-    Tuple(Vec<'arena, TypeRef>),
+    Array(&'arena Type<'arena>, u64),
+    Tuple(Vec<'arena, &'arena Type<'arena>>),
     Function(FunctionTy<'arena>),
     UserDefined(UserDefinedType<'arena>),
     Unknown,
@@ -138,8 +138,8 @@ pub enum Type<'arena> {
 
 impl<'arena> Type<'arena> {
     pub const fn function(
-        params: Vec<'arena, TypeRef>,
-        continuations: HashMap<'arena, Ident, TypeRef>,
+        params: Vec<'arena, &'arena Type<'arena>>,
+        continuations: HashMap<'arena, Ident, &'arena Type<'arena>>,
     ) -> Type<'arena> {
         Type::Function(FunctionTy {
             params,
@@ -163,7 +163,11 @@ impl<'arena> Type<'arena> {
         }
     }
 
-    pub(crate) fn field(&self, variant: Option<usize>, field: usize) -> Option<TypeRef> {
+    pub(crate) fn field(
+        &'arena self,
+        variant: Option<usize>,
+        field: usize,
+    ) -> Option<&'arena Type<'arena>> {
         let user_defined = self.as_user_defined()?;
         match (variant, &user_defined.constructor) {
             (None, TypeConstructor::Product(fields)) => fields.get(field).copied(),
@@ -182,12 +186,12 @@ pub struct UserDefinedType<'arena> {
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum TypeConstructor<'arena> {
-    Product(Vec<'arena, TypeRef>),
-    Sum(Vec<'arena, Vec<'arena, TypeRef>>),
+    Product(Vec<'arena, &'arena Type<'arena>>),
+    Sum(Vec<'arena, Vec<'arena, &'arena Type<'arena>>>),
 }
 
 impl<'arena> TypeConstructor<'arena> {
-    pub const fn as_sum(&self) -> Option<&Vec<'arena, Vec<'arena, TypeRef>>> {
+    pub const fn as_sum(&self) -> Option<&Vec<'arena, Vec<'arena, &'arena Type<'arena>>>> {
         if let TypeConstructor::Sum(variants) = self {
             Some(variants)
         } else {
@@ -220,11 +224,11 @@ impl<'arena> Block<'arena> {
 
 #[derive(Debug)]
 pub struct Function<'arena> {
-    pub params: Vec<'arena, (Ident, TypeRef)>,
-    pub continuations: HashMap<'arena, Ident, TypeRef>,
-    pub declarations: HashMap<'arena, Ident, (TypeRef, Option<Literal>)>,
+    pub params: Vec<'arena, (Ident, &'arena Type<'arena>)>,
+    pub continuations: HashMap<'arena, Ident, &'arena Type<'arena>>,
+    pub declarations: HashMap<'arena, Ident, (&'arena Type<'arena>, Option<Literal>)>,
     pub blocks: HashMap<'arena, BlockId, Block<'arena>>,
-    pub captures: HashMap<'arena, Ident, TypeRef>,
+    pub captures: HashMap<'arena, Ident, &'arena Type<'arena>>,
     next_ident: u32,
     next_block: u64,
     pub name: String,
@@ -250,7 +254,7 @@ impl<'arena> Function<'arena> {
         ident
     }
 
-    pub fn type_of_var(&self, var: Ident) -> Option<TypeRef> {
+    pub fn type_of_var(&self, var: Ident) -> Option<&'arena Type<'arena>> {
         self.continuations
             .get(&var)
             .or_else(|| self.declarations.get(&var).map(|(ty, _)| ty))
@@ -284,11 +288,10 @@ impl<'arena> Function<'arena> {
 #[derive(Debug)]
 pub struct Program<'arena> {
     pub functions: HashMap<'arena, FuncRef, &'arena Function<'arena>>,
-    pub signatures: HashMap<'arena, FuncRef, TypeRef>,
-    pub types: BiMap<'arena, TypeRef, &'arena Type<'arena>>,
+    pub signatures: HashMap<'arena, FuncRef, &'arena Type<'arena>>,
+    pub types: HashSet<'arena, &'arena Type<'arena>>,
     pub lib_std: StdLib,
     next_function: u32,
-    next_ty: u64,
     pub name: String,
 }
 
@@ -297,10 +300,9 @@ impl<'arena> Program<'arena> {
         Program {
             functions: HashMap::new_in(arena),
             signatures: HashMap::new_in(arena),
-            types: BiMap::new(arena),
+            types: HashSet::new_in(arena),
             lib_std: *program.lib_std(),
             next_function: program.next_function,
-            next_ty: program.next_ty,
             name: program.name.clone(),
         }
     }
@@ -316,38 +318,19 @@ impl<'arena> Program<'arena> {
         func_ref
     }
 
-    pub fn ty(&mut self) -> TypeRef {
-        let ty_ref = TypeRef(self.next_ty);
-        self.next_ty += 1;
-        ty_ref
-    }
-
-    #[allow(clippy::missing_panics_doc)] // Cannot panic
-    pub fn insert_type(
-        &mut self,
-        ty: Type<'arena>,
-        arena: &'arena Bump,
-    ) -> (TypeRef, &'arena Type<'arena>) {
-        if let Some(type_ref) = self.types.get_by_right(&ty) {
-            let ty = *self.types.get_by_left(type_ref).unwrap();
-            (*type_ref, ty)
+    pub fn insert_type(&mut self, ty: Type<'arena>, arena: &'arena Bump) -> &'arena Type<'arena> {
+        if let Some(ty) = self.types.get(&ty) {
+            ty
         } else {
-            let type_ref = self.ty();
             let ty = arena.alloc(ty);
-            self.types.insert(type_ref, ty);
-            (type_ref, ty)
+            self.types.insert(ty);
+            ty
         }
     }
 
     #[allow(clippy::missing_panics_doc)]
-    pub fn is_primitive(&self, ty: TypeRef) -> bool {
-        [
-            self.lib_std.ty_bool,
-            self.lib_std.ty_int,
-            self.lib_std.ty_float,
-            self.lib_std.ty_string,
-        ]
-        .contains(&ty)
-            || self.types.get_by_left(&ty).unwrap().as_function().is_some()
+    pub fn is_primitive(&self, ty: &'arena Type<'arena>) -> bool {
+        [Type::Bool, Type::Int, Type::Float, Type::String].contains(ty)
+            || ty.as_function().is_some()
     }
 }

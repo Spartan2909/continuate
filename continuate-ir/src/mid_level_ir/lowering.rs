@@ -1,6 +1,5 @@
 use crate::common::Ident;
 use crate::common::Intrinsic;
-use crate::common::TypeRef;
 use crate::high_level_ir::Expr as HirExpr;
 use crate::high_level_ir::ExprArray as HirExprArray;
 use crate::high_level_ir::ExprAssign as HirExprAssign;
@@ -49,7 +48,7 @@ use itertools::Itertools as _;
 
 struct ExprGet<'arena> {
     object: Expr<'arena>,
-    object_ty: TypeRef,
+    object_ty: &'arena Type<'arena>,
     field: usize,
 }
 
@@ -67,9 +66,10 @@ struct MatchVariant {
 struct Lowerer<'a, 'arena> {
     arena: &'arena Bump,
     program: Program<'arena>,
-    environment: HashMap<'arena, Ident, TypeRef>,
+    environment: HashMap<'arena, Ident, &'arena Type<'arena>>,
     current_block: BlockId,
     hir_program: &'a HirProgram<'a>,
+    types: HashMap<'arena, &'a HirType<'a>, &'arena Type<'arena>>,
 }
 
 impl<'a, 'arena> Lowerer<'a, 'arena> {
@@ -77,14 +77,14 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let constructor = match &ty.constructor {
             HirTypeConstructor::Product(fields) => {
                 let mut new_fields = Vec::with_capacity_in(fields.len(), self.arena);
-                new_fields.extend_from_slice(fields);
+                new_fields.extend(fields.iter().map(|field| self.types[field]));
                 TypeConstructor::Product(new_fields)
             }
             HirTypeConstructor::Sum(variants) => {
                 let mut new_variants = Vec::with_capacity_in(variants.len(), self.arena);
                 for variant in variants {
                     let mut new_variant = Vec::with_capacity_in(variant.len(), self.arena);
-                    new_variant.extend_from_slice(variant);
+                    new_variant.extend(variant.iter().map(|field| self.types[field]));
                     new_variants.push(new_variant);
                 }
                 TypeConstructor::Sum(new_variants)
@@ -95,20 +95,27 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
     fn lower_ty(&self, ty: &HirType) -> Type<'arena> {
         match *ty {
+            HirType::Bool => Type::Bool,
             HirType::Int => Type::Int,
             HirType::Float => Type::Float,
             HirType::String => Type::String,
-            HirType::Array(ty, len) => Type::Array(ty, len),
-            HirType::Tuple(ref types) => {
-                Type::Tuple(collect_into(types.iter().copied(), Vec::new_in(self.arena)))
-            }
+            HirType::Array(ty, len) => Type::Array(self.types[ty], len),
+            HirType::Tuple(ref types) => Type::Tuple(collect_into(
+                types.iter().map(|ty| self.types[ty]),
+                Vec::new_in(self.arena),
+            )),
             HirType::Function(HirFunctionTy {
                 ref params,
                 ref continuations,
             }) => Type::function(
-                collect_into(params.iter().copied(), Vec::new_in(self.arena)),
                 collect_into(
-                    continuations.iter().map(|(&ident, &ty)| (ident, ty)),
+                    params.iter().map(|ty| self.types[ty]),
+                    Vec::new_in(self.arena),
+                ),
+                collect_into(
+                    continuations
+                        .iter()
+                        .map(|(&ident, ty)| (ident, self.types[ty])),
                     HashMap::new_in(self.arena),
                 ),
             ),
@@ -141,8 +148,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let last_expr = exprs.pop().unwrap_or_else(|| {
             let ty = self
                 .program
-                .insert_type(Type::Tuple(Vec::new_in(self.arena)), self.arena)
-                .0;
+                .insert_type(Type::Tuple(Vec::new_in(self.arena)), self.arena);
             Expr::Tuple {
                 ty,
                 values: Vec::new_in(self.arena),
@@ -174,7 +180,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let mut values = Vec::with_capacity_in(elements.len(), self.arena);
         values.extend(elements);
         Expr::Tuple {
-            ty: expr.ty,
+            ty: self.types[expr.ty],
             values,
         }
     }
@@ -191,7 +197,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         new_fields.extend(fields);
         let ty = expr.ty;
         Expr::Constructor {
-            ty,
+            ty: self.types[ty],
             index: expr.index,
             fields: new_fields,
         }
@@ -207,16 +213,16 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let mut values = Vec::with_capacity_in(array.len(), self.arena);
         values.extend(array);
         Expr::Array {
-            ty: expr.ty,
+            ty: self.types[expr.ty],
             values,
-            value_ty: expr.element_ty,
+            value_ty: self.types[expr.element_ty],
         }
     }
 
     fn expr_get_impl(
         &mut self,
         object: &HirExpr,
-        object_ty: TypeRef,
+        object_ty: &'arena Type<'arena>,
         field: usize,
         block: &mut Block<'arena>,
         function: &mut Function<'arena>,
@@ -239,7 +245,13 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             object,
             object_ty,
             field,
-        } = self.expr_get_impl(&expr.object, expr.object_ty, expr.field, block, function);
+        } = self.expr_get_impl(
+            &expr.object,
+            self.types[expr.object_ty],
+            expr.field,
+            block,
+            function,
+        );
         Expr::Get {
             object: self.arena.alloc(object),
             object_ty,
@@ -258,7 +270,13 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             object,
             object_ty,
             field,
-        } = self.expr_get_impl(&expr.object, expr.object_ty, expr.field, block, function);
+        } = self.expr_get_impl(
+            &expr.object,
+            self.types[expr.object_ty],
+            expr.field,
+            block,
+            function,
+        );
 
         let value = self.expr(&expr.value, block, function);
 
@@ -283,13 +301,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
         let mut new_params = Vec::with_capacity_in(params.len(), self.arena);
         new_params.extend(params);
-        let callee_ty = self
-            .program
-            .types
-            .get_by_left(&expr.callee_ty)
-            .unwrap()
-            .as_function()
-            .unwrap();
+        let callee_ty = self.types[expr.callee_ty].as_function().unwrap();
         let expr = Expr::Call {
             callee: self.arena.alloc(callee),
             callee_ty,
@@ -326,7 +338,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let expr = Expr::Unary {
             operator: expr.op,
             operand: self.arena.alloc(operand),
-            operand_ty: expr.right_ty,
+            operand_ty: self.types[expr.right_ty],
         };
         expr
     }
@@ -342,10 +354,10 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
         let expr = Expr::Binary {
             left: self.arena.alloc(left),
-            left_ty: expr.left_ty,
+            left_ty: self.types[expr.left_ty],
             operator: expr.op,
             right: self.arena.alloc(right),
-            right_ty: expr.right_ty,
+            right_ty: self.types[expr.right_ty],
         };
         expr
     }
@@ -358,7 +370,9 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
     ) -> Expr<'arena> {
         let right = self.expr(&expr.expr, block, function);
 
-        function.declarations.insert(expr.ident, (expr.ty, None));
+        function
+            .declarations
+            .insert(expr.ident, (self.types[expr.ty], None));
         let expr = Expr::Assign {
             ident: expr.ident,
             expr: self.arena.alloc(right),
@@ -401,15 +415,14 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
     fn pattern(
         &mut self,
-        scrutinee: (&'arena Expr<'arena>, TypeRef),
+        scrutinee: (&'arena Expr<'arena>, &'arena Type<'arena>),
         arm_pat: &Pattern,
         arm_block: &mut Block<'arena>,
         arm_block_id: BlockId,
         otherwise: BlockId,
         function: &mut Function<'arena>,
     ) -> ArmData {
-        let (scrutinee, scrutinee_ty_ref) = scrutinee;
-        let scrutinee_ty = *self.program.types.get_by_left(&scrutinee_ty_ref).unwrap();
+        let (scrutinee, scrutinee_ty) = scrutinee;
 
         match *arm_pat {
             Pattern::Wildcard => ArmData::Wildcard,
@@ -418,9 +431,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                     ident,
                     expr: scrutinee,
                 };
-                function
-                    .declarations
-                    .insert(ident, (scrutinee_ty_ref, None));
+                function.declarations.insert(ident, (scrutinee_ty, None));
                 arm_block.exprs.push(binding);
                 ArmData::Wildcard
             }
@@ -432,7 +443,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                 for (field, pattern) in Self::order_patterns(fields) {
                     let get = Expr::Get {
                         object: scrutinee,
-                        object_ty: scrutinee_ty_ref,
+                        object_ty: scrutinee_ty,
                         object_variant: variant,
                         field,
                     };
@@ -501,7 +512,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             let mut arm_block_id = function.block();
 
             let arm_data = self.pattern(
-                (scrutinee, expr.scrutinee_ty),
+                (scrutinee, self.types[expr.scrutinee_ty]),
                 arm_pat,
                 &mut arm_block,
                 arm_block_id,
@@ -543,7 +554,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             self.arena.alloc(Expr::Intrinsic {
                 intrinsic: Intrinsic::Discriminant,
                 value: scrutinee,
-                value_ty: expr.scrutinee_ty,
+                value_ty: self.types[expr.scrutinee_ty],
             })
         };
 
@@ -594,7 +605,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         Expr::Intrinsic {
             intrinsic: expr.intrinsic,
             value: self.arena.alloc(value),
-            value_ty: expr.value_ty,
+            value_ty: self.types[expr.value_ty],
         }
     }
 
@@ -630,18 +641,18 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
     fn function(
         &mut self,
         function: &HirFunction,
-        captures: HashMap<'arena, Ident, TypeRef>,
+        captures: HashMap<'arena, Ident, &'arena Type<'arena>>,
     ) -> Function<'arena> {
         let mut mir_function = Function::new(function.name.clone(), self.arena);
         mir_function.params.reserve(function.params.len());
-        for &param in &function.params {
-            mir_function.params.push(param);
+        for &(param, ty) in &function.params {
+            mir_function.params.push((param, self.types[ty]));
         }
         mir_function
             .continuations
             .reserve(function.continuations.len());
         for (&param, &ty) in &function.continuations {
-            mir_function.continuations.insert(param, ty);
+            mir_function.continuations.insert(param, self.types[ty]);
         }
 
         self.environment.clone_from(&captures);
@@ -673,17 +684,20 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             environment: HashMap::new_in(arena),
             current_block: Function::entry_point(),
             hir_program: program,
+            types: HashMap::new_in(arena),
         };
 
-        for (&type_ref, &ty) in &program.types {
-            if *ty == HirType::Unknown {
+        for hir_ty in &program.types {
+            if **hir_ty == HirType::Unknown {
                 continue;
             }
-            let ty = lowerer.arena.alloc(lowerer.lower_ty(ty));
-            lowerer.program.types.insert(type_ref, ty);
+            let ty = lowerer.arena.alloc(lowerer.lower_ty(hir_ty));
+            lowerer.program.types.insert(ty);
+            lowerer.types.insert(hir_ty, ty);
         }
 
         for (&function, &signature) in &program.signatures {
+            let signature = lowerer.types[signature];
             lowerer.program.signatures.insert(function, signature);
         }
 

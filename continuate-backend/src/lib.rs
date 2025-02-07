@@ -8,7 +8,6 @@ use std::mem;
 use bumpalo::Bump;
 
 use continuate_ir::common::FuncRef;
-use continuate_ir::common::TypeRef;
 use continuate_ir::mid_level_ir::Function as MirFunction;
 use continuate_ir::mid_level_ir::FunctionTy;
 use continuate_ir::mid_level_ir::Program;
@@ -209,30 +208,23 @@ fn dangling_static_ptr<M: Module>(
     ptr
 }
 
-fn ty_for(ty: TypeRef, triple: &Triple, program: &Program) -> Type {
-    if ty == program.lib_std.ty_int {
+fn ty_for(ty: &MirType, triple: &Triple) -> Type {
+    if *ty == MirType::Int {
         types::I64
-    } else if ty == program.lib_std.ty_float {
+    } else if *ty == MirType::Float {
         types::F64
-    } else if ty == program.lib_std.ty_bool {
+    } else if *ty == MirType::Bool {
         types::I8
-    } else if ty == program.lib_std.ty_string
-        || program
-            .types
-            .get_by_left(&ty)
-            .unwrap()
-            .as_function()
-            .is_some()
-    {
+    } else if *ty == MirType::String || ty.as_function().is_some() {
         fat_ptr_ty(triple)
     } else {
         ptr_ty(triple)
     }
 }
 
-fn ty_ref_size_align_ptr(ty: TypeRef, program: &Program) -> (u64, u64, bool) {
-    match **program.types.get_by_left(&ty).unwrap() {
-        _ if ty == program.lib_std.ty_bool => (1, 1, false),
+fn ty_ref_size_align_ptr(ty: &MirType) -> (u64, u64, bool) {
+    match ty {
+        MirType::Bool => (1, 1, false),
         MirType::Int | MirType::Float => (8, 8, false),
         MirType::Array(_, _)
         | MirType::Tuple(_)
@@ -248,7 +240,6 @@ fn signature_from_function_ty(
     function_ty: &FunctionTy,
     call_conv: CallConv,
     triple: &Triple,
-    program: &Program,
 ) -> Signature {
     let mut signature = Signature::new(call_conv);
     signature.params.push(AbiParam::new(ptr_ty(triple)));
@@ -257,14 +248,14 @@ fn signature_from_function_ty(
             .params
             .iter()
             .copied()
-            .map(|param_ty| AbiParam::new(ty_for(param_ty, triple, program))),
+            .map(|param_ty| AbiParam::new(ty_for(param_ty, triple))),
     );
     signature.params.extend(
         function_ty
             .continuations
             .iter()
             .sorted_by_key(|&(&param, _)| param)
-            .map(|(_, &param_ty)| AbiParam::new(ty_for(param_ty, triple, program))),
+            .map(|(_, &param_ty)| AbiParam::new(ty_for(param_ty, triple))),
     );
     signature.returns.push(AbiParam::new(types::I64));
     signature
@@ -278,7 +269,7 @@ struct Compiler<'arena, 'a, M> {
     triple: Triple,
     runtime: Runtime,
     functions: HashMap<FuncRef, (FuncId, Signature)>,
-    ty_layouts: HashMap<TypeRef, (&'arena TyLayout<'arena>, DataId)>,
+    ty_layouts: HashMap<&'a MirType<'a>, (&'arena TyLayout<'arena>, DataId)>,
     arena: &'arena &'arena Bump,
 }
 
@@ -396,13 +387,13 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
             .unwrap();
     }
 
-    fn compound_ty_layout(&self, types: &[&[TypeRef]]) -> SingleLayout<'arena> {
+    fn compound_ty_layout(&self, types: &[&[&MirType]]) -> SingleLayout<'arena> {
         let mut size = 0;
         let mut align = 1;
         let mut field_locations = Vec::with_capacity(types.len());
         let mut gc_pointer_locations = Vec::with_capacity(types.len());
-        for &ty in types.iter().copied().flatten() {
-            let (field_size, field_align, ptr) = ty_ref_size_align_ptr(ty, &self.program);
+        for ty in types.iter().copied().flatten() {
+            let (field_size, field_align, ptr) = ty_ref_size_align_ptr(ty);
             let misalignment = size % field_align;
             if misalignment != 0 {
                 size += field_align - misalignment;
@@ -551,16 +542,15 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
         }
     }
 
-    fn calc_ty_layout(&mut self, ty_ref: TypeRef) {
-        let ty = *self.program.types.get_by_left(&ty_ref).unwrap();
+    fn calc_ty_layout(&mut self, ty: &'a MirType<'a>) {
         let layout: TyLayout<'arena> = match *ty {
-            _ if ty_ref == self.program.lib_std.ty_bool => SingleLayout::primitive(1, 1).into(),
+            MirType::Bool => SingleLayout::primitive(1, 1).into(),
             MirType::Int | MirType::Float | MirType::Function(_) => {
                 SingleLayout::primitive(8, 8).into()
             }
             MirType::String => TyLayout::String,
             MirType::Array(elem_ty, len) => {
-                let (elem_size, elem_align, ptr) = ty_ref_size_align_ptr(elem_ty, &self.program);
+                let (elem_size, elem_align, ptr) = ty_ref_size_align_ptr(elem_ty);
                 let field_locations: Vec<_> =
                     (0..elem_size * len).step_by(elem_size as usize).collect();
                 let field_locations = Slice::allocate_slice(&field_locations, self.arena);
@@ -585,7 +575,7 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
             }) => {
                 let layouts: Vec<_> = variants
                     .iter()
-                    .map(|types| self.compound_ty_layout(&[&[self.program.lib_std.ty_int], types]))
+                    .map(|types| self.compound_ty_layout(&[&[&MirType::Int], types]))
                     .collect();
                 let size = layouts.iter().fold(8, |size, layout| size.max(layout.size));
                 let align = layouts
@@ -604,11 +594,11 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
 
         let global_id = self.declare_ty_layout_global(&layout);
         self.ty_layouts
-            .insert(ty_ref, (self.arena.alloc(layout), global_id));
+            .insert(ty, (self.arena.alloc(layout), global_id));
     }
 
     fn calc_ty_layouts(&mut self) {
-        let types: Vec<_> = self.program.types.left_values().copied().collect();
+        let types: Vec<_> = self.program.types.iter().copied().collect();
         for ty in types {
             self.calc_ty_layout(ty);
         }
@@ -617,19 +607,8 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
     fn declare_functions(&mut self) {
         for (&func_ref, &function) in &self.program.functions {
             let function_ty = self.program.signatures[&func_ref];
-            let function_ty = self
-                .program
-                .types
-                .get_by_left(&function_ty)
-                .unwrap()
-                .as_function()
-                .unwrap();
-            let sig = signature_from_function_ty(
-                function_ty,
-                CallConv::Tail,
-                &self.triple,
-                &self.program,
-            );
+            let function_ty = function_ty.as_function().unwrap();
+            let sig = signature_from_function_ty(function_ty, CallConv::Tail, &self.triple);
 
             let id = self
                 .module

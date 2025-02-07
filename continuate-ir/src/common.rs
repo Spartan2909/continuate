@@ -68,16 +68,6 @@ impl fmt::Debug for FuncRef {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TypeRef(pub(crate) u64);
-
-impl fmt::Debug for TypeRef {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "TypeRef({})", self.0)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
     Int(i64),

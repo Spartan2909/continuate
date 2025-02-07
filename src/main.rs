@@ -60,29 +60,29 @@ fn main() {
     let hir_arena = Bump::new();
     let mut program = Program::new("test".to_string(), &hir_arena);
 
-    let std_lib = program.lib_std();
-    let ty_int = std_lib.ty_int;
+    let ty_int = program.insert_type(Type::Int, &hir_arena);
+    let ty_unknown = program.insert_type(Type::Unknown, &hir_arena);
 
     let mut int_fn_params = Vec::with_capacity_in(1, &hir_arena);
     int_fn_params.push(ty_int);
     let int_fn = Type::function(int_fn_params, HashMap::new_in(&hir_arena));
-    let int_fn_ref = program.insert_type(int_fn, &hir_arena).0;
+    let int_fn = program.insert_type(int_fn, &hir_arena);
 
     let mut sum_fn = Function::new("test::sum".to_string(), &hir_arena);
     let cont = sum_fn.ident();
     let param_1 = sum_fn.ident();
     let param_2 = sum_fn.ident();
     sum_fn.params.extend([(param_1, ty_int), (param_2, ty_int)]);
-    sum_fn.continuations.insert(cont, int_fn_ref);
+    sum_fn.continuations.insert(cont, int_fn);
 
     let l = Box::new_in(Expr::Ident(param_1), &hir_arena);
     let r = Box::new_in(Expr::Ident(param_2), &hir_arena);
     let sum = Expr::Binary(ExprBinary {
         left: l,
-        left_ty: program.lib_std().ty_unknown,
+        left_ty: ty_unknown,
         op: BinaryOp::Add,
         right: r,
-        right_ty: program.lib_std().ty_unknown,
+        right_ty: ty_unknown,
     });
 
     let cont_ref = Box::new_in(Expr::Ident(cont), &hir_arena);
@@ -90,7 +90,7 @@ fn main() {
     args.push(sum);
     sum_fn.body.push(Expr::Call(ExprCall {
         callee: cont_ref,
-        callee_ty: program.lib_std().ty_unknown,
+        callee_ty: ty_unknown,
         args,
     }));
 
@@ -101,20 +101,20 @@ fn main() {
     sum_fn_params.extend([ty_int, ty_int]);
     let sum_fn_ty = Type::function(
         sum_fn_params,
-        collect_into(iter::once((cont, int_fn_ref)), HashMap::new_in(&hir_arena)),
+        collect_into(iter::once((cont, int_fn)), HashMap::new_in(&hir_arena)),
     );
-    let sum_fn_ty = program.insert_type(sum_fn_ty, &hir_arena).0;
+    let sum_fn_ty = program.insert_type(sum_fn_ty, &hir_arena);
 
     program.signatures.insert(sum_fn_ref, sum_fn_ty);
 
     let mut main_fn = Function::new("test::main".to_string(), &hir_arena);
     let termination_cont = main_fn.ident();
-    main_fn.continuations.insert(termination_cont, int_fn_ref);
+    main_fn.continuations.insert(termination_cont, int_fn);
 
     let string = Expr::Literal(Literal::String("hello".to_string()));
     let assign_string = Expr::Declare(ExprDeclare {
         ident: main_fn.ident(),
-        ty: program.lib_std().ty_string,
+        ty: program.insert_type(Type::String, &hir_arena),
         expr: Box::new_in(string, &hir_arena),
     });
     main_fn.body.push(assign_string);
@@ -127,7 +127,7 @@ fn main() {
     let application = Box::new_in(
         Expr::ContApplication(ExprContApplication {
             callee,
-            callee_ty: program.lib_std().ty_unknown,
+            callee_ty: ty_unknown,
             continuations: collect_into(iter::once((cont, cont_ref)), HashMap::new_in(&hir_arena)),
         }),
         &hir_arena,
@@ -136,7 +136,7 @@ fn main() {
     args.extend([three, seven]);
     main_fn.body.push(Expr::Call(ExprCall {
         callee: application,
-        callee_ty: program.lib_std().ty_unknown,
+        callee_ty: ty_unknown,
         args,
     }));
 
@@ -144,9 +144,9 @@ fn main() {
     program.functions.insert(main_fn_ref, main_fn);
 
     let mut main_fn_continuations = HashMap::with_capacity_in(1, &hir_arena);
-    main_fn_continuations.insert(termination_cont, int_fn_ref);
+    main_fn_continuations.insert(termination_cont, int_fn);
     let main_fn_ty = Type::function(Vec::new_in(&hir_arena), main_fn_continuations);
-    let main_fn_ty = program.insert_type(main_fn_ty, &hir_arena).0;
+    let main_fn_ty = program.insert_type(main_fn_ty, &hir_arena);
     program.signatures.insert(main_fn_ref, main_fn_ty);
 
     typeck(&hir_arena, &mut program).unwrap();

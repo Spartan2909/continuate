@@ -15,7 +15,6 @@ use continuate_ir::common::FuncRef;
 use continuate_ir::common::Ident;
 use continuate_ir::common::Intrinsic;
 use continuate_ir::common::Literal;
-use continuate_ir::common::TypeRef;
 use continuate_ir::common::UnaryOp;
 use continuate_ir::mid_level_ir::BlockId;
 use continuate_ir::mid_level_ir::Expr;
@@ -25,7 +24,6 @@ use continuate_ir::mid_level_ir::Program;
 use continuate_ir::mid_level_ir::Type as MirType;
 use continuate_ir::mid_level_ir::TypeConstructor;
 use continuate_ir::mid_level_ir::UserDefinedType;
-// use continuate_ir::HashMap;
 
 use continuate_common::SingleLayout;
 use continuate_common::TyLayout;
@@ -90,17 +88,18 @@ pub(super) struct FunctionCompiler<'arena, 'function, 'builder, M> {
     pub(super) data_description: &'function mut DataDescription,
     pub(super) triple: &'function Triple,
     pub(super) functions: &'function HashMap<FuncRef, (FuncId, Signature)>,
-    pub(super) ty_layouts: &'function HashMap<TypeRef, (&'arena TyLayout<'arena>, DataId)>,
+    pub(super) ty_layouts:
+        &'function HashMap<&'function MirType<'arena>, (&'arena TyLayout<'arena>, DataId)>,
     pub(super) builder: &'function mut FunctionBuilder<'builder>,
     pub(super) block_map: &'function HashMap<BlockId, Block>,
     pub(super) mir_function: &'function MirFunction<'function>,
-    pub(super) params: &'function [(Ident, TypeRef)],
+    pub(super) params: &'function [(Ident, &'function MirType<'function>)],
     pub(super) function_runtime: FunctionRuntime,
-    pub(super) vars: HashMap<Ident, (TypeRef, bool)>,
+    pub(super) vars: HashMap<Ident, (&'function MirType<'function>, bool)>,
     pub(super) temp_roots: Vec<Value>,
 }
 
-impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
+impl<'arena, 'function, M: Module> FunctionCompiler<'arena, 'function, '_, M> {
     fn cranelift_endianness(&self) -> ir::Endianness {
         use ir::Endianness as E;
         match self.triple.endianness().unwrap() {
@@ -123,10 +122,10 @@ impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
         self.builder.ins().ireduce(ptr_ty(self.triple), fat_ptr)
     }
 
-    fn value_ptr(&mut self, value: Value, ty: TypeRef) -> Option<Value> {
+    fn value_ptr(&mut self, value: Value, ty: &MirType) -> Option<Value> {
         if !self.program.is_primitive(ty) {
             Some(value)
-        } else if ty == self.program.lib_std.ty_string {
+        } else if *ty == MirType::String {
             let str_ptr = self.fat_ptr_addr(value);
             Some(str_ptr)
         } else {
@@ -144,7 +143,7 @@ impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
         self.temp_roots.clear();
     }
 
-    fn alloc_gc(&mut self, ty: TypeRef) -> Value {
+    fn alloc_gc(&mut self, ty: &MirType) -> Value {
         let ty_layout = self.ty_layouts[&ty].1;
         let ty_layout = self
             .module
@@ -235,9 +234,9 @@ impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
 
     fn compound_ty(
         &mut self,
-        ty: TypeRef,
+        ty: &'function MirType<'function>,
         layout: &SingleLayout,
-        values: &[&[Expr]],
+        values: &[&[Expr<'function>]],
     ) -> Option<Value> {
         let stack_slot_data = StackSlotData {
             kind: StackSlotKind::ExplicitSlot,
@@ -277,16 +276,20 @@ impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
         Some(dest_ptr)
     }
 
-    fn expr_tuple(&mut self, ty: TypeRef, values: &[Expr]) -> Option<Value> {
+    fn expr_tuple(
+        &mut self,
+        ty: &'function MirType<'function>,
+        values: &[Expr<'function>],
+    ) -> Option<Value> {
         let layout = self.ty_layouts[&ty].0.as_single().unwrap();
         self.compound_ty(ty, layout, &[values])
     }
 
     fn expr_constructor(
         &mut self,
-        ty: TypeRef,
+        ty: &'function MirType<'function>,
         index: Option<usize>,
-        fields: &[Expr],
+        fields: &[Expr<'function>],
     ) -> Option<Value> {
         let layout = self.ty_layouts[&ty].0;
         if let Some(index) = index {
@@ -302,8 +305,13 @@ impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
         }
     }
 
-    fn expr_array(&mut self, ty: TypeRef, values: &[Expr], value_ty: TypeRef) -> Option<Value> {
-        let (value_size, _, _) = ty_ref_size_align_ptr(value_ty, self.program);
+    fn expr_array(
+        &mut self,
+        ty: &'function MirType<'function>,
+        values: &[Expr<'function>],
+        value_ty: &'function MirType<'function>,
+    ) -> Option<Value> {
+        let (value_size, _, _) = ty_ref_size_align_ptr(value_ty);
         let size = value_size * values.len() as u64;
 
         let stack_slot_data = StackSlotData {
@@ -338,18 +346,11 @@ impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
 
     fn field_information(
         &self,
-        object_ty: TypeRef,
+        object_ty: &'function MirType<'function>,
         object_variant: Option<usize>,
         field: usize,
-    ) -> (&'arena SingleLayout<'arena>, TypeRef) {
-        let constructor = &self
-            .program
-            .types
-            .get_by_left(&object_ty)
-            .unwrap()
-            .as_user_defined()
-            .unwrap()
-            .constructor;
+    ) -> (&'arena SingleLayout<'arena>, &'function MirType<'function>) {
+        let constructor = &object_ty.as_user_defined().unwrap().constructor;
         match (self.ty_layouts[&object_ty].0, object_variant, constructor) {
             (TyLayout::Single(layout), None, TypeConstructor::Product(fields)) => {
                 (layout, fields[field])
@@ -363,14 +364,14 @@ impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
 
     fn expr_get(
         &mut self,
-        object: &Expr,
-        object_ty: TypeRef,
+        object: &Expr<'function>,
+        object_ty: &'function MirType<'function>,
         object_variant: Option<usize>,
         field: usize,
     ) -> Option<Value> {
         let object = self.expr(object)?;
         let (layout, field_ty) = self.field_information(object_ty, object_variant, field);
-        let field_ty = ty_for(field_ty, self.triple, self.program);
+        let field_ty = ty_for(field_ty, self.triple);
         let endianness = self.cranelift_endianness();
         Some(
             self.builder.ins().load(
@@ -388,11 +389,11 @@ impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
 
     fn expr_set(
         &mut self,
-        object: &Expr,
-        object_ty: TypeRef,
+        object: &Expr<'function>,
+        object_ty: &'function MirType<'function>,
         object_variant: Option<usize>,
         field: usize,
-        value: &Expr,
+        value: &Expr<'function>,
     ) -> Option<Value> {
         let object = self.expr(object)?;
         let layout = self.field_information(object_ty, object_variant, field).0;
@@ -414,8 +415,8 @@ impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
 
     fn callable<'a>(
         &mut self,
-        callee: &'a Expr<'a>,
-    ) -> Option<(Callable, HashMap<Ident, &'a Expr<'a>>)> {
+        callee: &'a Expr<'function>,
+    ) -> Option<(Callable, HashMap<Ident, &'a Expr<'function>>)> {
         match *callee {
             Expr::Function(func_ref) => Some((Callable::Static(func_ref), HashMap::new())),
             Expr::ContApplication(callee, ref continuations) => {
@@ -427,7 +428,12 @@ impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
         }
     }
 
-    fn expr_call(&mut self, callee: &Expr, callee_ty: &FunctionTy, args: &[Expr]) -> Option<Value> {
+    fn expr_call(
+        &mut self,
+        callee: &Expr<'function>,
+        callee_ty: &FunctionTy,
+        args: &[Expr<'function>],
+    ) -> Option<Value> {
         let (callable, continuations) = self.callable(callee)?;
 
         let args: Option<Vec<_>> = iter::once(Some(Value::reserved_value()))
@@ -471,12 +477,7 @@ impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
                 self.builder.ins().return_call(func, &args);
             }
             Callable::Dynamic(callee) => {
-                let signature = signature_from_function_ty(
-                    callee_ty,
-                    CallConv::Tail,
-                    self.triple,
-                    self.program,
-                );
+                let signature = signature_from_function_ty(callee_ty, CallConv::Tail, self.triple);
                 let sig_ref = self.builder.import_signature(signature);
 
                 let function_ptr = self.fat_ptr_addr(callee);
@@ -495,11 +496,11 @@ impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
     fn expr_unary(
         &mut self,
         operator: UnaryOp,
-        operand: &Expr,
-        operand_ty: TypeRef,
+        operand: &Expr<'function>,
+        operand_ty: &'function MirType<'function>,
     ) -> Option<Value> {
         let operand = self.expr(operand)?;
-        let operand_ty = ty_for(operand_ty, self.triple, self.program);
+        let operand_ty = ty_for(operand_ty, self.triple);
         match operator {
             UnaryOp::Neg if operand_ty == types::F64 => Some(self.builder.ins().ineg(operand)),
             UnaryOp::Neg if operand_ty == types::I64 => Some(self.builder.ins().fneg(operand)),
@@ -513,15 +514,15 @@ impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
     #[allow(clippy::cognitive_complexity)]
     fn expr_binary(
         &mut self,
-        left: &Expr,
-        left_ty: TypeRef,
+        left: &Expr<'function>,
+        left_ty: &'function MirType<'function>,
         operator: BinaryOp,
-        right: &Expr,
-        right_ty: TypeRef,
+        right: &Expr<'function>,
+        right_ty: &'function MirType<'function>,
     ) -> Option<Value> {
         debug_assert_eq!(left_ty, right_ty);
         let left = self.expr(left)?;
-        let left_ty = ty_for(left_ty, self.triple, self.program);
+        let left_ty = ty_for(left_ty, self.triple);
         let right = self.expr(right)?;
         let value = match operator {
             BinaryOp::Add => match_ty! { (left_ty)
@@ -572,7 +573,7 @@ impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
         Some(value)
     }
 
-    fn expr_assign(&mut self, ident: Ident, expr: &Expr) -> Option<Value> {
+    fn expr_assign(&mut self, ident: Ident, expr: &Expr<'function>) -> Option<Value> {
         let (var_ty, initialised_ref) = self.vars.get_mut(&ident).unwrap();
         let (var_ty, initialised) = (*var_ty, *initialised_ref);
         *initialised_ref = true;
@@ -601,7 +602,12 @@ impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
         Some(value)
     }
 
-    fn expr_switch<I>(&mut self, scrutinee: &Expr, arms: I, otherwise: BlockId) -> Option<Value>
+    fn expr_switch<I>(
+        &mut self,
+        scrutinee: &Expr<'function>,
+        arms: I,
+        otherwise: BlockId,
+    ) -> Option<Value>
     where
         I: IntoIterator<Item = (i64, BlockId)>,
     {
@@ -622,16 +628,16 @@ impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
     fn expr_intrinsic(
         &mut self,
         intrinsic: Intrinsic,
-        value: &Expr,
-        value_ty: TypeRef,
+        value: &Expr<'function>,
+        value_ty: &'function MirType<'function>,
     ) -> Option<Value> {
         let value = self.expr(value)?;
         match intrinsic {
             Intrinsic::Discriminant => {
-                if value_ty == self.program.lib_std.ty_bool {
+                if *value_ty == MirType::Bool {
                     Some(self.builder.ins().sextend(types::I64, value))
                 } else if matches!(
-                    self.program.types.get_by_left(&value_ty).unwrap(),
+                    value_ty,
                     MirType::UserDefined(UserDefinedType {
                         constructor: TypeConstructor::Sum(_)
                     })
@@ -660,7 +666,7 @@ impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
         }
     }
 
-    fn expr(&mut self, expr: &Expr) -> Option<Value> {
+    fn expr(&mut self, expr: &Expr<'function>) -> Option<Value> {
         match *expr {
             Expr::Literal(ref literal) => Some(self.expr_literal(literal)),
             Expr::Ident(ident) => Some(self.builder.use_var(Variable::from_u32(ident.into()))),
@@ -737,7 +743,7 @@ impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
         for &(param, param_ty) in self.params {
             self.builder.declare_var(
                 Variable::from_u32(param.into()),
-                ty_for(param_ty, self.triple, self.program),
+                ty_for(param_ty, self.triple),
             );
             self.vars.insert(param, (param_ty, true));
         }
@@ -753,10 +759,8 @@ impl<'arena, M: Module> FunctionCompiler<'arena, '_, '_, M> {
         }
 
         for (&var, &(var_ty, ref initialiser)) in &self.mir_function.declarations {
-            self.builder.declare_var(
-                Variable::from_u32(var.into()),
-                ty_for(var_ty, self.triple, self.program),
-            );
+            self.builder
+                .declare_var(Variable::from_u32(var.into()), ty_for(var_ty, self.triple));
 
             if let Some(initialiser) = initialiser {
                 let value = self.expr_literal(initialiser);
