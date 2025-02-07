@@ -1,5 +1,17 @@
-pub mod lexer;
-pub mod parser;
+mod lexer;
+pub use lexer::lex;
+pub use lexer::Spacing;
+pub use lexer::Token;
+
+mod name_resolution;
+pub use name_resolution::resolve_names;
+
+mod parser;
+pub use parser::parse;
+
+use std::hash::Hash;
+use std::hash::Hasher;
+use std::mem;
 
 use continuate_error::Span;
 
@@ -22,11 +34,47 @@ impl<'src> Ident<'src> {
     }
 }
 
+impl PartialEq for Ident<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.string == other.string
+    }
+}
+
+impl Eq for Ident<'_> {}
+
+impl Hash for Ident<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.string.hash(state);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum PathIdentSegment<'src> {
     Ident(Ident<'src>),
     Package(Span),
     Super(Span),
+}
+
+impl PartialEq for PathIdentSegment<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (PathIdentSegment::Ident(this), PathIdentSegment::Ident(other)) => this == other,
+            (PathIdentSegment::Package(_), PathIdentSegment::Package(_))
+            | (PathIdentSegment::Super(_), PathIdentSegment::Super(_)) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for PathIdentSegment<'_> {}
+
+impl Hash for PathIdentSegment<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        mem::discriminant(self).hash(state);
+        if let PathIdentSegment::Ident(ident) = self {
+            ident.hash(state);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -35,10 +83,38 @@ pub struct PathSegment<'src> {
     pub span: Span,
 }
 
+impl PartialEq for PathSegment<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.ident == other.ident
+    }
+}
+
+impl Eq for PathSegment<'_> {}
+
+impl Hash for PathSegment<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.ident.hash(state);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Path<'src> {
     pub segments: Vec<PathSegment<'src>>,
     pub span: Span,
+}
+
+impl PartialEq for Path<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.segments == other.segments
+    }
+}
+
+impl Eq for Path<'_> {}
+
+impl Hash for Path<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.segments.hash(state);
+    }
 }
 
 impl<'src> From<Ident<'src>> for Path<'src> {
@@ -208,10 +284,52 @@ pub enum UserDefinedTy<'src> {
     },
 }
 
+impl<'src> UserDefinedTy<'src> {
+    const fn name(&self) -> &Ident<'src> {
+        match self {
+            UserDefinedTy::Product {
+                name,
+                fields: _,
+                span: _,
+            }
+            | UserDefinedTy::Sum {
+                name,
+                variants: _,
+                span: _,
+            } => name,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Item<'src> {
     Function(Function<'src>),
     UserDefinedTy(UserDefinedTy<'src>),
+}
+
+impl<'src> Item<'src> {
+    pub const fn as_function(&self) -> Option<&Function<'src>> {
+        if let Item::Function(function) = self {
+            Some(function)
+        } else {
+            None
+        }
+    }
+
+    pub const fn as_user_defined_ty(&self) -> Option<&UserDefinedTy<'src>> {
+        if let Item::UserDefinedTy(ty) = self {
+            Some(ty)
+        } else {
+            None
+        }
+    }
+
+    pub const fn name(&self) -> &Ident<'src> {
+        match self {
+            Item::Function(function) => &function.name,
+            Item::UserDefinedTy(ty) => ty.name(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
