@@ -1,7 +1,5 @@
 #![feature(allocator_api)]
 
-pub mod bimap;
-
 use bumpalo::Bump;
 
 pub type Box<'a, T> = std::boxed::Box<T, &'a Bump>;
