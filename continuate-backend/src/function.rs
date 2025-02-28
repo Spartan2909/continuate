@@ -7,8 +7,11 @@ use super::ty_for;
 use super::ty_ref_size_align_ptr;
 use super::Callable;
 
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::iter;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
 
 use continuate_ir::common::BinaryOp;
 use continuate_ir::common::FuncRef;
@@ -97,9 +100,24 @@ pub(super) struct FunctionCompiler<'arena, 'function, 'builder, M> {
     pub(super) function_runtime: FunctionRuntime,
     pub(super) vars: HashMap<Ident, (&'function MirType<'function>, bool)>,
     pub(super) temp_roots: Vec<Value>,
+    pub(super) variables: HashMap<Ident, Variable>,
 }
 
 impl<'arena, 'function, M: Module> FunctionCompiler<'arena, 'function, '_, M> {
+    fn variable(&mut self, ident: Ident) -> Variable {
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+
+        match self.variables.entry(ident) {
+            Entry::Occupied(entry) => *entry.get(),
+            Entry::Vacant(entry) => {
+                let variable = NEXT.fetch_add(1, Ordering::Relaxed);
+                assert_ne!(variable, u32::MAX, "variable overflow");
+                entry.insert(Variable::from_u32(variable));
+                Variable::from_u32(variable)
+            }
+        }
+    }
+
     fn cranelift_endianness(&self) -> ir::Endianness {
         use ir::Endianness as E;
         match self.triple.endianness().unwrap() {
@@ -460,7 +478,8 @@ impl<'arena, 'function, M: Module> FunctionCompiler<'arena, 'function, '_, M> {
             })
             .collect();
         for (var, var_ty) in vars {
-            let value = self.builder.use_var(Variable::from_u32(var.into()));
+            let var = self.variable(var);
+            let value = self.builder.use_var(var);
             if let Some(ptr) = self.value_ptr(value, var_ty) {
                 self.builder
                     .ins()
@@ -579,7 +598,8 @@ impl<'arena, 'function, M: Module> FunctionCompiler<'arena, 'function, '_, M> {
         *initialised_ref = true;
 
         if initialised {
-            let value = self.builder.use_var(Variable::from_u32(ident.into()));
+            let var = self.variable(ident);
+            let value = self.builder.use_var(var);
             if let Some(ptr) = self.value_ptr(value, var_ty) {
                 self.builder
                     .ins()
@@ -588,8 +608,8 @@ impl<'arena, 'function, M: Module> FunctionCompiler<'arena, 'function, '_, M> {
         }
 
         let value = self.expr(expr)?;
-        self.builder
-            .def_var(Variable::from_u32(ident.into()), value);
+        let var = self.variable(ident);
+        self.builder.def_var(var, value);
 
         self.clear_temp_roots();
 
@@ -669,7 +689,10 @@ impl<'arena, 'function, M: Module> FunctionCompiler<'arena, 'function, '_, M> {
     fn expr(&mut self, expr: &Expr<'function>) -> Option<Value> {
         match *expr {
             Expr::Literal(ref literal) => Some(self.expr_literal(literal)),
-            Expr::Ident(ident) => Some(self.builder.use_var(Variable::from_u32(ident.into()))),
+            Expr::Ident(ident) => {
+                let var = self.variable(ident);
+                Some(self.builder.use_var(var))
+            }
             Expr::Function(func_ref) => Some(self.expr_function(func_ref)),
             Expr::Tuple { ty, ref values } => self.expr_tuple(ty, values),
             Expr::Constructor {
@@ -741,10 +764,8 @@ impl<'arena, 'function, M: Module> FunctionCompiler<'arena, 'function, '_, M> {
     /// This method does not finalise or verify the function, or define it in the module.
     pub(super) fn compile(mut self) {
         for &(param, param_ty) in self.params {
-            self.builder.declare_var(
-                Variable::from_u32(param.into()),
-                ty_for(param_ty, self.triple),
-            );
+            let var = self.variable(param);
+            self.builder.declare_var(var, ty_for(param_ty, self.triple));
             self.vars.insert(param, (param_ty, true));
         }
 
@@ -754,21 +775,21 @@ impl<'arena, 'function, M: Module> FunctionCompiler<'arena, 'function, '_, M> {
         self.builder.switch_to_block(entry_point);
         for (i, &(param, _)) in self.params.iter().enumerate() {
             let param_value = self.builder.block_params(entry_point)[i + 1];
-            self.builder
-                .def_var(Variable::from_u32(param.into()), param_value);
+            let var = self.variable(param);
+            self.builder.def_var(var, param_value);
         }
 
-        for (&var, &(var_ty, ref initialiser)) in &self.mir_function.declarations {
-            self.builder
-                .declare_var(Variable::from_u32(var.into()), ty_for(var_ty, self.triple));
+        for (&ident, &(var_ty, ref initialiser)) in &self.mir_function.declarations {
+            let var = self.variable(ident);
+            self.builder.declare_var(var, ty_for(var_ty, self.triple));
 
             if let Some(initialiser) = initialiser {
                 let value = self.expr_literal(initialiser);
 
-                self.builder.def_var(Variable::from_u32(var.into()), value);
+                self.builder.def_var(var, value);
             }
 
-            self.vars.insert(var, (var_ty, initialiser.is_some()));
+            self.vars.insert(ident, (var_ty, initialiser.is_some()));
         }
 
         for (&block_id, block) in &self.mir_function.blocks {

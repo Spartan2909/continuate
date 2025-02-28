@@ -50,6 +50,14 @@ pub enum Token<'src> {
     Fn,
     #[token("if")]
     If,
+    #[token("bool")]
+    KwBool,
+    #[token("int")]
+    KwInt,
+    #[token("float")]
+    KwFloat,
+    #[token("string")]
+    KwString,
     #[token("let")]
     Let,
     #[token("match")]
@@ -128,6 +136,10 @@ impl fmt::Display for Token<'_> {
             Token::Enum => f.write_str("enum"),
             Token::Fn => f.write_str("fn"),
             Token::If => f.write_str("if"),
+            Token::KwBool => f.write_str("bool"),
+            Token::KwInt => f.write_str("int"),
+            Token::KwFloat => f.write_str("float"),
+            Token::KwString => f.write_str("string"),
             Token::Let => f.write_str("let"),
             Token::Match => f.write_str("match"),
             Token::Package => f.write_str("package"),

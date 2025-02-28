@@ -7,10 +7,13 @@ use crate::common::Ident;
 use crate::common::Intrinsic;
 use crate::common::Literal;
 use crate::common::UnaryOp;
+use crate::common::UserDefinedTyRef;
 use crate::lib_std;
 use crate::lib_std::StdLib;
 
 use std::hash;
+use std::ops::Range;
+use std::slice;
 
 use bumpalo::Bump;
 
@@ -25,13 +28,20 @@ use continuate_utils::Vec;
 use itertools::Itertools as _;
 
 #[derive(Debug, PartialEq)]
+pub enum DestructureFields<'arena> {
+    Named(Vec<'arena, (String, Pattern<'arena>)>),
+    Anonymous(Vec<'arena, Pattern<'arena>>),
+    Unit,
+}
+
+#[derive(Debug, PartialEq)]
 pub enum Pattern<'arena> {
     Wildcard,
     Ident(Ident),
     Destructure {
         ty: &'arena Type<'arena>,
-        variant: Option<usize>,
-        fields: Vec<'arena, Pattern<'arena>>,
+        variant: Option<String>,
+        fields: DestructureFields<'arena>,
     },
 }
 
@@ -81,10 +91,17 @@ pub struct ExprTuple<'arena> {
 }
 
 #[derive(Debug)]
+pub enum ExprConstructorFields<'arena> {
+    Named(Vec<'arena, (String, Expr<'arena>)>),
+    Anonymous(Vec<'arena, Expr<'arena>>),
+    Unit,
+}
+
+#[derive(Debug)]
 pub struct ExprConstructor<'arena> {
     pub ty: &'arena Type<'arena>,
-    pub index: Option<usize>,
-    pub fields: Vec<'arena, Expr<'arena>>,
+    pub variant: Option<String>,
+    pub fields: ExprConstructorFields<'arena>,
 }
 
 #[derive(Debug)]
@@ -98,14 +115,14 @@ pub struct ExprArray<'arena> {
 pub struct ExprGet<'arena> {
     pub object: Box<'arena, Expr<'arena>>,
     pub object_ty: &'arena Type<'arena>,
-    pub field: usize,
+    pub field: String,
 }
 
 #[derive(Debug)]
 pub struct ExprSet<'arena> {
     pub object: Box<'arena, Expr<'arena>>,
     pub object_ty: &'arena Type<'arena>,
-    pub field: usize,
+    pub field: String,
     pub value: Box<'arena, Expr<'arena>>,
     pub value_ty: &'arena Type<'arena>,
 }
@@ -186,7 +203,7 @@ impl hash::Hash for FunctionTy<'_> {
         for (&name, &ty) in self
             .continuations
             .iter()
-            .sorted_unstable_by_key(|(&ident, _)| ident.0)
+            .sorted_unstable_by_key(|(&ident, _)| ident)
         {
             (name, ty).hash(state);
         }
@@ -202,7 +219,7 @@ pub enum Type<'arena> {
     Array(&'arena Type<'arena>, u64),
     Tuple(Vec<'arena, &'arena Type<'arena>>),
     Function(FunctionTy<'arena>),
-    UserDefined(UserDefinedType<'arena>),
+    UserDefined(UserDefinedTyRef),
     Unknown,
     None,
 }
@@ -218,9 +235,9 @@ impl<'arena> Type<'arena> {
         })
     }
 
-    pub const fn as_user_defined(&self) -> Option<&UserDefinedType<'arena>> {
+    pub const fn as_user_defined(&self) -> Option<UserDefinedTyRef> {
         if let Type::UserDefined(ty) = self {
-            Some(ty)
+            Some(*ty)
         } else {
             None
         }
@@ -272,11 +289,11 @@ impl<'arena> Type<'arena> {
                 let continuations: Result<_> = try_collect_into(
                     continuations_1
                         .iter()
-                        .sorted_unstable_by_key(|(ident, _)| ident.0)
+                        .sorted_unstable_by_key(|(ident, _)| **ident)
                         .zip(
                             continuations_2
                                 .iter()
-                                .sorted_unstable_by_key(|(ident, _)| ident.0),
+                                .sorted_unstable_by_key(|(ident, _)| **ident),
                         )
                         .map(|((&ident_1, ty_1), (&ident_2, ty_2))| {
                             if ident_1 != ident_2 {
@@ -301,14 +318,142 @@ impl<'arena> Type<'arena> {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct UserDefinedType<'arena> {
-    pub constructor: TypeConstructor<'arena>,
+pub enum UserDefinedType<'arena> {
+    Product(UserDefinedTypeFields<'arena>),
+    Sum(Vec<'arena, (String, UserDefinedTypeFields<'arena>)>),
+}
+
+impl<'arena> UserDefinedType<'arena> {
+    pub const fn as_product(&self) -> Option<&UserDefinedTypeFields<'arena>> {
+        if let UserDefinedType::Product(ty) = self {
+            Some(ty)
+        } else {
+            None
+        }
+    }
+
+    pub const fn as_sum(&self) -> Option<&Vec<'arena, (String, UserDefinedTypeFields<'arena>)>> {
+        if let UserDefinedType::Sum(ty) = self {
+            Some(ty)
+        } else {
+            None
+        }
+    }
+
+    pub fn fields(&self, variant: Option<&str>) -> Option<&UserDefinedTypeFields<'arena>> {
+        match (self, variant) {
+            (UserDefinedType::Product(fields), None) => Some(fields),
+            (UserDefinedType::Sum(variants), Some(variant)) => variants
+                .iter()
+                .find(|(name, _)| name == variant)
+                .map(|(_, fields)| fields),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub enum TypeConstructor<'arena> {
-    Product(Vec<'arena, &'arena Type<'arena>>),
-    Sum(Vec<'arena, Vec<'arena, &'arena Type<'arena>>>),
+pub enum UserDefinedTypeFields<'arena> {
+    Named(Vec<'arena, (String, &'arena Type<'arena>)>),
+    Anonymous(Vec<'arena, &'arena Type<'arena>>),
+    Unit,
+}
+
+impl<'arena> UserDefinedTypeFields<'arena> {
+    pub fn as_named(&self) -> Option<&[(String, &'arena Type<'arena>)]> {
+        if let UserDefinedTypeFields::Named(fields) = self {
+            Some(fields)
+        } else {
+            None
+        }
+    }
+
+    pub fn get(&self, field: &str) -> Option<&'arena Type<'arena>> {
+        match self {
+            UserDefinedTypeFields::Named(fields) => fields
+                .iter()
+                .find(|(name, _)| name == field)
+                .map(|&(_, ty)| ty),
+            UserDefinedTypeFields::Anonymous(fields) => {
+                fields.get(field.parse::<usize>().ok()?).copied()
+            }
+            UserDefinedTypeFields::Unit => None,
+        }
+    }
+
+    pub fn index_of(&self, field: &str) -> Option<usize> {
+        match self {
+            UserDefinedTypeFields::Named(fields) => {
+                fields.iter().position(|(name, _)| name == field)
+            }
+            UserDefinedTypeFields::Anonymous(_) => field.parse().ok(),
+            UserDefinedTypeFields::Unit => None,
+        }
+    }
+
+    #[expect(
+        clippy::iter_on_empty_collections,
+        reason = "must be an empty slice to typecheck"
+    )]
+    pub fn iter(&self) -> impl Iterator<Item = &'arena Type<'arena>> + use<'_, 'arena> {
+        enum Iter<'a, 'arena> {
+            Named(slice::Iter<'a, (String, &'arena Type<'arena>)>),
+            Anonymous(slice::Iter<'a, &'arena Type<'arena>>),
+        }
+
+        impl<'arena> Iterator for Iter<'_, 'arena> {
+            type Item = &'arena Type<'arena>;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                match self {
+                    Iter::Named(iter) => iter.next().map(|&(_, ty)| ty),
+                    Iter::Anonymous(iter) => iter.next().copied(),
+                }
+            }
+        }
+
+        match self {
+            UserDefinedTypeFields::Named(fields) => Iter::Named(fields.iter()),
+            UserDefinedTypeFields::Anonymous(fields) => Iter::Anonymous(fields.iter()),
+            UserDefinedTypeFields::Unit => Iter::Anonymous([].iter()),
+        }
+    }
+
+    pub fn names(&self) -> impl Iterator<Item = String> + use<'_> {
+        enum Iter<'a> {
+            Named(slice::Iter<'a, (String, &'a Type<'a>)>),
+            Anonymous(Range<usize>),
+        }
+
+        impl Iterator for Iter<'_> {
+            type Item = String;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                match self {
+                    Iter::Named(iter) => iter.next().map(|(name, _)| name.clone()),
+                    Iter::Anonymous(iter) => iter.next().as_ref().map(ToString::to_string),
+                }
+            }
+        }
+
+        match self {
+            UserDefinedTypeFields::Named(fields) => Iter::Named(fields.iter()),
+            UserDefinedTypeFields::Anonymous(fields) => Iter::Anonymous(0..fields.len()),
+            UserDefinedTypeFields::Unit => Iter::Anonymous(0..0),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            UserDefinedTypeFields::Named(fields) => fields.len(),
+            UserDefinedTypeFields::Anonymous(fields) => fields.len(),
+            UserDefinedTypeFields::Unit => 0,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 #[derive(Debug)]
@@ -317,7 +462,6 @@ pub struct Function<'arena> {
     pub continuations: HashMap<'arena, Ident, &'arena Type<'arena>>,
     pub body: Vec<'arena, Expr<'arena>>,
     pub captures: Vec<'arena, Ident>,
-    next_ident: u32,
     pub name: String,
 }
 
@@ -328,15 +472,8 @@ impl<'arena> Function<'arena> {
             continuations: HashMap::new_in(arena),
             body: Vec::new_in(arena),
             captures: Vec::new_in(arena),
-            next_ident: 0,
             name,
         }
-    }
-
-    pub fn ident(&mut self) -> Ident {
-        let ident = Ident::new(self.next_ident);
-        self.next_ident += 1;
-        ident
     }
 }
 
@@ -348,6 +485,8 @@ pub struct Program<'arena> {
     pub(crate) next_function: u32,
     lib_std: Option<StdLib>,
     pub name: String,
+    pub continuation_idents: HashMap<'arena, String, Ident>,
+    pub user_defined_types: HashMap<'arena, UserDefinedTyRef, &'arena UserDefinedType<'arena>>,
 }
 
 impl<'arena> Program<'arena> {
@@ -359,6 +498,8 @@ impl<'arena> Program<'arena> {
             next_function: 1,
             lib_std: None,
             name,
+            continuation_idents: HashMap::new_in(arena),
+            user_defined_types: HashMap::new_in(arena),
         };
         program.lib_std = Some(lib_std::standard_library(&mut program, arena));
         program
@@ -387,6 +528,17 @@ impl<'arena> Program<'arena> {
             let ty = arena.alloc(ty);
             self.types.insert(ty);
             ty
+        }
+    }
+
+    pub fn continuation_ident(&mut self, continuation: &str) -> Ident {
+        if let Some(ident) = self.continuation_idents.get(continuation) {
+            *ident
+        } else {
+            let ident = Ident::new();
+            self.continuation_idents
+                .insert(continuation.to_string(), ident);
+            ident
         }
     }
 }

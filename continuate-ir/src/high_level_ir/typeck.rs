@@ -6,6 +6,7 @@ use crate::common::Ident;
 use crate::common::Intrinsic;
 use crate::common::Literal;
 use crate::common::UnaryOp;
+use crate::high_level_ir::DestructureFields;
 use crate::high_level_ir::Expr;
 use crate::high_level_ir::ExprArray;
 use crate::high_level_ir::ExprAssign;
@@ -14,6 +15,7 @@ use crate::high_level_ir::ExprBlock;
 use crate::high_level_ir::ExprCall;
 use crate::high_level_ir::ExprClosure;
 use crate::high_level_ir::ExprConstructor;
+use crate::high_level_ir::ExprConstructorFields;
 use crate::high_level_ir::ExprContApplication;
 use crate::high_level_ir::ExprDeclare;
 use crate::high_level_ir::ExprGet;
@@ -27,8 +29,8 @@ use crate::high_level_ir::FunctionTy;
 use crate::high_level_ir::Pattern;
 use crate::high_level_ir::Program;
 use crate::high_level_ir::Type;
-use crate::high_level_ir::TypeConstructor;
 use crate::high_level_ir::UserDefinedType;
+use crate::high_level_ir::UserDefinedTypeFields;
 
 use bumpalo::Bump;
 
@@ -102,9 +104,15 @@ struct TypeCk<'a, 'arena> {
 }
 
 impl<'a, 'arena> TypeCk<'a, 'arena> {
-    fn exprs(&mut self, exprs: &mut [Expr<'arena>]) -> Result<Vec<'arena, &'arena Type<'arena>>> {
+    fn exprs<'b, I: IntoIterator<Item = &'b mut Expr<'arena>>>(
+        &mut self,
+        exprs: I,
+    ) -> Result<Vec<'arena, &'arena Type<'arena>>>
+    where
+        'arena: 'b,
+    {
         let vec = Vec::new_in(self.arena);
-        let types = try_collect_into(exprs.iter_mut().map(|expr| self.expr(expr)), vec)?;
+        let types = try_collect_into(exprs.into_iter().map(|expr| self.expr(expr)), vec)?;
         Ok(types)
     }
 
@@ -158,23 +166,58 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
         &mut self,
         expr: &mut ExprConstructor<'arena>,
     ) -> Result<&'arena Type<'arena>> {
-        let fields = self.exprs(&mut expr.fields)?;
-        let user_defined = expr
-            .ty
+        let ty = expr.ty;
+        let user_defined = ty
             .as_user_defined()
             .ok_or_else(|| format!("cannot construct {:?}", expr.ty))?;
-        let ty_fields = match (&user_defined.constructor, expr.index) {
-            (TypeConstructor::Product(ty_fields), None) => ty_fields,
-            (TypeConstructor::Sum(variants), Some(index)) => &variants[index],
+        let ty_fields = match (
+            &self.program.user_defined_types[&user_defined],
+            &expr.variant,
+        ) {
+            (UserDefinedType::Product(ty_fields), None) => ty_fields,
+            (UserDefinedType::Sum(variants), Some(variant)) => variants
+                .iter()
+                .find(|(name, _)| name == variant)
+                .map(|(_, variant)| variant)
+                .ok_or_else(|| format!("type {:?} has no variant '{variant}'", expr.ty))?,
             _ => unreachable!(),
         };
 
-        if fields.len() != ty_fields.len() {
-            Err("incorrect number of fields")?;
-        }
+        match (&mut expr.fields, ty_fields) {
+            (
+                ExprConstructorFields::Named(expr_fields),
+                UserDefinedTypeFields::Named(ty_fields),
+            ) => {
+                let mut used_fields = HashSet::new_in(self.arena);
+                for (field, expr) in expr_fields {
+                    if used_fields.contains(field) {
+                        Err(format!("field {field} specified twice"))?;
+                    }
 
-        for (given_field_ty, field_ty) in fields.iter().zip(ty_fields) {
-            given_field_ty.unify(field_ty, self.program, self.arena)?;
+                    let (field, ty_field) = ty_fields
+                        .iter()
+                        .find(|(name, _)| name == field)
+                        .ok_or_else(|| format!("type {ty:?} has no field '{field}"))?;
+                    self.expr(expr)?.unify(ty_field, self.program, self.arena)?;
+                    used_fields.insert(field);
+                }
+                for (field, _) in ty_fields {
+                    if !used_fields.contains(field) {
+                        Err(format!("missing field '{field}'"))?;
+                    }
+                }
+            }
+            (
+                ExprConstructorFields::Anonymous(expr_fields),
+                UserDefinedTypeFields::Anonymous(ty_fields),
+            ) => {
+                let expr_field_tys = self.exprs(expr_fields)?;
+                for (expr_ty, field_ty) in expr_field_tys.iter().zip(ty_fields) {
+                    expr_ty.unify(field_ty, self.program, self.arena)?;
+                }
+            }
+            (ExprConstructorFields::Unit, UserDefinedTypeFields::Unit) => {}
+            _ => Err("incompatible field styles")?,
         }
 
         Ok(expr.ty)
@@ -195,14 +238,16 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
     fn expr_get(&mut self, expr: &mut ExprGet<'arena>) -> Result<&'arena Type<'arena>> {
         let found_ty = self.expr(&mut expr.object)?;
         let object_ty = found_ty.unify(expr.object_ty, self.program, self.arena)?;
-        let Type::UserDefined(UserDefinedType {
-            constructor: TypeConstructor::Product(fields),
-        }) = object_ty
-        else {
+        let Type::UserDefined(ty) = object_ty else {
+            Err(format!("cannot take field of {object_ty:?}"))?
+        };
+        let UserDefinedType::Product(fields) = self.program.user_defined_types[ty] else {
             Err(format!("cannot take field of {object_ty:?}"))?
         };
 
-        Ok(fields[expr.field])
+        Ok(fields
+            .get(&expr.field)
+            .ok_or_else(|| format!("{object_ty:?} has no field '{}'", expr.field))?)
     }
 
     fn expr_set(&mut self, expr: &mut ExprSet<'arena>) -> Result<&'arena Type<'arena>> {
@@ -210,14 +255,16 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
         let ty = found_ty.unify(expr.object_ty, self.program, self.arena)?;
         expr.object_ty = ty;
 
-        let Type::UserDefined(UserDefinedType {
-            constructor: TypeConstructor::Product(fields),
-        }) = ty
-        else {
-            Err(format!("cannot take field of {:?}", expr.object_ty))?
+        let Type::UserDefined(object_ty) = ty else {
+            Err(format!("cannot take field of {ty:?}"))?
+        };
+        let UserDefinedType::Product(fields) = self.program.user_defined_types[object_ty] else {
+            Err(format!("cannot take field of {ty:?}"))?
         };
 
-        let field_ty = fields[expr.field];
+        let field_ty = fields
+            .get(&expr.field)
+            .ok_or_else(|| format!("{object_ty:?} has no field '{}'", expr.field))?;
 
         let ty = self.expr(&mut expr.value)?;
         let ty = ty.unify(field_ty, self.program, self.arena)?;
@@ -358,30 +405,78 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
             }
             Pattern::Destructure {
                 ty,
-                variant,
+                ref variant,
                 ref fields,
             } => {
                 let ty = expr_ty.unify(ty, self.program, self.arena)?;
-                let field_tys = match (&ty.as_user_defined().unwrap().constructor, variant) {
-                    (TypeConstructor::Product(fields), None) => fields,
-                    (TypeConstructor::Sum(variants), Some(variant)) => &variants[variant],
-                    _ => unreachable!(),
+                let user_defined = &self.program.user_defined_types[&ty.as_user_defined().unwrap()];
+                let field_tys = match (user_defined, variant) {
+                    (UserDefinedType::Product(fields), None) => fields,
+                    (UserDefinedType::Sum(variants), Some(variant)) => variants
+                        .iter()
+                        .find(|(name, _)| name == variant)
+                        .map(|(_, variant)| variant)
+                        .ok_or_else(|| format!("{ty:?} has no variant '{variant}'"))?,
+                    (UserDefinedType::Product(_), Some(variant)) => {
+                        Err(format!("{ty:?} has no variant '{variant}'"))?
+                    }
+                    (UserDefinedType::Sum(_), None) => Err(format!("{ty:?} does not have fields"))?,
                 };
-                let exhaustive = fields.iter().zip(field_tys).try_fold(
-                    Exhaustive::Exhaustive,
-                    |acc, (pat, &field_ty)| {
-                        Result::Ok(
-                            self.pattern(field_ty, pat)?
+
+                let exhaustive = match (fields, field_tys) {
+                    (DestructureFields::Named(fields), UserDefinedTypeFields::Named(field_tys)) => {
+                        let mut used_fields = HashSet::new_in(self.arena);
+                        let mut exhaustive = Exhaustive::Exhaustive;
+                        for (field, pat) in fields {
+                            let (_, field_ty) = field_tys
+                                .iter()
+                                .find(|(name, _)| name == field)
+                                .ok_or_else(|| format!("type {ty:?} has no field '{field}'"))?;
+                            exhaustive = self
+                                .pattern(field_ty, pat)?
                                 .finalise()
-                                .intersect(acc, self.arena),
-                        )
-                    },
-                )?;
+                                .intersect(exhaustive, self.arena);
+                            used_fields.insert(field);
+                        }
+                        for (field, _) in field_tys {
+                            if !used_fields.contains(field) {
+                                Err(format!("missing field '{field}'"))?;
+                            }
+                        }
+                        exhaustive
+                    }
+                    (
+                        DestructureFields::Anonymous(fields),
+                        UserDefinedTypeFields::Anonymous(field_tys),
+                    ) => fields.iter().zip(field_tys).try_fold(
+                        Exhaustive::Exhaustive,
+                        |acc, (pat, &field_ty)| {
+                            Result::Ok(
+                                self.pattern(field_ty, pat)?
+                                    .finalise()
+                                    .intersect(acc, self.arena),
+                            )
+                        },
+                    )?,
+                    (DestructureFields::Unit, UserDefinedTypeFields::Unit) => {
+                        Exhaustive::Exhaustive
+                    }
+                    _ => return Err("mismatched field types".into()),
+                };
+
                 match (variant, exhaustive) {
                     (Some(variant), Exhaustive::Exhaustive) => {
-                        let mut variants = HashSet::with_capacity_in(1, self.arena);
-                        variants.insert(variant);
-                        Ok(Exhaustive::ExhaustiveVariants(variants))
+                        let user_defined =
+                            &self.program.user_defined_types[&ty.as_user_defined().unwrap()];
+                        let variants = user_defined.as_sum().unwrap();
+                        let (variant, _) = variants
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (name, _))| name == variant)
+                            .unwrap();
+                        let mut found_variants = HashSet::with_capacity_in(1, self.arena);
+                        found_variants.insert(variant);
+                        Ok(Exhaustive::ExhaustiveVariants(found_variants))
                     }
                     (None, Exhaustive::Exhaustive) => Ok(Exhaustive::Exhaustive),
                     _ => Ok(Exhaustive::NonExhaustive),

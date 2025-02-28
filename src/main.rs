@@ -8,6 +8,7 @@ use std::process::Stdio;
 use bumpalo::Bump;
 
 use continuate_ir::common::BinaryOp;
+use continuate_ir::common::Ident;
 use continuate_ir::common::Literal;
 use continuate_ir::high_level_ir::typeck;
 use continuate_ir::high_level_ir::Expr;
@@ -69,9 +70,9 @@ fn main() {
     let int_fn = program.insert_type(int_fn, &hir_arena);
 
     let mut sum_fn = Function::new("test::sum".to_string(), &hir_arena);
-    let cont = sum_fn.ident();
-    let param_1 = sum_fn.ident();
-    let param_2 = sum_fn.ident();
+    let cont = Ident::new();
+    let param_1 = Ident::new();
+    let param_2 = Ident::new();
     sum_fn.params.extend([(param_1, ty_int), (param_2, ty_int)]);
     sum_fn.continuations.insert(cont, int_fn);
 
@@ -108,12 +109,12 @@ fn main() {
     program.signatures.insert(sum_fn_ref, sum_fn_ty);
 
     let mut main_fn = Function::new("test::main".to_string(), &hir_arena);
-    let termination_cont = main_fn.ident();
+    let termination_cont = Ident::new();
     main_fn.continuations.insert(termination_cont, int_fn);
 
     let string = Expr::Literal(Literal::String("hello".to_string()));
     let assign_string = Expr::Declare(ExprDeclare {
-        ident: main_fn.ident(),
+        ident: Ident::new(),
         ty: program.insert_type(Type::String, &hir_arena),
         expr: Box::new_in(string, &hir_arena),
     });

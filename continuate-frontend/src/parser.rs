@@ -129,8 +129,12 @@ where
     'src: 'tokens,
 {
     recursive(|ty| {
-        path()
-            .map(Type::Path)
+        just(Token::KwBool)
+            .map_with(|_, e| Type::Bool(e.span()))
+            .or(just(Token::KwInt).map_with(|_, e| Type::Int(e.span())))
+            .or(just(Token::KwFloat).map_with(|_, e| Type::Float(e.span())))
+            .or(just(Token::KwString).map_with(|_, e| Type::String(e.span())))
+            .or(path().map(Type::Path))
             .or(tuple(ty.clone()).map(|result| match result {
                 TupleResult::Tuple { items, span } => Type::Tuple { items, span },
                 TupleResult::Single(ty) => ty,

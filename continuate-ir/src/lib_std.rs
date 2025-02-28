@@ -1,4 +1,5 @@
 use crate::common::FuncRef;
+use crate::common::Ident;
 use crate::common::Intrinsic;
 use crate::high_level_ir::Expr;
 use crate::high_level_ir::ExprCall;
@@ -31,7 +32,7 @@ pub(crate) fn standard_library<'arena>(
     let ty_unknown = program.insert_type(Type::Unknown, arena);
 
     let mut fn_termination = Function::new("termination".to_string(), arena);
-    let param = fn_termination.ident();
+    let param = Ident::new();
     fn_termination.params.push((param, ty_int));
     fn_termination.body.push(Expr::Intrinsic(ExprIntrinsic {
         intrinsic: Intrinsic::Terminate,
@@ -56,16 +57,16 @@ pub(crate) fn standard_library<'arena>(
     let int_fn = program.insert_type(int_fn, arena);
 
     let mut fn_discriminant = Function::new("discriminant".to_string(), arena);
-    let param = fn_discriminant.ident();
+    let param = Ident::new();
     fn_discriminant.params.push((param, ty_bool)); // TODO: Should be generic.
-    let cont = fn_discriminant.ident();
+    let cont = Ident::new();
     fn_discriminant.continuations.insert(cont, int_fn);
     let intrinsic = Expr::Intrinsic(ExprIntrinsic {
         intrinsic: Intrinsic::Discriminant,
         value: Box::new_in(Expr::Ident(param), arena),
         value_ty: ty_unknown,
     });
-    let discriminant = fn_discriminant.ident();
+    let discriminant = Ident::new();
     let declare = Expr::Declare(ExprDeclare {
         ident: discriminant,
         ty: ty_int,

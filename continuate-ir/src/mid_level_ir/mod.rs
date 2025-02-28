@@ -115,7 +115,7 @@ impl hash::Hash for FunctionTy<'_> {
         for (&name, &ty) in self
             .continuations
             .iter()
-            .sorted_unstable_by_key(|(&ident, _)| ident.0)
+            .sorted_unstable_by_key(|(&ident, _)| ident)
         {
             (name, ty).hash(state);
         }
@@ -229,7 +229,6 @@ pub struct Function<'arena> {
     pub declarations: HashMap<'arena, Ident, (&'arena Type<'arena>, Option<Literal>)>,
     pub blocks: HashMap<'arena, BlockId, Block<'arena>>,
     pub captures: HashMap<'arena, Ident, &'arena Type<'arena>>,
-    next_ident: u32,
     next_block: u64,
     pub name: String,
 }
@@ -242,16 +241,9 @@ impl<'arena> Function<'arena> {
             declarations: HashMap::new_in(arena),
             blocks: HashMap::new_in(arena),
             captures: HashMap::new_in(arena),
-            next_ident: 0,
             next_block: 1,
             name,
         }
-    }
-
-    pub fn ident(&mut self) -> Ident {
-        let ident = Ident::new(self.next_ident);
-        self.next_ident += 1;
-        ident
     }
 
     pub fn type_of_var(&self, var: Ident) -> Option<&'arena Type<'arena>> {

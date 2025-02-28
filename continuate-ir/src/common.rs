@@ -1,14 +1,24 @@
 use std::cmp;
 use std::fmt;
 use std::hash;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use continuate_error::Span;
 
 #[derive(Clone, Copy)]
-pub struct Ident(pub(crate) u32, Span);
+pub struct Ident(u64, Span);
 
 impl Ident {
-    pub(crate) const fn new(value: u32) -> Ident {
+    /// ## Panics
+    ///
+    /// Panics if the total number of identifiers exceeds `u64::MAX - 1`.
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Ident {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+
+        let value = NEXT.fetch_add(1, Ordering::Relaxed);
+        assert_ne!(value, u64::MAX, "ident overflow");
         Ident(value, Span::dummy())
     }
 }
@@ -39,12 +49,6 @@ impl hash::Hash for Ident {
     }
 }
 
-impl From<Ident> for u32 {
-    fn from(value: Ident) -> Self {
-        value.0
-    }
-}
-
 impl fmt::Debug for Ident {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -65,6 +69,23 @@ impl fmt::Debug for FuncRef {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "FuncRef({})", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct UserDefinedTyRef(u64);
+
+impl UserDefinedTyRef {
+    /// ## Panics
+    ///
+    /// Panics if the total number of identifiers exceeds `u64::MAX - 1`.
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> UserDefinedTyRef {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+
+        let value = NEXT.fetch_add(1, Ordering::Relaxed);
+        assert_ne!(value, u64::MAX, "ty ref overflow");
+        UserDefinedTyRef(value)
     }
 }
 

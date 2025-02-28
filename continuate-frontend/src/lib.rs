@@ -5,6 +5,7 @@ pub use lexer::Token;
 
 mod name_resolution;
 pub use name_resolution::resolve_names;
+pub use name_resolution::NameMap;
 
 mod parser;
 pub use parser::parse;
@@ -133,6 +134,10 @@ impl<'src> From<Ident<'src>> for Path<'src> {
 
 #[derive(Debug, Clone)]
 pub enum Type<'src> {
+    Bool(Span),
+    Int(Span),
+    Float(Span),
+    String(Span),
     Path(Path<'src>),
     Tuple {
         items: Vec<Type<'src>>,
@@ -285,7 +290,7 @@ pub enum UserDefinedTy<'src> {
 }
 
 impl<'src> UserDefinedTy<'src> {
-    const fn name(&self) -> &Ident<'src> {
+    pub const fn name(&self) -> &Ident<'src> {
         match self {
             UserDefinedTy::Product {
                 name,

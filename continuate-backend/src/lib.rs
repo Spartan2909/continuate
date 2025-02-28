@@ -363,6 +363,7 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
             function_runtime,
             vars: HashMap::new(),
             temp_roots: Vec::new(),
+            variables: HashMap::new(),
         };
 
         function_compiler.compile();

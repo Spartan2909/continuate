@@ -58,27 +58,65 @@ impl<'a> Scope<'a> {
     }
 }
 
+pub struct NameMap {
+    idents: HashMap<Span, Span>,
+    paths: HashMap<Span, Span>,
+}
+
+impl NameMap {
+    fn new() -> NameMap {
+        NameMap {
+            idents: HashMap::new(),
+            paths: HashMap::new(),
+        }
+    }
+
+    fn insert_ident(&mut self, ident: &Ident, target_span: Span) {
+        self.idents.insert(ident.span, target_span);
+    }
+
+    fn insert_path(&mut self, path: &Path, target_span: Span) {
+        self.paths.insert(path.span, target_span);
+    }
+
+    pub fn get_ident(&self, ident: &Ident) -> Option<Span> {
+        self.idents.get(&ident.span).copied()
+    }
+
+    pub fn ident_definitions(&self) -> impl Iterator<Item = Span> + use<'_> {
+        self.idents.values().copied()
+    }
+
+    pub fn get_path(&self, path: &Path) -> Option<Span> {
+        self.paths.get(&path.span).copied()
+    }
+
+    pub fn path_definitions(&self) -> impl Iterator<Item = Span> + use<'_> {
+        self.paths.values().copied()
+    }
+}
+
 struct Resolver<'a> {
-    map: HashMap<Span, Span>,
+    map: NameMap,
     scope: Scope<'a>,
 }
 
 impl<'a> Resolver<'a> {
     fn new() -> Resolver<'a> {
         Resolver {
-            map: HashMap::new(),
+            map: NameMap::new(),
             scope: Scope::new(),
         }
     }
 
     fn resolve_ident(&mut self, ident: &Ident) {
         self.map
-            .insert(ident.span, self.scope.get_ident(ident).unwrap());
+            .insert_ident(ident, self.scope.get_ident(ident).unwrap());
     }
 
     fn resolve_path(&mut self, path: &Path) {
         self.map
-            .insert(path.span, self.scope.get_path(path).unwrap());
+            .insert_path(path, self.scope.get_path(path).unwrap());
     }
 
     fn with_scope(&mut self, f: impl FnOnce(&mut Self)) {
@@ -181,7 +219,7 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn resolve(mut self, program: &'a Program<'a>) -> HashMap<Span, Span> {
+    fn resolve(mut self, program: &'a Program<'a>) -> NameMap {
         for item in &program.items {
             self.scope.define_path(Path::from(item.name().clone()));
         }
@@ -202,6 +240,6 @@ impl<'a> Resolver<'a> {
     }
 }
 
-pub fn resolve_names(program: &Program) -> HashMap<Span, Span> {
+pub fn resolve_names(program: &Program) -> NameMap {
     Resolver::new().resolve(program)
 }

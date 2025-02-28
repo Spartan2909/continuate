@@ -1,5 +1,7 @@
 use crate::common::Ident;
 use crate::common::Intrinsic;
+use crate::common::UserDefinedTyRef;
+use crate::high_level_ir::DestructureFields;
 use crate::high_level_ir::Expr as HirExpr;
 use crate::high_level_ir::ExprArray as HirExprArray;
 use crate::high_level_ir::ExprAssign as HirExprAssign;
@@ -8,6 +10,7 @@ use crate::high_level_ir::ExprBlock as HirExprBlock;
 use crate::high_level_ir::ExprCall as HirExprCall;
 use crate::high_level_ir::ExprClosure as HirExprClosure;
 use crate::high_level_ir::ExprConstructor as HirExprConstructor;
+use crate::high_level_ir::ExprConstructorFields;
 use crate::high_level_ir::ExprContApplication as HirExprContApplication;
 use crate::high_level_ir::ExprDeclare as HirExprDeclare;
 use crate::high_level_ir::ExprGet as HirExprGet;
@@ -21,8 +24,8 @@ use crate::high_level_ir::FunctionTy as HirFunctionTy;
 use crate::high_level_ir::Pattern;
 use crate::high_level_ir::Program as HirProgram;
 use crate::high_level_ir::Type as HirType;
-use crate::high_level_ir::TypeConstructor as HirTypeConstructor;
 use crate::high_level_ir::UserDefinedType as HirUserDefinedType;
+use crate::high_level_ir::UserDefinedTypeFields;
 use crate::mid_level_ir::Block;
 use crate::mid_level_ir::BlockId;
 use crate::mid_level_ir::Expr;
@@ -32,9 +35,9 @@ use crate::mid_level_ir::Type;
 use crate::mid_level_ir::TypeConstructor;
 use crate::mid_level_ir::UserDefinedType;
 
-use std::cmp::Ordering;
 use std::iter;
 use std::mem;
+use std::slice;
 
 use bumpalo::Bump;
 
@@ -45,12 +48,6 @@ use continuate_utils::Vec;
 use hashbrown::hash_map::Entry;
 
 use itertools::Itertools as _;
-
-struct ExprGet<'arena> {
-    object: Expr<'arena>,
-    object_ty: &'arena Type<'arena>,
-    field: usize,
-}
 
 enum ArmData {
     Variant(MatchVariant),
@@ -63,6 +60,15 @@ struct MatchVariant {
     block: BlockId,
 }
 
+fn field_index(ty: &HirUserDefinedType, field: &str) -> Option<usize> {
+    let fields = ty.as_product()?;
+    match fields {
+        UserDefinedTypeFields::Named(fields) => fields.iter().position(|(name, _)| name == field),
+        UserDefinedTypeFields::Anonymous(_) => field.parse().ok(),
+        UserDefinedTypeFields::Unit => None,
+    }
+}
+
 struct Lowerer<'a, 'arena> {
     arena: &'arena Bump,
     program: Program<'arena>,
@@ -73,16 +79,17 @@ struct Lowerer<'a, 'arena> {
 }
 
 impl<'a, 'arena> Lowerer<'a, 'arena> {
-    fn user_defined_ty(&self, ty: &HirUserDefinedType) -> UserDefinedType<'arena> {
-        let constructor = match &ty.constructor {
-            HirTypeConstructor::Product(fields) => {
+    fn user_defined_ty(&self, ty_ref: UserDefinedTyRef) -> UserDefinedType<'arena> {
+        let ty = self.hir_program.user_defined_types[&ty_ref];
+        let constructor = match &ty {
+            HirUserDefinedType::Product(fields) => {
                 let mut new_fields = Vec::with_capacity_in(fields.len(), self.arena);
                 new_fields.extend(fields.iter().map(|field| self.types[field]));
                 TypeConstructor::Product(new_fields)
             }
-            HirTypeConstructor::Sum(variants) => {
+            HirUserDefinedType::Sum(variants) => {
                 let mut new_variants = Vec::with_capacity_in(variants.len(), self.arena);
-                for variant in variants {
+                for (_, variant) in variants {
                     let mut new_variant = Vec::with_capacity_in(variant.len(), self.arena);
                     new_variant.extend(variant.iter().map(|field| self.types[field]));
                     new_variants.push(new_variant);
@@ -119,21 +126,23 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                     HashMap::new_in(self.arena),
                 ),
             ),
-            HirType::UserDefined(ref ty) => Type::UserDefined(self.user_defined_ty(ty)),
+            HirType::UserDefined(ty) => Type::UserDefined(self.user_defined_ty(ty)),
             HirType::Unknown => unreachable!(),
             HirType::None => Type::None,
         }
     }
 
-    fn expr_list(
+    fn expr_list<'b>(
         &mut self,
-        exprs: &[HirExpr],
+        exprs: impl IntoIterator<Item = &'b HirExpr<'b>>,
         block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Vec<'arena, Expr<'arena>> {
         let initial = Vec::new_in(self.arena);
         collect_into(
-            exprs.iter().map(|expr| self.expr(expr, block, function)),
+            exprs
+                .into_iter()
+                .map(|expr| self.expr(expr, block, function)),
             initial,
         )
     }
@@ -191,15 +200,34 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Expr<'arena> {
-        let fields = self.expr_list(&expr.fields, block, function);
+        let ty = self.hir_program.user_defined_types[&expr.ty.as_user_defined().unwrap()];
+        let fields = match &expr.fields {
+            ExprConstructorFields::Named(fields) => self.expr_list(
+                fields
+                    .iter()
+                    .sorted_unstable_by(|(name_1, _), (name_2, _)| {
+                        let fields = ty.fields(expr.variant.as_deref()).unwrap();
+                        let index_1 = fields.index_of(name_1).unwrap();
+                        let index_2 = fields.index_of(name_2).unwrap();
+                        index_1.cmp(&index_2)
+                    })
+                    .map(|(_, field)| field),
+                block,
+                function,
+            ),
+            ExprConstructorFields::Anonymous(fields) => self.expr_list(fields, block, function),
+            ExprConstructorFields::Unit => Vec::new_in(self.arena),
+        };
 
-        let mut new_fields = Vec::with_capacity_in(fields.len(), self.arena);
-        new_fields.extend(fields);
-        let ty = expr.ty;
         Expr::Constructor {
-            ty: self.types[ty],
-            index: expr.index,
-            fields: new_fields,
+            ty: self.types[expr.ty],
+            index: expr.variant.as_ref().and_then(|variant| {
+                ty.as_sum()
+                    .unwrap()
+                    .iter()
+                    .position(|(name, _)| name == variant)
+            }),
+            fields,
         }
     }
 
@@ -219,44 +247,23 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         }
     }
 
-    fn expr_get_impl(
-        &mut self,
-        object: &HirExpr,
-        object_ty: &'arena Type<'arena>,
-        field: usize,
-        block: &mut Block<'arena>,
-        function: &mut Function<'arena>,
-    ) -> ExprGet<'arena> {
-        let object = self.expr(object, block, function);
-        ExprGet {
-            object,
-            object_ty,
-            field,
-        }
-    }
-
     fn expr_get(
         &mut self,
         expr: &HirExprGet,
         block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Expr<'arena> {
-        let ExprGet {
-            object,
-            object_ty,
-            field,
-        } = self.expr_get_impl(
-            &expr.object,
-            self.types[expr.object_ty],
-            expr.field,
-            block,
-            function,
-        );
+        let object = self.expr(&expr.object, block, function);
+        let user_defined = expr.object_ty.as_user_defined().unwrap();
         Expr::Get {
             object: self.arena.alloc(object),
-            object_ty,
+            object_ty: self.types[expr.object_ty],
             object_variant: None,
-            field,
+            field: field_index(
+                self.hir_program.user_defined_types[&user_defined],
+                &expr.field,
+            )
+            .unwrap(),
         }
     }
 
@@ -266,28 +273,22 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Expr<'arena> {
-        let ExprGet {
-            object,
-            object_ty,
-            field,
-        } = self.expr_get_impl(
-            &expr.object,
-            self.types[expr.object_ty],
-            expr.field,
-            block,
-            function,
-        );
+        let object = self.expr(&expr.object, block, function);
+        let user_defined = expr.object_ty.as_user_defined().unwrap();
 
         let value = self.expr(&expr.value, block, function);
 
-        let expr = Expr::Set {
+        Expr::Set {
             object: self.arena.alloc(object),
-            object_ty,
+            object_ty: self.types[expr.object_ty],
             object_variant: None,
-            field,
+            field: field_index(
+                self.hir_program.user_defined_types[&user_defined],
+                &expr.field,
+            )
+            .unwrap(),
             value: self.arena.alloc(value),
-        };
-        expr
+        }
     }
 
     fn expr_call(
@@ -395,22 +396,59 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         expr
     }
 
-    fn order_patterns<'b>(
-        fields: &'b [Pattern<'b>],
-    ) -> impl Iterator<Item = (usize, &'b Pattern<'b>)> {
-        fields
-            .iter()
-            .enumerate()
-            .sorted_unstable_by(|&(_, l), &(_, r)| {
-                #[allow(clippy::match_same_arms)] // Arm order matters
-                match (l, r) {
-                    (x, y) if x == y => Ordering::Equal,
-                    (Pattern::Wildcard, _) => Ordering::Less,
-                    (Pattern::Ident(_), Pattern::Wildcard) => Ordering::Greater,
-                    (Pattern::Ident(_), _) => Ordering::Less,
-                    (Pattern::Destructure { .. }, _) => Ordering::Greater,
+    #[expect(
+        clippy::iter_on_empty_collections,
+        reason = "must be an empty slice to typecheck"
+    )]
+    fn order_destructure_fields<'b>(
+        fields: &'b DestructureFields<'b>,
+        ty: &'b HirUserDefinedType,
+        variant: Option<&str>,
+    ) -> impl Iterator<Item = &'b Pattern<'b>> {
+        enum Iter<'a> {
+            Named {
+                fields: &'a [(String, Pattern<'a>)],
+                pos: usize,
+                ty: &'a [(String, &'a HirType<'a>)],
+            },
+            Anonymous(slice::Iter<'a, Pattern<'a>>),
+        }
+
+        impl<'a> Iterator for Iter<'a> {
+            type Item = &'a Pattern<'a>;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                match *self {
+                    Iter::Named {
+                        fields,
+                        ref mut pos,
+                        ty,
+                    } => {
+                        if *pos > ty.len() {
+                            return None;
+                        }
+
+                        let (name, _) = &ty[*pos];
+                        *pos += 1;
+                        fields
+                            .iter()
+                            .find(|(field, _)| field == name)
+                            .map(|(_, pattern)| pattern)
+                    }
+                    Iter::Anonymous(ref mut iter) => iter.next(),
                 }
-            })
+            }
+        }
+
+        match fields {
+            DestructureFields::Named(fields) => Iter::Named {
+                fields,
+                pos: 0,
+                ty: ty.fields(variant).unwrap().as_named().unwrap(),
+            },
+            DestructureFields::Anonymous(fields) => Iter::Anonymous(fields.iter()),
+            DestructureFields::Unit => Iter::Anonymous([].iter()),
+        }
     }
 
     fn pattern(
@@ -436,19 +474,23 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                 ArmData::Wildcard
             }
             Pattern::Destructure {
-                ty: _,
-                variant,
+                ty,
+                ref variant,
                 ref fields,
             } => {
-                for (field, pattern) in Self::order_patterns(fields) {
+                let ty = self.hir_program.user_defined_types[&ty.as_user_defined().unwrap()];
+                let variant_index = variant.as_ref().and_then(|variant| variant.parse().ok());
+                for (field, pattern) in
+                    Self::order_destructure_fields(fields, ty, variant.as_deref()).enumerate()
+                {
                     let get = Expr::Get {
                         object: scrutinee,
                         object_ty: scrutinee_ty,
-                        object_variant: variant,
+                        object_variant: variant_index,
                         field,
                     };
                     let get = self.arena.alloc(get);
-                    let field_ty_ref = scrutinee_ty.field(variant, field).unwrap();
+                    let field_ty_ref = scrutinee_ty.field(variant_index, field).unwrap();
                     let mut new_block = Block::new(self.arena);
                     let new_block_id = function.block();
                     match self.pattern(
@@ -482,7 +524,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                         }
                     }
                 }
-                if let Some(variant) = variant {
+                if let Some(variant) = variant_index {
                     ArmData::Variant(MatchVariant {
                         variant,
                         block: arm_block_id,
