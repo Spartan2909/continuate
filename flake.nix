@@ -23,7 +23,9 @@
         source = ./.;
       };
 
-      perSystem = { self', ... }: {
+      perSystem = { self', system, ... }: let 
+        pkgs = import inputs.nixpkgs { inherit system; };
+      in {
         crane.packages = {
           default = {
             CONTINUATE_RT_PATH = "${self'.packages.rt}/lib/libcontinuate_rt.a";
@@ -33,6 +35,7 @@
             cargoExtraArgs = "-p continuate-rt";
           };
         };
+        crane.shell.args.packages = [ pkgs.bacon ];
       };
     };
 }
