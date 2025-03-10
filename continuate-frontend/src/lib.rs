@@ -56,6 +56,16 @@ pub enum PathIdentSegment<'src> {
     Super(Span),
 }
 
+impl<'src> PathIdentSegment<'src> {
+    pub const fn as_ident(&self) -> Option<&Ident<'src>> {
+        if let PathIdentSegment::Ident(ident) = self {
+            Some(ident)
+        } else {
+            None
+        }
+    }
+}
+
 impl PartialEq for PathIdentSegment<'_> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -102,6 +112,17 @@ impl Hash for PathSegment<'_> {
 pub struct Path<'src> {
     pub segments: Vec<PathSegment<'src>>,
     pub span: Span,
+}
+
+impl<'src> Path<'src> {
+    pub fn as_ident(&self) -> Option<&Ident<'src>> {
+        let (start, rest) = self.segments.split_first()?;
+        if rest.is_empty() {
+            start.ident.as_ident()
+        } else {
+            None
+        }
+    }
 }
 
 impl PartialEq for Path<'_> {

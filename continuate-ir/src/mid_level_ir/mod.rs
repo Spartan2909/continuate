@@ -283,7 +283,6 @@ pub struct Program<'arena> {
     pub signatures: HashMap<'arena, FuncRef, &'arena Type<'arena>>,
     pub types: HashSet<'arena, &'arena Type<'arena>>,
     pub lib_std: StdLib,
-    next_function: u32,
     pub name: String,
 }
 
@@ -294,20 +293,8 @@ impl<'arena> Program<'arena> {
             signatures: HashMap::new_in(arena),
             types: HashSet::new_in(arena),
             lib_std: *program.lib_std(),
-            next_function: program.next_function,
             name: program.name.clone(),
         }
-    }
-
-    #[allow(clippy::unused_self)]
-    pub const fn entry_point(&self) -> FuncRef {
-        FuncRef(0)
-    }
-
-    pub fn function(&mut self) -> FuncRef {
-        let func_ref = FuncRef(self.next_function);
-        self.next_function += 1;
-        func_ref
     }
 
     pub fn insert_type(&mut self, ty: Type<'arena>, arena: &'arena Bump) -> &'arena Type<'arena> {

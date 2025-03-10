@@ -7,8 +7,10 @@ rust-version.workspace = true
 
 [dependencies]
 bumpalo.workspace = true
+clap = { version = "4.5.31", features = ["derive"] }
 continuate-backend.workspace = true 
 continuate-common.workspace = true
+continuate-error.workspace = true
 continuate-frontend.workspace = true
 continuate-ir.workspace = true
 continuate-utils.workspace = true

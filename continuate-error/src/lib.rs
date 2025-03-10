@@ -560,6 +560,12 @@ impl Error {
             .into_iter()
             .try_for_each(|report| report.print(cache))
     }
+
+    #[must_use]
+    pub fn combine(mut self, other: Error) -> Error {
+        self.errors.extend(other.errors);
+        self
+    }
 }
 
 impl From<ErrorInner> for Error {

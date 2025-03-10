@@ -1,6 +1,7 @@
 use std::cmp;
 use std::fmt;
 use std::hash;
+use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
@@ -57,7 +58,25 @@ impl fmt::Debug for Ident {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct FuncRef(pub(crate) u32);
+pub struct FuncRef(u32);
+
+impl FuncRef {
+    pub const ENTRY_POINT: FuncRef = FuncRef(0);
+
+    /// Get a new unique `FuncRef`.
+    ///
+    /// ## Panics
+    ///
+    /// Panics if the total number of `FuncRef`s exceeds `u32::MAX - 2`.
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> FuncRef {
+        static NEXT: AtomicU32 = AtomicU32::new(1);
+
+        let next = NEXT.fetch_add(1, Ordering::Relaxed);
+        assert_ne!(next, u32::MAX, "function overflow");
+        FuncRef(next)
+    }
+}
 
 impl From<FuncRef> for u32 {
     fn from(value: FuncRef) -> Self {

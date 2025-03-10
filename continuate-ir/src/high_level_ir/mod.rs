@@ -1,3 +1,6 @@
+mod lowering;
+pub use lowering::lower;
+
 mod typeck;
 pub use typeck::typeck;
 
@@ -482,7 +485,6 @@ pub struct Program<'arena> {
     pub functions: HashMap<'arena, FuncRef, Function<'arena>>,
     pub signatures: HashMap<'arena, FuncRef, &'arena Type<'arena>>,
     pub types: HashSet<'arena, &'arena Type<'arena>>,
-    pub(crate) next_function: u32,
     lib_std: Option<StdLib>,
     pub name: String,
     pub continuation_idents: HashMap<'arena, String, Ident>,
@@ -495,7 +497,6 @@ impl<'arena> Program<'arena> {
             functions: HashMap::new_in(arena),
             signatures: HashMap::new_in(arena),
             types: HashSet::new_in(arena),
-            next_function: 1,
             lib_std: None,
             name,
             continuation_idents: HashMap::new_in(arena),
@@ -508,17 +509,6 @@ impl<'arena> Program<'arena> {
     #[allow(clippy::missing_panics_doc)] // Will not panic.
     pub const fn lib_std(&self) -> &StdLib {
         self.lib_std.as_ref().unwrap()
-    }
-
-    #[allow(clippy::unused_self)]
-    pub const fn entry_point(&self) -> FuncRef {
-        FuncRef(0)
-    }
-
-    pub fn function(&mut self) -> FuncRef {
-        let func_ref = FuncRef(self.next_function);
-        self.next_function += 1;
-        func_ref
     }
 
     pub fn insert_type(&mut self, ty: Type<'arena>, arena: &'arena Bump) -> &'arena Type<'arena> {

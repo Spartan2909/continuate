@@ -77,7 +77,7 @@ struct Runtime {
 }
 
 impl Runtime {
-    fn new<M: Module>(module: &mut M) -> Runtime {
+    fn new<M: Module + ?Sized>(module: &mut M) -> Runtime {
         let ptr_ty = Type::triple_pointer_type(module.isa().triple());
 
         let mut alloc_gc_sig = module.make_signature();
@@ -174,7 +174,7 @@ fn int_as_target_usize<T: Into<u64>>(i: T, sink: &mut Vec<u8>, triple: &Triple) 
     }
 }
 
-fn declare_static<M: Module>(
+fn declare_static<M: Module + ?Sized>(
     contents: Box<[u8]>,
     align: Option<u64>,
     module: &mut M,
@@ -193,7 +193,7 @@ fn declare_static<M: Module>(
     Some(global)
 }
 
-fn dangling_static_ptr<M: Module>(
+fn dangling_static_ptr<M: Module + ?Sized>(
     align: Option<u64>,
     module: &mut M,
     data_description: &mut DataDescription,
@@ -261,9 +261,8 @@ fn signature_from_function_ty(
     signature
 }
 
-struct Compiler<'arena, 'a, M> {
+struct Compiler<'arena, 'a, M: ?Sized> {
     program: Program<'a>,
-    module: M,
     context: Context,
     data_description: DataDescription,
     triple: Triple,
@@ -271,6 +270,7 @@ struct Compiler<'arena, 'a, M> {
     functions: HashMap<FuncRef, (FuncId, Signature)>,
     ty_layouts: HashMap<&'a MirType<'a>, (&'arena TyLayout<'arena>, DataId)>,
     arena: &'arena &'arena Bump,
+    module: M,
 }
 
 impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
@@ -293,7 +293,9 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
             arena,
         }
     }
+}
 
+impl<'arena, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
     #[tracing::instrument(skip(self))]
     fn c_int_ty(&self) -> Type {
         Type::int(self.triple.data_model().unwrap().int_size().bits().into()).unwrap()
@@ -671,7 +673,7 @@ impl Compiler<'_, '_, ObjectModule> {
         let results = builder.ins().call(init, &[]);
         debug_assert_eq!(builder.inst_results(results).len(), 0);
 
-        let entry_point = self.functions[&self.program.entry_point()].0;
+        let entry_point = self.functions[&FuncRef::ENTRY_POINT].0;
         let entry_point = self.module.declare_func_in_func(entry_point, builder.func);
 
         let termination_ref = self.program.lib_std.fn_termination;

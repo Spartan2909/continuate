@@ -40,7 +40,7 @@ pub(crate) fn standard_library<'arena>(
         value_ty: ty_unknown,
     }));
 
-    let fn_termination_ref = program.function();
+    let fn_termination_ref = FuncRef::new();
     program.functions.insert(fn_termination_ref, fn_termination);
 
     let mut fn_termination_params = Vec::with_capacity_in(1, arena);
@@ -82,7 +82,7 @@ pub(crate) fn standard_library<'arena>(
     });
     fn_discriminant.body.push(cont_call);
 
-    let fn_discriminant_ref = program.function();
+    let fn_discriminant_ref = FuncRef::new();
     program
         .functions
         .insert(fn_discriminant_ref, fn_discriminant);

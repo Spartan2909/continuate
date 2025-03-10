@@ -644,23 +644,18 @@ impl<'arena> Executor<'arena> {
     }
 
     fn run(mut self) -> i64 {
-        let entry_point = self
-            .program
-            .functions
-            .get(&self.program.entry_point())
-            .unwrap();
+        let entry_point = self.program.functions.get(&FuncRef::ENTRY_POINT).unwrap();
         let termination_param = *entry_point.continuations.keys().next().unwrap();
         let termination_fn = self
             .arena
             .alloc(Value::Function(self.program.lib_std.fn_termination));
         let mut params = HashMap::with_capacity_in(1, self.arena);
         params.insert(termination_param, &*termination_fn);
-        self.function(entry_point, self.program.entry_point(), params, None)
+        self.function(entry_point, FuncRef::ENTRY_POINT, params, None)
             .unwrap_termination()
     }
 }
 
 pub fn run<'arena>(program: Program<'arena>, arena: &'arena Bump) -> i64 {
-    let func_ref = program.entry_point();
-    Executor::new(program, arena, func_ref).run()
+    Executor::new(program, arena, FuncRef::ENTRY_POINT).run()
 }

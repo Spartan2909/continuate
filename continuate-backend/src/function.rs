@@ -85,7 +85,7 @@ macro_rules! match_ty {
     };
 }
 
-pub(super) struct FunctionCompiler<'arena, 'function, 'builder, M> {
+pub(super) struct FunctionCompiler<'arena, 'function, 'builder, M: ?Sized> {
     pub(super) program: &'function Program<'function>,
     pub(super) module: &'function mut M,
     pub(super) data_description: &'function mut DataDescription,
@@ -103,7 +103,7 @@ pub(super) struct FunctionCompiler<'arena, 'function, 'builder, M> {
     pub(super) variables: HashMap<Ident, Variable>,
 }
 
-impl<'arena, 'function, M: Module> FunctionCompiler<'arena, 'function, '_, M> {
+impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, '_, M> {
     fn variable(&mut self, ident: Ident) -> Variable {
         static NEXT: AtomicU32 = AtomicU32::new(0);
 
