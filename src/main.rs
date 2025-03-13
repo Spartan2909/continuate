@@ -1,7 +1,6 @@
 #![feature(allocator_api)]
 
 use std::fs;
-use std::iter;
 use std::path::PathBuf;
 use std::process;
 use std::process::Stdio;
