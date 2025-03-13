@@ -538,7 +538,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
         self.program
             .functions
-            .insert(self.functions[&fun.name.span], ir_fun);
+            .insert(self.functions[&fun.span], ir_fun);
     }
 
     fn lower(mut self) -> Program<'arena> {

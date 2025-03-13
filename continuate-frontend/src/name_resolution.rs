@@ -5,6 +5,7 @@ use crate::Path;
 use crate::Program;
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::mem;
 
 use continuate_error::Span;
@@ -58,17 +59,30 @@ impl<'a> Scope<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct NameMap {
+    ident_definitions: HashSet<Span>,
     idents: HashMap<Span, Span>,
+    path_definitions: HashSet<Span>,
     paths: HashMap<Span, Span>,
 }
 
 impl NameMap {
     fn new() -> NameMap {
         NameMap {
+            ident_definitions: HashSet::new(),
             idents: HashMap::new(),
+            path_definitions: HashSet::new(),
             paths: HashMap::new(),
         }
+    }
+
+    fn define_ident(&mut self, ident: &Ident) {
+        self.ident_definitions.insert(ident.span);
+    }
+
+    fn define_path(&mut self, path: &Path) {
+        self.path_definitions.insert(path.span);
     }
 
     fn insert_ident(&mut self, ident: &Ident, target_span: Span) {
@@ -84,7 +98,7 @@ impl NameMap {
     }
 
     pub fn ident_definitions(&self) -> impl Iterator<Item = Span> + use<'_> {
-        self.idents.values().copied()
+        self.ident_definitions.iter().copied()
     }
 
     pub fn get_path(&self, path: &Path) -> Option<Span> {
@@ -92,7 +106,7 @@ impl NameMap {
     }
 
     pub fn path_definitions(&self) -> impl Iterator<Item = Span> + use<'_> {
-        self.paths.values().copied()
+        self.path_definitions.iter().copied()
     }
 }
 
@@ -109,14 +123,44 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn resolve_ident(&mut self, ident: &Ident) {
-        self.map
-            .insert_ident(ident, self.scope.get_ident(ident).unwrap());
+    fn define_ident(&mut self, ident: Ident<'a>) {
+        self.map.define_ident(&ident);
+        self.scope.define_ident(ident.clone());
+        self.resolve_ident(&ident);
     }
 
+    fn define_path(&mut self, path: Path<'a>) {
+        self.map.define_path(&path);
+        self.scope.define_path(path.clone());
+        self.resolve_path(&path);
+    }
+
+    fn try_resolve_ident(&mut self, ident: &Ident) -> Result<(), ()> {
+        self.map
+            .insert_ident(ident, self.scope.get_ident(ident).ok_or(())?);
+        Ok(())
+    }
+
+    #[track_caller]
+    fn resolve_ident(&mut self, ident: &Ident) {
+        self.try_resolve_ident(ident).unwrap()
+    }
+
+    #[track_caller]
     fn resolve_path(&mut self, path: &Path) {
         self.map
             .insert_path(path, self.scope.get_path(path).unwrap());
+    }
+
+    #[track_caller]
+    fn resolve_ident_or_path(&mut self, path: &Path) {
+        if let Some(ident) = path.as_ident() {
+            if self.try_resolve_ident(ident).is_ok() {
+                return;
+            }
+        }
+
+        self.resolve_path(path);
     }
 
     fn with_scope(&mut self, f: impl FnOnce(&mut Self)) {
@@ -128,7 +172,7 @@ impl<'a> Resolver<'a> {
     fn expr(&mut self, expr: &'a Expr<'a>) {
         match expr {
             Expr::Literal(_) => {}
-            Expr::Path(path) => self.resolve_path(path),
+            Expr::Path(path) => self.resolve_ident_or_path(path),
             Expr::Block {
                 exprs,
                 tail,
@@ -204,7 +248,7 @@ impl<'a> Resolver<'a> {
                 span: _,
             } => {
                 self.expr(value);
-                self.scope.define_ident(name.clone());
+                self.define_ident(name.clone());
             }
             Expr::Assign { name, value } => {
                 self.resolve_ident(name);
@@ -221,16 +265,16 @@ impl<'a> Resolver<'a> {
 
     fn resolve(mut self, program: &'a Program<'a>) -> NameMap {
         for item in &program.items {
-            self.scope.define_path(Path::from(item.name().clone()));
+            self.define_path(Path::from(item.name().clone()));
         }
 
         for function in program.items.iter().filter_map(Item::as_function) {
             self.with_scope(|this| {
                 for (param, _) in &function.params {
-                    this.scope.define_ident(param.clone());
+                    this.define_ident(param.clone());
                 }
                 for (cont, _) in &function.continuations {
-                    this.scope.define_ident(cont.clone());
+                    this.define_ident(cont.clone());
                 }
                 this.exprs(&function.body);
             });
