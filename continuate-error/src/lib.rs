@@ -99,7 +99,7 @@ impl SourceCache {
     pub fn eof(&self, source_id: SourceId) -> Option<Span> {
         let source = self.sources.get(&source_id)?;
         let len = source.source.len();
-        Some(Span::new(len, len, source_id))
+        Span::new(len, len, source_id)
     }
 
     pub fn get(&self, id: SourceId) -> Option<&Source> {
@@ -161,8 +161,8 @@ impl ariadne::Cache<SourceId> for &SourceCache {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Span {
-    start: usize,
-    len: u32,
+    start: u32,
+    end: u32,
     source: SourceId,
 }
 
@@ -171,23 +171,17 @@ impl Span {
     pub const fn dummy() -> Span {
         Span {
             start: 0,
-            len: 0,
+            end: 0,
             source: SourceId::DUMMY,
         }
     }
 
-    /// ## Panics
-    ///
-    /// Panics if `end > start` or if `end - start > u32::MAX`.
-    pub const fn new(start: usize, end: usize, source: SourceId) -> Span {
-        let len = end.checked_sub(start).unwrap();
-        assert!(len <= u32::MAX as usize, "span length too long");
-
-        Span {
-            start,
-            len: len as u32,
+    pub fn new(start: usize, end: usize, source: SourceId) -> Option<Span> {
+        Some(Span {
+            start: start.try_into().ok()?,
+            end: end.try_into().ok()?,
             source,
-        }
+        })
     }
 
     const fn is_dummy(&self) -> bool {
@@ -195,45 +189,51 @@ impl Span {
     }
 
     pub fn contains_span(&self, other: &Span) -> bool {
-        let self_end = self.start + self.len as usize;
-        let other_end = other.start + other.len as usize;
-        self.source == other.source && self.start <= other.start && self_end >= other_end
+        self.source == other.source && self.start <= other.start && self.end >= other.end
     }
 
     #[must_use = "This method returns a new span without modifying the original one"]
-    pub const fn first_n(&self, n: usize) -> Span {
-        Span {
+    pub const fn first_n(&self, n: usize) -> Option<Span> {
+        if n > u32::MAX as usize || self.start + n as u32 > self.end {
+            return None;
+        }
+
+        Some(Span {
             start: self.start,
-            len: n as u32,
+            end: self.start + n as u32,
             source: self.source,
-        }
+        })
     }
 
     #[must_use = "This method returns a new span without modifying the original one"]
-    pub const fn last_n(&self, n: usize) -> Span {
-        Span {
-            start: self.start + self.len as usize - n,
-            len: n as u32,
-            source: self.source,
+    pub const fn last_n(&self, n: usize) -> Option<Span> {
+        if n > u32::MAX as usize || self.start + n as u32 > self.end {
+            return None;
         }
+
+        Some(Span {
+            start: self.end - n as u32,
+            end: self.end,
+            source: self.source,
+        })
     }
 
     #[inline]
     pub const fn range(&self) -> Range<usize> {
         Range {
-            start: self.start,
-            end: self.start + self.len as usize,
+            start: self.start as usize,
+            end: self.end as usize,
         }
     }
 
     #[inline]
     pub const fn len(&self) -> usize {
-        self.len as usize
+        (self.end - self.start) as usize
     }
 
     #[inline]
     pub const fn is_empty(&self) -> bool {
-        self.len == 0
+        self.len() == 0
     }
 
     pub fn union(self, other: Span) -> Option<Span> {
@@ -242,13 +242,9 @@ impl Span {
         } else if other.is_dummy() {
             Some(self)
         } else if self.source == other.source {
-            let self_end = self.start + self.len as usize;
-            let other_end = other.start + other.len as usize;
-            let end = self_end.max(other_end);
-            let start = self.start.min(other.start);
             Some(Span {
-                start,
-                len: (end - start) as u32,
+                start: self.start.min(other.start),
+                end: self.end.max(other.end),
                 source: self.source,
             })
         } else {
@@ -262,11 +258,7 @@ impl span::Span for Span {
     type Context = SourceId;
 
     fn new(context: SourceId, range: Range<usize>) -> Self {
-        Span {
-            start: range.start,
-            len: (range.end - range.start) as u32,
-            source: context,
-        }
+        Span::new(range.start, range.end, context).unwrap()
     }
 
     fn context(&self) -> Self::Context {
@@ -274,11 +266,11 @@ impl span::Span for Span {
     }
 
     fn start(&self) -> Self::Offset {
-        self.start
+        self.start as usize
     }
 
     fn end(&self) -> Self::Offset {
-        self.start + self.len as usize
+        self.end as usize
     }
 
     fn union(&self, other: Self) -> Self {
@@ -294,15 +286,15 @@ impl ariadne::Span for Span {
     }
 
     fn start(&self) -> usize {
-        self.start
+        self.start as usize
     }
 
     fn end(&self) -> usize {
-        self.start + self.len as usize
+        self.end as usize
     }
 
     fn len(&self) -> usize {
-        self.len as usize
+        (self.end - self.start) as usize
     }
 }
 
