@@ -36,13 +36,10 @@ fn spacing<'src>(lex: &Lexer<'src, Token<'src>>) -> Spacing {
 
 #[derive(Debug, Clone, Copy, PartialEq, Logos)]
 #[logos(error = Error)]
-#[logos(skip r"[ \t]+")]
+#[logos(skip r"[ \t\n]+")]
 pub enum Token<'src> {
     #[regex(r"//[^\n]+", logos::skip)]
     Comment,
-
-    #[token("\n")]
-    Newline,
 
     #[token("enum")]
     Enum,
@@ -131,8 +128,6 @@ impl fmt::Display for Token<'_> {
         match *self {
             Token::Comment => f.write_str("<comment>\n"),
 
-            Token::Newline => f.write_str("\n"),
-
             Token::Enum => f.write_str("enum"),
             Token::Fn => f.write_str("fn"),
             Token::If => f.write_str("if"),
@@ -180,12 +175,16 @@ impl fmt::Display for Token<'_> {
     }
 }
 
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "spans are monotonically increasing, so this will not panic"
+)]
 pub fn lex(source: &str, source_id: SourceId) -> (Vec<(Token, Span)>, Vec<Error>) {
     let mut errors = Vec::new();
     let tokens = Token::lexer(source)
         .spanned()
         .map(|(token, span)| {
-            let span = Span::new(span.start, span.end, source_id);
+            let span = Span::new(span.start, span.end, source_id).unwrap();
             match token {
                 Ok(token) => (token, span),
                 Err(err) => {

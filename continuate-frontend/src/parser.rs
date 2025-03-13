@@ -83,6 +83,7 @@ where
 
     segment
         .separated_by(separator)
+        .at_least(1)
         .collect::<Vec<_>>()
         .map_with(|segments, e| Path {
             segments,
@@ -156,8 +157,10 @@ where
                     params,
                     continuations: continuations.unwrap_or(vec![]),
                     span: e.span(),
-                }))
+                })
+                .labelled("signature"))
     })
+    .labelled("type")
 }
 
 fn named_constructor_elements<'tokens, 'src, Elem>(
@@ -219,6 +222,7 @@ where
             .or(ident().map(Pattern::Ident))
             .or(named_destructure)
             .or(anonymous_destructure)
+            .labelled("pattern")
     })
 }
 
@@ -235,98 +239,17 @@ where
         .collect()
 }
 
-fn block<'tokens, 'src>() -> impl Parser<
-    'tokens,
-    ParserInput<'tokens, 'src>,
-    (Vec<Expr<'src>>, Option<Expr<'src>>, Span),
-    ParserExtra,
-> + Clone
+fn literal<'tokens, 'src>(
+) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, Literal<'src>, ParserExtra> + Clone
 where
     'src: 'tokens,
 {
-    expr()
-        .then_ignore(just(Token::Newline))
-        .repeated()
-        .collect()
-        .then(expr().or_not())
-        .delimited_by(just(Token::OpenBrace), just(Token::CloseBrace))
-        .map_with(|(exprs, tail), e| (exprs, tail, e.span()))
-}
-
-fn atom<'tokens, 'src>(
-) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, Expr<'src>, ParserExtra> + Clone
-where
-    'src: 'tokens,
-{
-    let literal = select! {
+    select! {
         Token::Int(val) = e => Literal::Int(val, e.span()),
         Token::Float(val) = e => Literal::Float(val, e.span()),
         Token::String(val) = e => Literal::String(val, e.span()),
     }
-    .labelled("literal");
-
-    let array = items(expr())
-        .delimited_by(just(Token::OpenBracket), just(Token::CloseBracket))
-        .map_with(|exprs, e| Expr::Array {
-            exprs,
-            span: e.span(),
-        });
-
-    let constructor_or_ident = path()
-        .then(
-            named_constructor_elements(expr())
-                .delimited_by(just(Token::OpenBrace), just(Token::CloseBrace))
-                .map_with(|fields, e| (fields, e.span()))
-                .or_not(),
-        )
-        .map(|(path, fields)| {
-            if let Some((fields, span)) = fields {
-                Expr::NamedConstructor {
-                    path,
-                    fields,
-                    brace_span: span,
-                }
-            } else {
-                Expr::Path(path)
-            }
-        });
-
-    // FIXME: May fail on path expressions due to ambiguity with constructors.
-    let match_expr = just(Token::Match)
-        .ignore_then(expr())
-        .then(
-            pattern()
-                .then_ignore(just(Token::Eq(Spacing::Joint)).then(filter_matches!(Token::Gt(_))))
-                .then(expr())
-                .separated_by(filter_matches!(Token::Comma(_)))
-                .allow_trailing()
-                .collect::<Vec<_>>()
-                .delimited_by(just(Token::OpenBrace), just(Token::CloseBrace))
-                .map_with(|arms, e| (arms, e.span())),
-        )
-        .map(|(scrutinee, (arms, brace_span))| Expr::Match {
-            scrutinee: Box::new(scrutinee),
-            arms,
-            brace_span,
-        });
-
-    let block = block().map(|(exprs, tail, span)| Expr::Block {
-        exprs,
-        tail: tail.map(Box::new),
-        span,
-    });
-
-    choice((
-        literal.map(Expr::Literal),
-        array,
-        tuple(expr()).map(|result| match result {
-            TupleResult::Tuple { items, span } => Expr::Tuple { exprs: items, span },
-            TupleResult::Single(expr) => expr,
-        }),
-        constructor_or_ident,
-        match_expr,
-        block,
-    ))
+    .labelled("literal")
 }
 
 enum CallRhs<'src> {
@@ -348,80 +271,152 @@ enum CallRhs<'src> {
     },
 }
 
-fn call_rhs<'tokens, 'src>(
-) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, CallRhs<'src>, ParserExtra> + Clone
-where
-    'src: 'tokens,
-{
-    let get_or_set = filter_matches!(Token::Dot(_))
-        .ignore_then(ident())
-        .then(filter_matches!(Token::Eq(_)).ignore_then(expr()).or_not())
-        .map(|(field, value)| {
-            if let Some(value) = value {
-                CallRhs::Set { field, value }
-            } else {
-                CallRhs::Get { field }
-            }
-        });
-
-    let call = items(expr())
-        .delimited_by(just(Token::OpenParen), just(Token::CloseParen))
-        .map_with(|arguments, e| CallRhs::Call {
-            arguments,
-            paren_span: e.span(),
-        });
-
-    let cont_application =
-        items(ident().then(filter_matches!(Token::Eq(_)).ignore_then(expr()).or_not()))
-            .delimited_by(just(Token::OpenBracket), just(Token::CloseBracket))
-            .map_with(|arguments, e| CallRhs::ContApplication {
-                arguments,
-                bracket_span: e.span(),
-            });
-
-    choice((get_or_set, call, cont_application))
-}
-
-fn call<'tokens, 'src>(
-) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, Expr<'src>, ParserExtra> + Clone
-where
-    'src: 'tokens,
-{
-    atom().foldl(call_rhs().repeated(), |object, rhs| match rhs {
-        CallRhs::Get { field } => Expr::Get {
-            object: Box::new(object),
-            field,
-        },
-        CallRhs::Set { field, value } => Expr::Set {
-            object: Box::new(object),
-            field,
-            value: Box::new(value),
-        },
-        CallRhs::Call {
-            arguments,
-            paren_span,
-        } => Expr::Call {
-            callee: Box::new(object),
-            arguments,
-            paren_span,
-        },
-        CallRhs::ContApplication {
-            arguments,
-            bracket_span,
-        } => Expr::ContApplication {
-            callee: Box::new(object),
-            arguments,
-            bracket_span,
-        },
-    })
-}
-
+#[allow(clippy::too_many_lines, reason = "no real alternative")]
 fn expr<'tokens, 'src>(
 ) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, Expr<'src>, ParserExtra> + Clone
 where
     'src: 'tokens,
 {
     recursive(|expr| {
+        let array = items(expr.clone())
+            .delimited_by(just(Token::OpenBracket), just(Token::CloseBracket))
+            .map_with(|exprs, e| Expr::Array {
+                exprs,
+                span: e.span(),
+            });
+
+        let constructor_or_ident = path()
+            .then(
+                named_constructor_elements(expr.clone())
+                    .delimited_by(just(Token::OpenBrace), just(Token::CloseBrace))
+                    .map_with(|fields, e| (fields, e.span()))
+                    .or_not(),
+            )
+            .map(|(path, fields)| {
+                if let Some((fields, span)) = fields {
+                    Expr::NamedConstructor {
+                        path,
+                        fields,
+                        brace_span: span,
+                    }
+                } else {
+                    Expr::Path(path)
+                }
+            });
+
+        // FIXME: May fail on path expressions due to ambiguity with constructors.
+        let match_expr = just(Token::Match)
+            .ignore_then(expr.clone())
+            .then(
+                pattern()
+                    .then_ignore(
+                        just(Token::Eq(Spacing::Joint)).then(filter_matches!(Token::Gt(_))),
+                    )
+                    .then(expr.clone())
+                    .separated_by(filter_matches!(Token::Comma(_)))
+                    .allow_trailing()
+                    .collect::<Vec<_>>()
+                    .delimited_by(just(Token::OpenBrace), just(Token::CloseBrace))
+                    .map_with(|arms, e| (arms, e.span())),
+            )
+            .map(|(scrutinee, (arms, brace_span))| Expr::Match {
+                scrutinee: Box::new(scrutinee),
+                arms,
+                brace_span,
+            });
+
+        let block = expr
+            .clone()
+            .then_ignore(filter_matches!(Token::Semicolon(_)))
+            .repeated()
+            .collect()
+            .then(expr.clone().or_not())
+            .delimited_by(just(Token::OpenBrace), just(Token::CloseBrace))
+            .map_with(|(exprs, tail), e| Expr::Block {
+                exprs,
+                tail: tail.map(Box::new),
+                span: e.span(),
+            });
+
+        let atom = choice((
+            literal().map(Expr::Literal),
+            array,
+            tuple(expr.clone()).map(|result| match result {
+                TupleResult::Tuple { items, span } => Expr::Tuple { exprs: items, span },
+                TupleResult::Single(expr) => expr,
+            }),
+            constructor_or_ident,
+            match_expr,
+            block,
+        ));
+
+        let call_rhs = {
+            let get_or_set = filter_matches!(Token::Dot(_))
+                .ignore_then(ident())
+                .then(
+                    filter_matches!(Token::Eq(_))
+                        .ignore_then(expr.clone())
+                        .or_not(),
+                )
+                .map(|(field, value)| {
+                    if let Some(value) = value {
+                        CallRhs::Set { field, value }
+                    } else {
+                        CallRhs::Get { field }
+                    }
+                });
+
+            let call = items(expr.clone())
+                .delimited_by(just(Token::OpenParen), just(Token::CloseParen))
+                .map_with(|arguments, e| CallRhs::Call {
+                    arguments,
+                    paren_span: e.span(),
+                });
+
+            let cont_application = items(
+                ident().then(
+                    filter_matches!(Token::Eq(_))
+                        .ignore_then(expr.clone())
+                        .or_not(),
+                ),
+            )
+            .delimited_by(just(Token::OpenBracket), just(Token::CloseBracket))
+            .map_with(|arguments, e| CallRhs::ContApplication {
+                arguments,
+                bracket_span: e.span(),
+            });
+
+            choice((get_or_set, call, cont_application))
+        };
+
+        let call = atom.foldl(call_rhs.repeated(), |object, rhs| match rhs {
+            CallRhs::Get { field } => Expr::Get {
+                object: Box::new(object),
+                field,
+            },
+            CallRhs::Set { field, value } => Expr::Set {
+                object: Box::new(object),
+                field,
+                value: Box::new(value),
+            },
+            CallRhs::Call {
+                arguments,
+                paren_span,
+            } => Expr::Call {
+                callee: Box::new(object),
+                arguments,
+                paren_span,
+            },
+            CallRhs::ContApplication {
+                arguments,
+                bracket_span,
+            } => Expr::ContApplication {
+                callee: Box::new(object),
+                arguments,
+                bracket_span,
+            },
+        });
+
         let unary = recursive(|unary| {
             operator!(Token::Dash, UnaryOp::Neg)
                 .or(operator!(Token::Bang, UnaryOp::Not))
@@ -430,7 +425,7 @@ where
                     operator,
                     operand: Box::new(operand),
                 })
-                .or(call())
+                .or(call)
         });
 
         let factor = unary.clone().foldl(
@@ -528,12 +523,20 @@ where
             )
             .delimited_by(just(Token::OpenBracket), just(Token::CloseBracket)),
         )
-        .then(block().map(|(mut body, tail, _)| {
-            if let Some(tail) = tail {
-                body.push(tail);
-            }
-            body
-        }))
+        .then(
+            expr()
+                .then_ignore(filter_matches!(Token::Semicolon(_)))
+                .repeated()
+                .collect()
+                .then(expr().or_not())
+                .delimited_by(just(Token::OpenBrace), just(Token::CloseBrace))
+                .map(|(mut body, tail): (Vec<_>, _)| {
+                    if let Some(tail) = tail {
+                        body.push(tail);
+                    }
+                    body
+                }),
+        )
         .map_with(|(((name, params), continuations), body), e| Function {
             name,
             params,
