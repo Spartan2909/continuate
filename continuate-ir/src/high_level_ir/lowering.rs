@@ -6,15 +6,19 @@ use crate::high_level_ir::BinaryOp;
 use crate::high_level_ir::DestructureFields;
 use crate::high_level_ir::Expr;
 use crate::high_level_ir::ExprArray;
+use crate::high_level_ir::ExprAssign;
+use crate::high_level_ir::ExprBinary;
 use crate::high_level_ir::ExprBlock;
 use crate::high_level_ir::ExprCall;
 use crate::high_level_ir::ExprConstructor;
 use crate::high_level_ir::ExprConstructorFields;
 use crate::high_level_ir::ExprContApplication;
+use crate::high_level_ir::ExprDeclare;
 use crate::high_level_ir::ExprGet;
 use crate::high_level_ir::ExprMatch;
 use crate::high_level_ir::ExprSet;
 use crate::high_level_ir::ExprTuple;
+use crate::high_level_ir::ExprUnary;
 use crate::high_level_ir::Function;
 use crate::high_level_ir::Pattern;
 use crate::high_level_ir::Program;
@@ -48,11 +52,6 @@ use continuate_frontend::UserDefinedTyFields as AstUserDefinedTyFields;
 use continuate_utils::collect_into;
 use continuate_utils::HashMap;
 use continuate_utils::Vec;
-
-use super::ExprAssign;
-use super::ExprBinary;
-use super::ExprDeclare;
-use super::ExprUnary;
 
 struct Lowerer<'a, 'arena> {
     arena: &'arena Bump,
