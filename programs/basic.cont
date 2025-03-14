@@ -1,8 +1,8 @@
 fn sum(left: int, right: int)[ret: fn(int)] {
-	ret(left + right)
+    ret(left + right)
 }
 
 fn main()[ret: fn(int)] {
-	let world = "hewwo";
-	sum[ret](3, 7)
+    let world = "hewwo";
+    sum[ret](3, 7)
 }
