@@ -588,6 +588,22 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
             self.program.functions.keys().copied(),
         );
 
+        for &func_ref in &functions {
+            let function = &self.program.functions[&func_ref];
+            let params = collect_into(
+                Vec::new_in(self.arena),
+                function.params.iter().map(|(_, ty)| *ty),
+            );
+            let continuations = collect_into(
+                HashMap::new_in(self.arena),
+                function.continuations.iter().map(|(&name, &ty)| (name, ty)),
+            );
+            let ty = self
+                .program
+                .insert_type(Type::function(params, continuations), self.arena);
+            self.program.signatures.insert(func_ref, ty);
+        }
+
         for func_ref in functions {
             let mut function = self.program.functions.remove(&func_ref).unwrap();
             if !function.captures.is_empty() {
