@@ -6,8 +6,10 @@ use crate::Program;
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fmt;
 use std::mem;
 
+use continuate_error::SourceCache;
 use continuate_error::Span;
 
 #[derive(Default)]
@@ -59,7 +61,6 @@ impl<'a> Scope<'a> {
     }
 }
 
-#[derive(Debug)]
 pub struct NameMap {
     ident_definitions: HashSet<Span>,
     idents: HashMap<Span, Span>,
@@ -107,6 +108,76 @@ impl NameMap {
 
     pub fn path_definitions(&self) -> impl Iterator<Item = Span> + use<'_> {
         self.path_definitions.iter().copied()
+    }
+
+    pub fn debug<'a>(&'a self, cache: &'a SourceCache) -> impl fmt::Debug + use<'a> {
+        struct FormatDefinitions<'a> {
+            definitions: &'a HashSet<Span>,
+            cache: &'a SourceCache,
+        }
+
+        impl fmt::Debug for FormatDefinitions<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_set()
+                    .entries(self.definitions.iter().map(|span| span.debug(self.cache)))
+                    .finish()
+            }
+        }
+
+        struct FormatMap<'a> {
+            map: &'a HashMap<Span, Span>,
+            cache: &'a SourceCache,
+        }
+
+        impl fmt::Debug for FormatMap<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_set()
+                    .entries(self.map.iter().map(|(use_span, def_span)| {
+                        (use_span.debug(self.cache), def_span.debug(self.cache))
+                    }))
+                    .finish()
+            }
+        }
+
+        struct FormatNameMap<'a> {
+            names: &'a NameMap,
+            cache: &'a SourceCache,
+        }
+
+        impl<'a> FormatNameMap<'a> {
+            fn definitions(&self, definitions: &'a HashSet<Span>) -> FormatDefinitions<'a> {
+                FormatDefinitions {
+                    definitions,
+                    cache: self.cache,
+                }
+            }
+
+            fn map(&self, map: &'a HashMap<Span, Span>) -> FormatMap<'a> {
+                FormatMap {
+                    map,
+                    cache: self.cache,
+                }
+            }
+        }
+
+        impl fmt::Debug for FormatNameMap<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_struct("NameMap")
+                    .field(
+                        "ident_definitions",
+                        &self.definitions(&self.names.ident_definitions),
+                    )
+                    .field("idents", &self.map(&self.names.idents))
+                    .field(
+                        "path_definitions",
+                        &self.definitions(&self.names.path_definitions),
+                    )
+                    .field("paths", &self.map(&self.names.paths))
+                    .finish()
+            }
+        }
+
+        FormatNameMap { names: self, cache }
     }
 }
 

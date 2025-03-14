@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
+use continuate_error::SourceCache;
 use continuate_error::Span;
 
 #[derive(Clone, Copy)]
@@ -21,6 +22,11 @@ impl Ident {
         let value = NEXT.fetch_add(1, Ordering::Relaxed);
         assert_ne!(value, u64::MAX, "ident overflow");
         Ident(value, Span::dummy())
+    }
+
+    #[track_caller]
+    pub fn name<'a>(&self, cache: &'a SourceCache) -> &'a str {
+        cache.str(self.1).expect("invalid `SourceCache` for ident")
     }
 }
 

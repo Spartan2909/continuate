@@ -24,7 +24,7 @@ use chumsky::util::MaybeRef;
 
 use strum::EnumDiscriminants;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceId(NonZeroUsize);
 
 impl SourceId {
@@ -48,6 +48,12 @@ impl SourceId {
 
     const fn as_usize(self) -> usize {
         NonZeroUsize::get(self.0)
+    }
+}
+
+impl fmt::Debug for SourceId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SourceId({})", self.0)
     }
 }
 
@@ -114,6 +120,12 @@ impl SourceCache {
             || Err(Box::new(format!("source for {id:?} not found")) as _),
             |source| Ok(&source.source),
         )
+    }
+
+    pub fn str(&self, span: Span) -> Option<&str> {
+        self.get(span.source)?
+            .contents()
+            .get(span.start as usize..span.end as usize)
     }
 }
 
@@ -250,6 +262,26 @@ impl Span {
         } else {
             None
         }
+    }
+
+    pub fn debug<'a>(self, cache: &'a SourceCache) -> impl fmt::Debug + use<'a> {
+        DebugSpan { span: self, cache }
+    }
+}
+
+struct DebugSpan<'a> {
+    span: Span,
+    cache: &'a SourceCache,
+}
+
+impl fmt::Debug for DebugSpan<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Span")
+            .field("source", &self.cache.get(self.span.source).unwrap().path)
+            .field("start", &self.span.start)
+            .field("end", &self.span.end)
+            .field("contents", &self.cache.str(self.span).unwrap())
+            .finish()
     }
 }
 
