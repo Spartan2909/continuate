@@ -299,6 +299,11 @@ impl<'a> Resolver<'a> {
             } => {
                 self.expr(callee);
                 self.exprs(arguments.iter().filter_map(|(_, expr)| expr.as_ref()));
+                for (name, expr) in arguments {
+                    if expr.is_none() {
+                        self.resolve_ident(name);
+                    }
+                }
             }
             Expr::Unary {
                 operator: _,

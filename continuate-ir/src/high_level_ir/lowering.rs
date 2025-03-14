@@ -88,6 +88,13 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             .map(|&ty| self.program.insert_type(Type::UserDefined(ty), self.arena))
     }
 
+    fn resolve_fn_path(&mut self, path: &Path) -> Option<FuncRef> {
+        self.names
+            .get_path(path)
+            .and_then(|span| self.functions.get(&span))
+            .copied()
+    }
+
     fn ident(&self, ident: &AstIdent) -> Option<Ident> {
         self.names
             .get_ident(ident)
@@ -185,7 +192,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             self.ast
                 .items
                 .iter()
-                .filter_map(|item| Some(item.as_function()?.span))
+                .filter_map(|item| Some(item.as_function()?.name.span))
                 .zip(iter::repeat_with(FuncRef::new)),
         );
     }
@@ -206,14 +213,14 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         }
     }
 
-    fn expr_path(&self, path: &AstPath) -> Expr<'arena> {
+    fn expr_path(&mut self, path: &AstPath) -> Expr<'arena> {
         if let Some(ident) = path.as_ident() {
             if let Some(ident) = self.ident(ident) {
                 return Expr::Ident(ident);
             }
         }
 
-        Expr::Function(*self.functions.get(&path.span).unwrap())
+        Expr::Function(self.resolve_fn_path(path).unwrap())
     }
 
     fn expr_block(&mut self, exprs: &[AstExpr], tail: Option<&AstExpr>) -> Expr<'arena> {
@@ -527,7 +534,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
         self.program
             .functions
-            .insert(self.functions[&fun.span], ir_fun);
+            .insert(self.functions[&fun.name.span], ir_fun);
     }
 
     fn lower(mut self) -> Program<'arena> {
