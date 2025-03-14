@@ -70,8 +70,8 @@ impl<'arena> Exhaustive<'arena> {
                 Exhaustive::ExhaustiveVariants(self_variants),
                 Exhaustive::ExhaustiveVariants(other_variants),
             ) => Exhaustive::ExhaustiveVariants(collect_into(
-                self_variants.intersection(&other_variants).copied(),
                 HashSet::new_in(arena),
+                self_variants.intersection(&other_variants).copied(),
             )),
             _ => Exhaustive::NonExhaustive,
         }
@@ -84,8 +84,8 @@ impl<'arena> Exhaustive<'arena> {
                 Exhaustive::ExhaustiveVariants(self_variants),
                 Exhaustive::ExhaustiveVariants(other_variants),
             ) => Exhaustive::ExhaustiveVariants(collect_into(
-                self_variants.union(&other_variants),
                 HashSet::new_in(arena),
+                self_variants.union(&other_variants),
             )),
             (Exhaustive::ExhaustiveVariants(variants), Exhaustive::NonExhaustive)
             | (Exhaustive::NonExhaustive, Exhaustive::ExhaustiveVariants(variants)) => {
@@ -111,9 +111,10 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
     where
         'arena: 'b,
     {
-        let vec = Vec::new_in(self.arena);
-        let types = try_collect_into(exprs.into_iter().map(|expr| self.expr(expr)), vec)?;
-        Ok(types)
+        try_collect_into(
+            Vec::new_in(self.arena),
+            exprs.into_iter().map(|expr| self.expr(expr)),
+        )
     }
 
     fn expr_literal(&mut self, literal: &Literal) -> &'arena Type<'arena> {
@@ -502,11 +503,11 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
     fn expr_closure(&mut self, expr: &mut ExprClosure<'arena>) -> &'arena Type<'arena> {
         let actual_func = self.program.functions.get(&expr.func).unwrap();
         let new_captures = collect_into(
+            HashMap::new_in(self.arena),
             actual_func
                 .captures
                 .iter()
                 .map(|&ident| (ident, self.environment[&ident])),
-            HashMap::new_in(self.arena),
         );
         {
             let mut captures = HashMap::new_in(self.arena);
@@ -583,8 +584,8 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
 
     fn typeck(mut self) -> Result<()> {
         let functions = collect_into(
-            self.program.functions.keys().copied(),
             Vec::new_in(self.arena),
+            self.program.functions.keys().copied(),
         );
 
         for func_ref in functions {

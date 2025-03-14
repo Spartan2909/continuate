@@ -108,22 +108,22 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             HirType::String => Type::String,
             HirType::Array(ty, len) => Type::Array(self.types[ty], len),
             HirType::Tuple(ref types) => Type::Tuple(collect_into(
-                types.iter().map(|ty| self.types[ty]),
                 Vec::new_in(self.arena),
+                types.iter().map(|ty| self.types[ty]),
             )),
             HirType::Function(HirFunctionTy {
                 ref params,
                 ref continuations,
             }) => Type::function(
                 collect_into(
-                    params.iter().map(|ty| self.types[ty]),
                     Vec::new_in(self.arena),
+                    params.iter().map(|ty| self.types[ty]),
                 ),
                 collect_into(
+                    HashMap::new_in(self.arena),
                     continuations
                         .iter()
                         .map(|(&ident, ty)| (ident, self.types[ty])),
-                    HashMap::new_in(self.arena),
                 ),
             ),
             HirType::UserDefined(ty) => Type::UserDefined(self.user_defined_ty(ty)),
@@ -138,12 +138,11 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         block: &mut Block<'arena>,
         function: &mut Function<'arena>,
     ) -> Vec<'arena, Expr<'arena>> {
-        let initial = Vec::new_in(self.arena);
         collect_into(
+            Vec::new_in(self.arena),
             exprs
                 .into_iter()
                 .map(|expr| self.expr(expr, block, function)),
-            initial,
         )
     }
 
@@ -516,7 +515,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                             let arms = iter::once((variant as i64, switch_arm_id));
                             let switch = Expr::Switch {
                                 scrutinee: self.arena.alloc(discriminant),
-                                arms: collect_into(arms, HashMap::new_in(self.arena)),
+                                arms: collect_into(HashMap::new_in(self.arena), arms),
                                 otherwise,
                             };
                             arm_block.exprs.push(switch);
@@ -608,10 +607,10 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let expr = Expr::Switch {
             scrutinee,
             arms: collect_into(
+                HashMap::new_in(self.arena),
                 discriminants
                     .iter()
                     .map(|&MatchVariant { variant, block }| (variant as i64, block)),
-                HashMap::new_in(self.arena),
             ),
             otherwise,
         };
@@ -622,10 +621,10 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
     fn expr_closure(&mut self, expr: &HirExprClosure) -> Expr<'arena> {
         let func = &self.hir_program.functions[&expr.func];
         let captures = collect_into(
+            HashMap::new_in(self.arena),
             func.captures
                 .iter()
                 .map(|&ident| (ident, self.environment[&ident])),
-            HashMap::new_in(self.arena),
         );
 
         let func = self.function(func, captures.clone());

@@ -11,7 +11,7 @@ pub type HashMap<'a, K, V> =
 
 pub type HashSet<'a, K> = hashbrown::HashSet<K, hashbrown::DefaultHashBuilder, &'a bumpalo::Bump>;
 
-pub fn collect_into<T, I, C>(iter: I, mut initial: C) -> C
+pub fn collect_into<T, I, C>(mut initial: C, iter: I) -> C
 where
     I: IntoIterator<Item = T>,
     C: Extend<T>,
@@ -23,7 +23,7 @@ where
 /// ## Errors
 ///
 /// Returns the first error in `iter`.
-pub fn try_collect_into<T, E, I, C>(iter: I, mut initial: C) -> Result<C, E>
+pub fn try_collect_into<T, E, I, C>(mut initial: C, iter: I) -> Result<C, E>
 where
     I: IntoIterator<Item = Result<T, E>>,
     C: Extend<T>,

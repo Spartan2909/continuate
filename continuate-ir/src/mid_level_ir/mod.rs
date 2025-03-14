@@ -261,7 +261,7 @@ impl<'arena> Function<'arena> {
 
     pub fn ty(&self, arena: &'arena Bump) -> FunctionTy {
         FunctionTy {
-            params: collect_into(self.params.iter().map(|&(_, ty)| ty), Vec::new_in(arena)),
+            params: collect_into(Vec::new_in(arena), self.params.iter().map(|&(_, ty)| ty)),
             continuations: self.continuations.clone(),
         }
     }

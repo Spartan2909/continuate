@@ -125,14 +125,14 @@ impl<'a> Resolver<'a> {
 
     fn define_ident(&mut self, ident: Ident<'a>) {
         self.map.define_ident(&ident);
-        self.scope.define_ident(ident.clone());
+        self.scope.define_ident(ident);
         self.resolve_ident(&ident);
     }
 
-    fn define_path(&mut self, path: Path<'a>) {
-        self.map.define_path(&path);
+    fn define_path(&mut self, path: &Path<'a>) {
+        self.map.define_path(path);
         self.scope.define_path(path.clone());
-        self.resolve_path(&path);
+        self.resolve_path(path);
     }
 
     fn try_resolve_ident(&mut self, ident: &Ident) -> Result<(), ()> {
@@ -143,7 +143,7 @@ impl<'a> Resolver<'a> {
 
     #[track_caller]
     fn resolve_ident(&mut self, ident: &Ident) {
-        self.try_resolve_ident(ident).unwrap()
+        self.try_resolve_ident(ident).unwrap();
     }
 
     #[track_caller]
@@ -248,7 +248,7 @@ impl<'a> Resolver<'a> {
                 span: _,
             } => {
                 self.expr(value);
-                self.define_ident(name.clone());
+                self.define_ident(*name);
             }
             Expr::Assign { name, value } => {
                 self.resolve_ident(name);
@@ -265,16 +265,16 @@ impl<'a> Resolver<'a> {
 
     fn resolve(mut self, program: &'a Program<'a>) -> NameMap {
         for item in &program.items {
-            self.define_path(Path::from(item.name().clone()));
+            self.define_path(&Path::from(*item.name()));
         }
 
         for function in program.items.iter().filter_map(Item::as_function) {
             self.with_scope(|this| {
                 for (param, _) in &function.params {
-                    this.define_ident(param.clone());
+                    this.define_ident(*param);
                 }
                 for (cont, _) in &function.continuations {
-                    this.define_ident(cont.clone());
+                    this.define_ident(*cont);
                 }
                 this.exprs(&function.body);
             });

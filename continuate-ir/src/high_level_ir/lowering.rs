@@ -103,8 +103,10 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             AstType::String(_) => self.program.insert_type(Type::String, self.arena),
             AstType::Path(path) => self.resolve_ty_path(path).unwrap(),
             AstType::Tuple { items, span: _ } => {
-                let empty_vec = Vec::new_in(self.arena);
-                let ty = Type::Tuple(collect_into(items.iter().map(|ty| self.ty(ty)), empty_vec));
+                let ty = Type::Tuple(collect_into(
+                    Vec::new_in(self.arena),
+                    items.iter().map(|ty| self.ty(ty)),
+                ));
                 self.program.insert_type(ty, self.arena)
             }
             AstType::Function {
@@ -112,15 +114,13 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                 continuations,
                 span: _,
             } => {
-                let empty_vec = Vec::new_in(self.arena);
-                let empty_map = HashMap::new_in(self.arena);
                 let ty = Type::function(
-                    collect_into(params.iter().map(|ty| self.ty(ty)), empty_vec),
+                    collect_into(Vec::new_in(self.arena), params.iter().map(|ty| self.ty(ty))),
                     collect_into(
+                        HashMap::new_in(self.arena),
                         continuations.iter().map(|(name, ty)| {
                             (self.program.continuation_ident(name.string), self.ty(ty))
                         }),
-                        empty_map,
                     ),
                 );
                 self.program.insert_type(ty, self.arena)
@@ -135,22 +135,15 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
     fn ty_fields(&mut self, fields: &AstUserDefinedTyFields) -> UserDefinedTypeFields<'arena> {
         match fields {
-            AstUserDefinedTyFields::Named(fields) => {
-                let empty_vec = Vec::new_in(self.arena);
-                UserDefinedTypeFields::Named(collect_into(
-                    fields
-                        .iter()
-                        .map(|(ident, ty)| (ident.string.to_owned(), self.ty(ty))),
-                    empty_vec,
-                ))
-            }
-            AstUserDefinedTyFields::Anonymous(fields) => {
-                let empty_vec = Vec::new_in(self.arena);
-                UserDefinedTypeFields::Anonymous(collect_into(
-                    fields.iter().map(|ty| self.ty(ty)),
-                    empty_vec,
-                ))
-            }
+            AstUserDefinedTyFields::Named(fields) => UserDefinedTypeFields::Named(collect_into(
+                Vec::new_in(self.arena),
+                fields
+                    .iter()
+                    .map(|(ident, ty)| (ident.string.to_owned(), self.ty(ty))),
+            )),
+            AstUserDefinedTyFields::Anonymous(fields) => UserDefinedTypeFields::Anonymous(
+                collect_into(Vec::new_in(self.arena), fields.iter().map(|ty| self.ty(ty))),
+            ),
             AstUserDefinedTyFields::Unit => UserDefinedTypeFields::Unit,
         }
     }
@@ -174,12 +167,11 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                 variants,
                 span: _,
             } => {
-                let empty_vec = Vec::new_in(self.arena);
                 let ty = UserDefinedType::Sum(collect_into(
+                    Vec::new_in(self.arena),
                     variants
                         .iter()
                         .map(|(name, fields)| (name.string.to_owned(), self.ty_fields(fields))),
-                    empty_vec,
                 ));
                 self.program
                     .user_defined_types
@@ -297,10 +289,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                 result.extend(fields.iter().map(|(ident, pat)| {
                     (
                         ident.string.to_string(),
-                        self.pattern(
-                            &pat.clone()
-                                .unwrap_or_else(|| AstPattern::Ident(ident.clone())),
-                        ),
+                        self.pattern(&pat.clone().unwrap_or(AstPattern::Ident(*ident))),
                     )
                 }));
                 Pattern::Destructure {

@@ -264,10 +264,10 @@ impl<'arena> Type<'arena> {
             }
             (Type::Tuple(t1), Type::Tuple(t2)) if t1.len() == t2.len() => {
                 let types: Result<_> = try_collect_into(
+                    Vec::new_in(arena),
                     t1.iter()
                         .zip(t2.iter())
                         .map(|(ty_1, ty_2)| ty_1.unify(ty_2, program, arena)),
-                    Vec::new_in(arena),
                 );
                 Ok(program.insert_type(Type::Tuple(types?), arena))
             }
@@ -282,14 +282,15 @@ impl<'arena> Type<'arena> {
                 }),
             ) if params_1.len() == params_2.len() => {
                 let params: Result<_> = try_collect_into(
+                    Vec::new_in(arena),
                     params_1
                         .iter()
                         .zip(params_2.iter())
                         .map(|(ty_1, ty_2)| ty_1.unify(ty_2, program, arena)),
-                    Vec::new_in(arena),
                 );
 
                 let continuations: Result<_> = try_collect_into(
+                    HashMap::new_in(arena),
                     continuations_1
                         .iter()
                         .sorted_unstable_by_key(|(ident, _)| **ident)
@@ -306,7 +307,6 @@ impl<'arena> Type<'arena> {
                             let ty = ty_1.unify(ty_2, program, arena)?;
                             Ok((ident_1, ty))
                         }),
-                    HashMap::new_in(arena),
                 );
 
                 let ty = Type::function(params?, continuations?);

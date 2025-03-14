@@ -16,14 +16,14 @@ use std::mem;
 
 use continuate_error::Span;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum Literal<'src> {
     Int(i64, Span),
     Float(f64, Span),
     String(&'src str, Span),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Ident<'src> {
     pub string: &'src str,
     pub span: Span,
@@ -49,7 +49,7 @@ impl Hash for Ident<'_> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum PathIdentSegment<'src> {
     Ident(Ident<'src>),
     Package(Span),
@@ -88,7 +88,7 @@ impl Hash for PathIdentSegment<'_> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct PathSegment<'src> {
     pub ident: PathIdentSegment<'src>,
     pub span: Span,
