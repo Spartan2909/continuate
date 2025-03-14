@@ -24,6 +24,9 @@ impl Ident {
         Ident(value, Span::dummy())
     }
 
+    /// ## Panics
+    ///
+    /// Panics if `self` does not originate from a source in `cache`.
     #[track_caller]
     pub fn name<'a>(&self, cache: &'a SourceCache) -> &'a str {
         cache.str(self.1).expect("invalid `SourceCache` for ident")

@@ -264,7 +264,7 @@ impl Span {
         }
     }
 
-    pub fn debug<'a>(self, cache: &'a SourceCache) -> impl fmt::Debug + use<'a> {
+    pub fn debug(self, cache: &SourceCache) -> impl fmt::Debug + use<'_> {
         DebugSpan { span: self, cache }
     }
 }

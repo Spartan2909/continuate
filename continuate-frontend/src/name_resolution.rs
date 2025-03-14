@@ -145,14 +145,14 @@ impl NameMap {
         }
 
         impl<'a> FormatNameMap<'a> {
-            fn definitions(&self, definitions: &'a HashSet<Span>) -> FormatDefinitions<'a> {
+            const fn definitions(&self, definitions: &'a HashSet<Span>) -> FormatDefinitions<'a> {
                 FormatDefinitions {
                     definitions,
                     cache: self.cache,
                 }
             }
 
-            fn map(&self, map: &'a HashMap<Span, Span>) -> FormatMap<'a> {
+            const fn map(&self, map: &'a HashMap<Span, Span>) -> FormatMap<'a> {
                 FormatMap {
                     map,
                     cache: self.cache,
