@@ -102,7 +102,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
     fn lower_ty(&mut self, hir_ty: &'a HirType) -> &'arena Type<'arena> {
         if let Some(ty) = self.types.get(hir_ty) {
-            return *ty;
+            return ty;
         }
 
         let ty = match *hir_ty {
