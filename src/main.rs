@@ -80,7 +80,7 @@ fn main() {
     let (tokens, lex_errors) = continuate_frontend::lex(&input, source_id);
 
     let (ast, parse_errors) =
-        continuate_frontend::parse(&tokens, source_cache.eof(source_id).unwrap())
+        continuate_frontend::parse(&tokens, source_cache.eof(source_id).unwrap(), &program_name)
             .into_output_errors();
 
     let error = fold_errors(lex_errors.into_iter().chain(parse_errors));

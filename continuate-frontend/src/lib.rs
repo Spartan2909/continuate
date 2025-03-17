@@ -362,4 +362,5 @@ impl<'src> Item<'src> {
 #[derive(Debug, Clone)]
 pub struct Program<'src> {
     pub items: Vec<Item<'src>>,
+    pub name: String,
 }

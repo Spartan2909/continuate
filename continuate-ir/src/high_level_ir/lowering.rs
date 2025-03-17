@@ -191,13 +191,25 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
     }
 
     fn declare_fns(&mut self) {
+        let mut fn_main = None;
         self.functions.extend(
             self.ast
                 .items
                 .iter()
-                .filter_map(|item| Some(item.as_function()?.name.span))
+                .filter_map(|item| {
+                    let name = item.as_function()?.name;
+                    if name.string == "main" {
+                        fn_main = Some(name.span);
+                        None
+                    } else {
+                        Some(name.span)
+                    }
+                })
                 .zip(iter::repeat_with(FuncRef::new)),
         );
+        if let Some(fn_main) = fn_main {
+            self.functions.insert(fn_main, FuncRef::ENTRY_POINT);
+        }
     }
 
     fn declare_idents(&mut self) {
@@ -519,7 +531,8 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
     }
 
     fn define_fn(&mut self, fun: &AstFunction) {
-        let mut ir_fun = Function::new(fun.name.string.to_string(), self.arena);
+        let name = format!("{}::{}", self.program.name, fun.name.string);
+        let mut ir_fun = Function::new(name, self.arena);
 
         let mut params = Vec::with_capacity_in(fun.params.len(), self.arena);
         params.extend(

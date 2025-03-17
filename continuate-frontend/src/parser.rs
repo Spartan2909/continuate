@@ -602,12 +602,19 @@ where
         .or(sum_ty())
 }
 
-pub fn parse<'src>(input: &[(Token<'src>, Span)], eoi: Span) -> ParseResult<Program<'src>, Error> {
+pub fn parse<'src>(
+    input: &[(Token<'src>, Span)],
+    eoi: Span,
+    name: &str,
+) -> ParseResult<Program<'src>, Error> {
     function()
         .map(Item::Function)
         .or(user_defined_ty().map(Item::UserDefinedTy))
         .repeated()
         .collect()
-        .map(|items| Program { items })
+        .map(|items| Program {
+            items,
+            name: name.to_string(),
+        })
         .parse(Input::map(input, eoi, |(token, span)| (token, span)))
 }
