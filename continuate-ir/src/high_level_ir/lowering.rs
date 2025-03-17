@@ -126,7 +126,10 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                     collect_into(
                         HashMap::new_in(self.arena),
                         continuations.iter().map(|(name, ty)| {
-                            (self.program.continuation_ident(name.string), self.ty(ty))
+                            (
+                                self.program.continuation_ident(name.string, name.span),
+                                self.ty(ty),
+                            )
                         }),
                     ),
                 );
@@ -198,11 +201,17 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
     }
 
     fn declare_idents(&mut self) {
-        self.idents.extend(
-            self.names
-                .ident_definitions()
-                .zip(iter::repeat_with(Ident::new)),
-        );
+        self.idents
+            .extend(self.names.ident_definitions().map(|ident| {
+                if let Some(name) = &ident.continuation_name {
+                    (
+                        ident.span,
+                        self.program.continuation_ident(name, ident.span),
+                    )
+                } else {
+                    (ident.span, Ident::new(ident.span))
+                }
+            }));
     }
 
     fn expr_literal(literal: &AstLiteral) -> Expr<'arena> {

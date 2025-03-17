@@ -61,8 +61,44 @@ impl<'a> Scope<'a> {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct IdentDefinition {
+    pub span: Span,
+    pub continuation_name: Option<String>,
+}
+
+impl IdentDefinition {
+    pub const fn new(span: Span, continuation_name: Option<String>) -> IdentDefinition {
+        IdentDefinition {
+            span,
+            continuation_name,
+        }
+    }
+
+    pub const fn debug<'a>(&'a self, cache: &'a SourceCache) -> impl fmt::Debug + use<'a> {
+        struct DebugIdentDefinition<'a> {
+            definition: &'a IdentDefinition,
+            cache: &'a SourceCache,
+        }
+
+        impl fmt::Debug for DebugIdentDefinition<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_struct("IdentDefinition")
+                    .field("span", &self.definition.span.debug(self.cache))
+                    .field("continuation_name", &self.definition.continuation_name)
+                    .finish()
+            }
+        }
+
+        DebugIdentDefinition {
+            definition: self,
+            cache,
+        }
+    }
+}
+
 pub struct NameMap {
-    ident_definitions: HashSet<Span>,
+    ident_definitions: HashSet<IdentDefinition>,
     idents: HashMap<Span, Span>,
     path_definitions: HashSet<Span>,
     paths: HashMap<Span, Span>,
@@ -78,8 +114,9 @@ impl NameMap {
         }
     }
 
-    fn define_ident(&mut self, ident: &Ident) {
-        self.ident_definitions.insert(ident.span);
+    fn define_ident(&mut self, ident: &Ident, continuation_name: Option<String>) {
+        self.ident_definitions
+            .insert(IdentDefinition::new(ident.span, continuation_name));
     }
 
     fn define_path(&mut self, path: &Path) {
@@ -98,8 +135,8 @@ impl NameMap {
         self.idents.get(&ident.span).copied()
     }
 
-    pub fn ident_definitions(&self) -> impl Iterator<Item = Span> + use<'_> {
-        self.ident_definitions.iter().copied()
+    pub fn ident_definitions(&self) -> impl Iterator<Item = &'_ IdentDefinition> {
+        self.ident_definitions.iter()
     }
 
     pub fn get_path(&self, path: &Path) -> Option<Span> {
@@ -111,12 +148,25 @@ impl NameMap {
     }
 
     pub fn debug<'a>(&'a self, cache: &'a SourceCache) -> impl fmt::Debug + use<'a> {
-        struct FormatDefinitions<'a> {
+        struct FormatIdentDefinitions<'a> {
+            definitions: &'a HashSet<IdentDefinition>,
+            cache: &'a SourceCache,
+        }
+
+        impl fmt::Debug for FormatIdentDefinitions<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_set()
+                    .entries(self.definitions.iter().map(|ident| ident.debug(self.cache)))
+                    .finish()
+            }
+        }
+
+        struct FormatPathDefinitions<'a> {
             definitions: &'a HashSet<Span>,
             cache: &'a SourceCache,
         }
 
-        impl fmt::Debug for FormatDefinitions<'_> {
+        impl fmt::Debug for FormatPathDefinitions<'_> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.debug_set()
                     .entries(self.definitions.iter().map(|span| span.debug(self.cache)))
@@ -145,8 +195,21 @@ impl NameMap {
         }
 
         impl<'a> FormatNameMap<'a> {
-            const fn definitions(&self, definitions: &'a HashSet<Span>) -> FormatDefinitions<'a> {
-                FormatDefinitions {
+            const fn ident_definitions(
+                &self,
+                definitions: &'a HashSet<IdentDefinition>,
+            ) -> FormatIdentDefinitions<'a> {
+                FormatIdentDefinitions {
+                    definitions,
+                    cache: self.cache,
+                }
+            }
+
+            const fn path_definitions(
+                &self,
+                definitions: &'a HashSet<Span>,
+            ) -> FormatPathDefinitions<'a> {
+                FormatPathDefinitions {
                     definitions,
                     cache: self.cache,
                 }
@@ -165,12 +228,12 @@ impl NameMap {
                 f.debug_struct("NameMap")
                     .field(
                         "ident_definitions",
-                        &self.definitions(&self.names.ident_definitions),
+                        &self.ident_definitions(&self.names.ident_definitions),
                     )
                     .field("idents", &self.map(&self.names.idents))
                     .field(
                         "path_definitions",
-                        &self.definitions(&self.names.path_definitions),
+                        &self.path_definitions(&self.names.path_definitions),
                     )
                     .field("paths", &self.map(&self.names.paths))
                     .finish()
@@ -194,8 +257,13 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn define_ident(&mut self, ident: Ident<'a>) {
-        self.map.define_ident(&ident);
+    fn define_ident(&mut self, ident: Ident<'a>, is_continuation: bool) {
+        let continuation_name = if is_continuation {
+            Some(ident.string.to_string())
+        } else {
+            None
+        };
+        self.map.define_ident(&ident, continuation_name);
         self.scope.define_ident(ident);
         self.resolve_ident(&ident);
     }
@@ -324,7 +392,7 @@ impl<'a> Resolver<'a> {
                 span: _,
             } => {
                 self.expr(value);
-                self.define_ident(*name);
+                self.define_ident(*name, false);
             }
             Expr::Assign { name, value } => {
                 self.resolve_ident(name);
@@ -347,10 +415,10 @@ impl<'a> Resolver<'a> {
         for function in program.items.iter().filter_map(Item::as_function) {
             self.with_scope(|this| {
                 for (param, _) in &function.params {
-                    this.define_ident(*param);
+                    this.define_ident(*param, false);
                 }
                 for (cont, _) in &function.continuations {
-                    this.define_ident(*cont);
+                    this.define_ident(*cont, true);
                 }
                 this.exprs(&function.body);
             });

@@ -21,6 +21,7 @@ use std::slice;
 use bumpalo::Bump;
 
 use continuate_error::Result;
+use continuate_error::Span;
 
 use continuate_utils::try_collect_into;
 use continuate_utils::Box;
@@ -521,11 +522,11 @@ impl<'arena> Program<'arena> {
         }
     }
 
-    pub fn continuation_ident(&mut self, continuation: &str) -> Ident {
+    pub fn continuation_ident(&mut self, continuation: &str, span: Span) -> Ident {
         if let Some(ident) = self.continuation_idents.get(continuation) {
-            *ident
+            ident.with_span(span)
         } else {
-            let ident = Ident::new();
+            let ident = Ident::new(span);
             self.continuation_idents
                 .insert(continuation.to_string(), ident);
             ident

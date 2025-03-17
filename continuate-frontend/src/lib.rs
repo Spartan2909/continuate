@@ -5,6 +5,7 @@ pub use lexer::Token;
 
 mod name_resolution;
 pub use name_resolution::resolve_names;
+pub use name_resolution::IdentDefinition;
 pub use name_resolution::NameMap;
 
 mod parser;

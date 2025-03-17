@@ -16,12 +16,12 @@ impl Ident {
     ///
     /// Panics if the total number of identifiers exceeds `u64::MAX - 1`.
     #[allow(clippy::new_without_default)]
-    pub fn new() -> Ident {
+    pub fn new(span: Span) -> Ident {
         static NEXT: AtomicU64 = AtomicU64::new(0);
 
         let value = NEXT.fetch_add(1, Ordering::Relaxed);
         assert_ne!(value, u64::MAX, "ident overflow");
-        Ident(value, Span::dummy())
+        Ident(value, span)
     }
 
     /// ## Panics
@@ -30,6 +30,11 @@ impl Ident {
     #[track_caller]
     pub fn name<'a>(&self, cache: &'a SourceCache) -> &'a str {
         cache.str(self.1).expect("invalid `SourceCache` for ident")
+    }
+
+    #[must_use]
+    pub const fn with_span(self, span: Span) -> Ident {
+        Ident(self.0, span)
     }
 }
 
