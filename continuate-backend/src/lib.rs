@@ -669,15 +669,10 @@ impl Compiler<'_, '_, ObjectModule> {
         let mut signature = self.module.make_signature();
         signature.returns.push(AbiParam::new(c_int));
 
-        let main = match self
-            .module
-            .declare_function("main", Linkage::Export, &signature)
-        {
-            Ok(fun) => fun,
-            Err(error) => {
-                panic!("{error}")
-            }
-        };
+        let main = pretty_unwrap(
+            self.module
+                .declare_function("main", Linkage::Export, &signature),
+        );
         let name = UserFuncName::User(UserExternalName::new(1, 0));
         let mut function = Function::with_name_signature(name, signature);
         let mut builder = FunctionBuilder::new(&mut function, &mut func_ctx);
