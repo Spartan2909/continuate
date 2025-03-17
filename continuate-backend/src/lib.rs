@@ -3,6 +3,7 @@ use function::FunctionCompiler;
 use function::FunctionRuntime;
 
 use std::collections::HashMap;
+use std::fmt;
 use std::mem;
 
 use bumpalo::Bump;
@@ -83,33 +84,39 @@ impl Runtime {
         let mut alloc_gc_sig = module.make_signature();
         alloc_gc_sig.params.push(AbiParam::new(ptr_ty));
         alloc_gc_sig.returns.push(AbiParam::new(ptr_ty));
-        let alloc_gc = module
-            .declare_function("cont_rt_alloc_gc", Linkage::Import, &alloc_gc_sig)
-            .unwrap();
+        let alloc_gc = pretty_unwrap(module.declare_function(
+            "cont_rt_alloc_gc",
+            Linkage::Import,
+            &alloc_gc_sig,
+        ));
 
         let mut alloc_string_sig = module.make_signature();
         alloc_string_sig.params.push(AbiParam::new(ptr_ty));
         alloc_string_sig.returns.push(AbiParam::new(ptr_ty));
-        let alloc_string = module
-            .declare_function("cont_rt_alloc_string", Linkage::Import, &alloc_string_sig)
-            .unwrap();
+        let alloc_string = pretty_unwrap(module.declare_function(
+            "cont_rt_alloc_string",
+            Linkage::Import,
+            &alloc_string_sig,
+        ));
 
         let mut mark_unmark_root_sig = module.make_signature();
         mark_unmark_root_sig.params.push(AbiParam::new(types::I64));
-        let mark_root = module
-            .declare_function("cont_rt_mark_root", Linkage::Import, &mark_unmark_root_sig)
-            .unwrap();
-        let unmark_root = module
-            .declare_function(
-                "cont_rt_unmark_root",
-                Linkage::Import,
-                &mark_unmark_root_sig,
-            )
-            .unwrap();
+        let mark_root = pretty_unwrap(module.declare_function(
+            "cont_rt_mark_root",
+            Linkage::Import,
+            &mark_unmark_root_sig,
+        ));
+        let unmark_root = pretty_unwrap(module.declare_function(
+            "cont_rt_unmark_root",
+            Linkage::Import,
+            &mark_unmark_root_sig,
+        ));
 
-        let init = module
-            .declare_function("cont_rt_init", Linkage::Import, &module.make_signature())
-            .unwrap();
+        let init = pretty_unwrap(module.declare_function(
+            "cont_rt_init",
+            Linkage::Import,
+            &module.make_signature(),
+        ));
 
         Runtime {
             alloc_gc,
@@ -125,6 +132,13 @@ const fn u64_as_endianness(value: u64, endianness: Endianness) -> [u8; 8] {
     match endianness {
         Endianness::Big => value.to_be_bytes(),
         Endianness::Little => value.to_le_bytes(),
+    }
+}
+
+fn pretty_unwrap<T, E: fmt::Display>(res: Result<T, E>) -> T {
+    match res {
+        Ok(val) => val,
+        Err(error) => panic!("{error}"),
     }
 }
 
@@ -184,11 +198,11 @@ fn declare_static<M: Module + ?Sized>(
         return None;
     }
 
-    let global = module.declare_anonymous_data(false, false).unwrap();
+    let global = pretty_unwrap(module.declare_anonymous_data(false, false));
     data_description.clear();
     data_description.define(contents);
     data_description.align = align;
-    module.define_data(global, data_description).unwrap();
+    pretty_unwrap(module.define_data(global, data_description));
 
     Some(global)
 }
@@ -199,12 +213,12 @@ fn dangling_static_ptr<M: Module + ?Sized>(
     data_description: &mut DataDescription,
     triple: &Triple,
 ) -> DataId {
-    let ptr = module.declare_anonymous_data(false, false).unwrap();
+    let ptr = pretty_unwrap(module.declare_anonymous_data(false, false));
     data_description.clear();
     let mut contents = Vec::with_capacity(ptr_ty(triple).bytes() as usize);
     int_as_target_usize(align.unwrap_or(1), &mut contents, triple);
     data_description.define(contents.into_boxed_slice());
-    module.define_data(ptr, data_description).unwrap();
+    pretty_unwrap(module.define_data(ptr, data_description));
     ptr
 }
 
@@ -385,9 +399,7 @@ impl<'arena, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
         self.context.clear();
         self.context.want_disasm = cfg!(debug_assertions);
         self.context.func = function;
-        self.module
-            .define_function(func_id, &mut self.context)
-            .unwrap();
+        pretty_unwrap(self.module.define_function(func_id, &mut self.context));
     }
 
     fn compound_ty_layout(&self, types: &[&[&MirType]]) -> SingleLayout<'arena> {
@@ -463,7 +475,7 @@ impl<'arena, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
         let (offset, gc_pointer_locations) =
             self.append_single_layout_global(layout, &mut contents);
 
-        let layout_global = self.module.declare_anonymous_data(false, false).unwrap();
+        let layout_global = pretty_unwrap(self.module.declare_anonymous_data(false, false));
         self.data_description.clear();
         self.data_description.define(contents.into_boxed_slice());
 
@@ -473,9 +485,10 @@ impl<'arena, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
         self.data_description
             .write_data_addr(offset, gc_pointer_locations, 0);
 
-        self.module
-            .define_data(layout_global, &self.data_description)
-            .unwrap();
+        pretty_unwrap(
+            self.module
+                .define_data(layout_global, &self.data_description),
+        );
 
         layout_global
     }
@@ -497,7 +510,8 @@ impl<'arena, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
                     relocs.push(self.append_single_layout_global(layout, &mut contents));
                 }
 
-                let variant_layouts = self.module.declare_anonymous_data(false, false).unwrap();
+                let variant_layouts =
+                    pretty_unwrap(self.module.declare_anonymous_data(false, false));
                 self.data_description.clear();
                 self.data_description.define(contents.into_boxed_slice());
                 for (offset, data_id) in relocs {
@@ -506,11 +520,12 @@ impl<'arena, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
                         .declare_data_in_data(data_id, &mut self.data_description);
                     self.data_description.write_data_addr(offset, data, 0);
                 }
-                self.module
-                    .define_data(variant_layouts, &self.data_description)
-                    .unwrap();
+                pretty_unwrap(
+                    self.module
+                        .define_data(variant_layouts, &self.data_description),
+                );
 
-                let layout = self.module.declare_anonymous_data(false, false).unwrap();
+                let layout = pretty_unwrap(self.module.declare_anonymous_data(false, false));
                 self.data_description.clear();
 
                 let ptr_size = ptr_ty(&self.triple).bytes();
@@ -529,9 +544,7 @@ impl<'arena, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
                 contents.extend(u64_as_endianness(align, endianness));
                 self.data_description.define(contents.into_boxed_slice());
 
-                self.module
-                    .define_data(layout, &self.data_description)
-                    .unwrap();
+                pretty_unwrap(self.module.define_data(layout, &self.data_description));
 
                 layout
             }
@@ -613,10 +626,11 @@ impl<'arena, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
             let function_ty = function_ty.as_function().unwrap();
             let sig = signature_from_function_ty(function_ty, CallConv::Tail, &self.triple);
 
-            let id = self
-                .module
-                .declare_function(&function.name, Linkage::Local, &sig)
-                .unwrap();
+            let id = pretty_unwrap(self.module.declare_function(
+                &function.name,
+                Linkage::Local,
+                &sig,
+            ));
             self.functions.insert(func_ref, (id, sig));
         }
     }
@@ -655,10 +669,15 @@ impl Compiler<'_, '_, ObjectModule> {
         let mut signature = self.module.make_signature();
         signature.returns.push(AbiParam::new(c_int));
 
-        let main = self
+        let main = match self
             .module
             .declare_function("main", Linkage::Export, &signature)
-            .unwrap();
+        {
+            Ok(fun) => fun,
+            Err(error) => {
+                panic!("{error}")
+            }
+        };
         let name = UserFuncName::User(UserExternalName::new(1, 0));
         let mut function = Function::with_name_signature(name, signature);
         let mut builder = FunctionBuilder::new(&mut function, &mut func_ctx);
@@ -696,9 +715,7 @@ impl Compiler<'_, '_, ObjectModule> {
 
         self.context.clear();
         self.context.func = function;
-        self.module
-            .define_function(main, &mut self.context)
-            .unwrap();
+        pretty_unwrap(self.module.define_function(main, &mut self.context));
 
         self.module.finish()
     }
