@@ -29,6 +29,19 @@ use crate::high_level_ir::UserDefinedTypeFields;
 use crate::mid_level_ir::Block;
 use crate::mid_level_ir::BlockId;
 use crate::mid_level_ir::Expr;
+use crate::mid_level_ir::ExprArray;
+use crate::mid_level_ir::ExprAssign;
+use crate::mid_level_ir::ExprBinary;
+use crate::mid_level_ir::ExprCall;
+use crate::mid_level_ir::ExprClosure;
+use crate::mid_level_ir::ExprConstructor;
+use crate::mid_level_ir::ExprContApplication;
+use crate::mid_level_ir::ExprGet;
+use crate::mid_level_ir::ExprIntrinsic;
+use crate::mid_level_ir::ExprSet;
+use crate::mid_level_ir::ExprSwitch;
+use crate::mid_level_ir::ExprTuple;
+use crate::mid_level_ir::ExprUnary;
 use crate::mid_level_ir::Function;
 use crate::mid_level_ir::Program;
 use crate::mid_level_ir::Type;
@@ -164,10 +177,10 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             let ty = self
                 .program
                 .insert_type(Type::Tuple(Vec::new_in(self.arena)), self.arena);
-            Expr::Tuple {
+            Expr::Tuple(ExprTuple {
                 ty,
                 values: Vec::new_in(self.arena),
-            }
+            })
         });
         for expr in exprs {
             block.exprs.push(expr);
@@ -194,10 +207,10 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
         let mut values = Vec::with_capacity_in(elements.len(), self.arena);
         values.extend(elements);
-        Expr::Tuple {
+        Expr::Tuple(ExprTuple {
             ty: self.lower_ty(expr.ty),
             values,
-        }
+        })
     }
 
     fn expr_constructor(
@@ -225,7 +238,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             ExprConstructorFields::Unit => Vec::new_in(self.arena),
         };
 
-        Expr::Constructor {
+        Expr::Constructor(ExprConstructor {
             ty: self.lower_ty(expr.ty),
             index: expr.variant.as_ref().and_then(|variant| {
                 ty.as_sum()
@@ -234,7 +247,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                     .position(|(name, _)| name == variant)
             }),
             fields,
-        }
+        })
     }
 
     fn expr_array(
@@ -246,11 +259,11 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let array = self.expr_list(&expr.exprs, block, function);
         let mut values = Vec::with_capacity_in(array.len(), self.arena);
         values.extend(array);
-        Expr::Array {
+        Expr::Array(ExprArray {
             ty: self.lower_ty(expr.ty),
             values,
             value_ty: self.lower_ty(expr.element_ty),
-        }
+        })
     }
 
     fn expr_get(
@@ -261,7 +274,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
     ) -> Expr<'arena> {
         let object = self.expr(&expr.object, block, function);
         let user_defined = expr.object_ty.as_user_defined().unwrap();
-        Expr::Get {
+        Expr::Get(ExprGet {
             object: self.arena.alloc(object),
             object_ty: self.lower_ty(expr.object_ty),
             object_variant: None,
@@ -270,7 +283,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                 &expr.field,
             )
             .unwrap(),
-        }
+        })
     }
 
     fn expr_set(
@@ -284,7 +297,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
         let value = self.expr(&expr.value, block, function);
 
-        Expr::Set {
+        Expr::Set(ExprSet {
             object: self.arena.alloc(object),
             object_ty: self.lower_ty(expr.object_ty),
             object_variant: None,
@@ -294,7 +307,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             )
             .unwrap(),
             value: self.arena.alloc(value),
-        }
+        })
     }
 
     fn expr_call(
@@ -309,12 +322,11 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let mut new_params = Vec::with_capacity_in(params.len(), self.arena);
         new_params.extend(params);
         let callee_ty = self.lower_ty(expr.callee_ty).as_function().unwrap();
-        let expr = Expr::Call {
+        Expr::Call(ExprCall {
             callee: self.arena.alloc(callee),
             callee_ty,
             args: new_params,
-        };
-        expr
+        })
     }
 
     fn expr_cont_application(
@@ -331,8 +343,10 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             new_continuations.insert(ident, expr);
         }
 
-        let expr = Expr::ContApplication(self.arena.alloc(callee), new_continuations);
-        expr
+        Expr::ContApplication(ExprContApplication {
+            callee: self.arena.alloc(callee),
+            continuations: new_continuations,
+        })
     }
 
     fn expr_unary(
@@ -342,12 +356,11 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         function: &mut Function<'arena>,
     ) -> Expr<'arena> {
         let operand = self.expr(&expr.right, block, function);
-        let expr = Expr::Unary {
+        Expr::Unary(ExprUnary {
             operator: expr.op,
             operand: self.arena.alloc(operand),
             operand_ty: self.lower_ty(expr.right_ty),
-        };
-        expr
+        })
     }
 
     fn expr_binary(
@@ -359,14 +372,13 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let left = self.expr(&expr.left, block, function);
         let right = self.expr(&expr.right, block, function);
 
-        let expr = Expr::Binary {
+        Expr::Binary(ExprBinary {
             left: self.arena.alloc(left),
             left_ty: self.lower_ty(expr.left_ty),
             operator: expr.op,
             right: self.arena.alloc(right),
             right_ty: self.lower_ty(expr.right_ty),
-        };
-        expr
+        })
     }
 
     fn expr_declare(
@@ -380,11 +392,10 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         function
             .declarations
             .insert(expr.ident, (self.lower_ty(expr.ty), None));
-        let expr = Expr::Assign {
+        Expr::Assign(ExprAssign {
             ident: expr.ident,
             expr: self.arena.alloc(right),
-        };
-        expr
+        })
     }
 
     fn expr_assign(
@@ -395,11 +406,10 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
     ) -> Expr<'arena> {
         let right = self.expr(&expr.expr, block, function);
 
-        let expr = Expr::Assign {
+        Expr::Assign(ExprAssign {
             ident: expr.ident,
             expr: self.arena.alloc(right),
-        };
-        expr
+        })
     }
 
     #[expect(
@@ -471,10 +481,10 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         match *arm_pat {
             Pattern::Wildcard => ArmData::Wildcard,
             Pattern::Ident(ident) => {
-                let binding = Expr::Assign {
+                let binding = Expr::Assign(ExprAssign {
                     ident,
                     expr: scrutinee,
-                };
+                });
                 function.declarations.insert(ident, (scrutinee_ty, None));
                 arm_block.exprs.push(binding);
                 ArmData::Wildcard
@@ -489,12 +499,12 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                 for (field, pattern) in
                     Self::order_destructure_fields(fields, ty, variant.as_deref()).enumerate()
                 {
-                    let get = Expr::Get {
+                    let get = Expr::Get(ExprGet {
                         object: scrutinee,
                         object_ty: scrutinee_ty,
                         object_variant: variant_index,
                         field,
-                    };
+                    });
                     let get = self.arena.alloc(get);
                     let field_ty_ref = scrutinee_ty.field(variant_index, field).unwrap();
                     let mut new_block = Block::new(self.arena);
@@ -514,17 +524,17 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                             variant,
                             block: switch_arm_id,
                         }) => {
-                            let discriminant = Expr::Intrinsic {
+                            let discriminant = Expr::Intrinsic(ExprIntrinsic {
                                 intrinsic: Intrinsic::Discriminant,
                                 value: get,
                                 value_ty: field_ty_ref,
-                            };
+                            });
                             let arms = iter::once((variant as i64, switch_arm_id));
-                            let switch = Expr::Switch {
+                            let switch = Expr::Switch(ExprSwitch {
                                 scrutinee: self.arena.alloc(discriminant),
                                 arms: collect_into(HashMap::new_in(self.arena), arms),
                                 otherwise,
-                            };
+                            });
                             arm_block.exprs.push(switch);
                             function.blocks.insert(switch_arm_id, new_block);
                         }
@@ -600,11 +610,11 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let scrutinee = if discriminants.is_empty() {
             scrutinee
         } else {
-            self.arena.alloc(Expr::Intrinsic {
+            self.arena.alloc(Expr::Intrinsic(ExprIntrinsic {
                 intrinsic: Intrinsic::Discriminant,
                 value: scrutinee,
                 value_ty: self.lower_ty(expr.scrutinee_ty),
-            })
+            }))
         };
 
         if let Entry::Vacant(entry) = function.blocks.entry(otherwise) {
@@ -612,7 +622,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             otherwise_block.exprs.push(Expr::Unreachable);
             entry.insert(otherwise_block);
         }
-        let expr = Expr::Switch {
+        Expr::Switch(ExprSwitch {
             scrutinee,
             arms: collect_into(
                 HashMap::new_in(self.arena),
@@ -621,9 +631,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                     .map(|&MatchVariant { variant, block }| (variant as i64, block)),
             ),
             otherwise,
-        };
-
-        expr
+        })
     }
 
     fn expr_closure(&mut self, expr: &HirExprClosure) -> Expr<'arena> {
@@ -641,7 +649,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             .insert(expr.func, self.arena.alloc(func));
 
         let func_ref = expr.func;
-        Expr::Closure { func_ref, captures }
+        Expr::Closure(ExprClosure { func_ref, captures })
     }
 
     fn expr_intrinsic(
@@ -651,11 +659,11 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         function: &mut Function<'arena>,
     ) -> Expr<'arena> {
         let value = self.expr(&expr.value, block, function);
-        Expr::Intrinsic {
+        Expr::Intrinsic(ExprIntrinsic {
             intrinsic: expr.intrinsic,
             value: self.arena.alloc(value),
             value_ty: self.lower_ty(expr.value_ty),
-        }
+        })
     }
 
     fn expr(

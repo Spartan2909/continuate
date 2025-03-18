@@ -6,6 +6,19 @@ use crate::common::Literal;
 use crate::common::UnaryOp;
 use crate::mid_level_ir::BlockId;
 use crate::mid_level_ir::Expr;
+use crate::mid_level_ir::ExprArray;
+use crate::mid_level_ir::ExprAssign;
+use crate::mid_level_ir::ExprBinary;
+use crate::mid_level_ir::ExprCall;
+use crate::mid_level_ir::ExprClosure;
+use crate::mid_level_ir::ExprConstructor;
+use crate::mid_level_ir::ExprContApplication;
+use crate::mid_level_ir::ExprGet;
+use crate::mid_level_ir::ExprIntrinsic;
+use crate::mid_level_ir::ExprSet;
+use crate::mid_level_ir::ExprSwitch;
+use crate::mid_level_ir::ExprTuple;
+use crate::mid_level_ir::ExprUnary;
 use crate::mid_level_ir::Function;
 use crate::mid_level_ir::Program;
 
@@ -504,93 +517,94 @@ impl<'arena> Executor<'arena> {
             Expr::Literal(ref lit) => ControlFlow::value(lit.clone().into(), self.arena),
             Expr::Ident(ident) => ControlFlow::Value(self.environment.borrow().get(ident).unwrap()),
             Expr::Function(func_ref) => ControlFlow::value(Value::Function(func_ref), self.arena),
-            Expr::Tuple { ty: _, ref values } => {
+            Expr::Tuple(ExprTuple { ty: _, ref values }) => {
                 ControlFlow::value(Value::tuple(value!(self.expr_list(values))), self.arena)
             }
-            Expr::Constructor {
+            Expr::Constructor(ExprConstructor {
                 ty: _,
                 index,
                 ref fields,
-            } => ControlFlow::value(
+            }) => ControlFlow::value(
                 Value::user_defined(index, value!(self.expr_list(fields))),
                 self.arena,
             ),
-            Expr::Array {
+            Expr::Array(ExprArray {
                 ty: _,
                 ref values,
                 value_ty: _,
-            } => ControlFlow::value(Value::array(value!(self.expr_list(values))), self.arena),
-            Expr::Get {
+            }) => ControlFlow::value(Value::array(value!(self.expr_list(values))), self.arena),
+            Expr::Get(ExprGet {
                 object,
                 object_ty: _,
                 object_variant: _,
                 field,
-            } => {
+            }) => {
                 let object = value!(self.expr(object));
                 ControlFlow::Value(object.get(field).unwrap())
             }
-            Expr::Set {
+            Expr::Set(ExprSet {
                 object,
                 object_ty: _,
                 object_variant: _,
                 field,
                 value,
-            } => {
+            }) => {
                 let object = value!(self.expr(object));
                 let value = value!(self.expr(value));
                 object.set(field, value);
                 ControlFlow::Value(value)
             }
-            Expr::Call {
+            Expr::Call(ExprCall {
                 callee,
                 callee_ty: _,
                 ref args,
-            } => {
+            }) => {
                 let callee = value!(self.expr(callee));
                 let params = value!(self.expr_list(args));
                 callee
                     .call(params, HashMap::new_in(self.arena), self)
                     .cast()
             }
-            Expr::ContApplication(func, ref continuations) => {
-                self.cont_application(func, continuations)
-            }
-            Expr::Unary {
+            Expr::ContApplication(ExprContApplication {
+                callee,
+                ref continuations,
+            }) => self.cont_application(callee, continuations),
+            Expr::Unary(ExprUnary {
                 operator,
                 operand,
                 operand_ty: _,
-            } => self.unary_op(operator, operand),
-            Expr::Binary {
+            }) => self.unary_op(operator, operand),
+            Expr::Binary(ExprBinary {
                 left,
                 left_ty: _,
                 operator,
                 right,
                 right_ty: _,
-            } => self.binary_op(left, right, operator),
-            Expr::Assign { ident, expr } => {
+            }) => self.binary_op(left, right, operator),
+            Expr::Assign(ExprAssign { ident, expr }) => {
                 let value = value!(self.expr(expr));
                 self.environment.borrow_mut().set(ident, value);
                 ControlFlow::Value(value)
             }
-            Expr::Switch {
+            Expr::Switch(ExprSwitch {
                 scrutinee,
                 ref arms,
                 otherwise,
-            } => {
+            }) => {
                 let scrutinee = value!(self.expr(scrutinee)).as_int().unwrap();
                 let block_id = arms.get(&scrutinee).copied().unwrap_or(otherwise);
                 ControlFlow::Goto(block_id)
             }
             Expr::Goto(block_id) => ControlFlow::Goto(block_id),
-            Expr::Closure {
+            Expr::Closure(ExprClosure {
                 func_ref,
                 captures: _,
-            } => self.closure(func_ref),
-            Expr::Intrinsic {
+            }) => self.closure(func_ref),
+            Expr::Intrinsic(ExprIntrinsic {
                 intrinsic,
                 value,
                 value_ty: _,
-            } => {
+            }) => {
                 let value = value!(self.expr(value));
                 self.intrinsic(intrinsic, value)
             }

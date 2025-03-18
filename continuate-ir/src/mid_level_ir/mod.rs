@@ -27,80 +27,113 @@ pub enum Expr<'arena> {
     Literal(Literal),
     Ident(Ident),
     Function(FuncRef),
-    Tuple {
-        ty: &'arena Type<'arena>,
-        values: Vec<'arena, Expr<'arena>>,
-    },
-    Constructor {
-        ty: &'arena Type<'arena>,
-        index: Option<usize>,
-        fields: Vec<'arena, Expr<'arena>>,
-    },
-    Array {
-        ty: &'arena Type<'arena>,
-        values: Vec<'arena, Expr<'arena>>,
-        value_ty: &'arena Type<'arena>,
-    },
-
-    Get {
-        object: &'arena Expr<'arena>,
-        object_ty: &'arena Type<'arena>,
-        object_variant: Option<usize>,
-        field: usize,
-    },
-    Set {
-        object: &'arena Expr<'arena>,
-        object_ty: &'arena Type<'arena>,
-        object_variant: Option<usize>,
-        field: usize,
-        value: &'arena Expr<'arena>,
-    },
-
-    Call {
-        callee: &'arena Expr<'arena>,
-        callee_ty: &'arena FunctionTy<'arena>,
-        args: Vec<'arena, Expr<'arena>>,
-    },
-    ContApplication(&'arena Expr<'arena>, HashMap<'arena, Ident, Expr<'arena>>),
-
-    Unary {
-        operator: UnaryOp,
-        operand: &'arena Expr<'arena>,
-        operand_ty: &'arena Type<'arena>,
-    },
-
-    Binary {
-        left: &'arena Expr<'arena>,
-        left_ty: &'arena Type<'arena>,
-        operator: BinaryOp,
-        right: &'arena Expr<'arena>,
-        right_ty: &'arena Type<'arena>,
-    },
-
-    Assign {
-        ident: Ident,
-        expr: &'arena Expr<'arena>,
-    },
-
-    Switch {
-        scrutinee: &'arena Expr<'arena>,
-        arms: HashMap<'arena, i64, BlockId>,
-        otherwise: BlockId,
-    },
+    Tuple(ExprTuple<'arena>),
+    Constructor(ExprConstructor<'arena>),
+    Array(ExprArray<'arena>),
+    Get(ExprGet<'arena>),
+    Set(ExprSet<'arena>),
+    Call(ExprCall<'arena>),
+    ContApplication(ExprContApplication<'arena>),
+    Unary(ExprUnary<'arena>),
+    Binary(ExprBinary<'arena>),
+    Assign(ExprAssign<'arena>),
+    Switch(ExprSwitch<'arena>),
     Goto(BlockId),
-
-    Closure {
-        func_ref: FuncRef,
-        captures: HashMap<'arena, Ident, &'arena Type<'arena>>,
-    },
-
-    Intrinsic {
-        intrinsic: Intrinsic,
-        value: &'arena Expr<'arena>,
-        value_ty: &'arena Type<'arena>,
-    },
-
+    Closure(ExprClosure<'arena>),
+    Intrinsic(ExprIntrinsic<'arena>),
     Unreachable,
+}
+
+#[derive(Debug)]
+pub struct ExprTuple<'arena> {
+    pub ty: &'arena Type<'arena>,
+    pub values: Vec<'arena, Expr<'arena>>,
+}
+
+#[derive(Debug)]
+pub struct ExprConstructor<'arena> {
+    pub ty: &'arena Type<'arena>,
+    pub index: Option<usize>,
+    pub fields: Vec<'arena, Expr<'arena>>,
+}
+
+#[derive(Debug)]
+pub struct ExprArray<'arena> {
+    pub ty: &'arena Type<'arena>,
+    pub values: Vec<'arena, Expr<'arena>>,
+    pub value_ty: &'arena Type<'arena>,
+}
+
+#[derive(Debug)]
+pub struct ExprGet<'arena> {
+    pub object: &'arena Expr<'arena>,
+    pub object_ty: &'arena Type<'arena>,
+    pub object_variant: Option<usize>,
+    pub field: usize,
+}
+
+#[derive(Debug)]
+pub struct ExprSet<'arena> {
+    pub object: &'arena Expr<'arena>,
+    pub object_ty: &'arena Type<'arena>,
+    pub object_variant: Option<usize>,
+    pub field: usize,
+    pub value: &'arena Expr<'arena>,
+}
+
+#[derive(Debug)]
+pub struct ExprCall<'arena> {
+    pub callee: &'arena Expr<'arena>,
+    pub callee_ty: &'arena FunctionTy<'arena>,
+    pub args: Vec<'arena, Expr<'arena>>,
+}
+
+#[derive(Debug)]
+pub struct ExprContApplication<'arena> {
+    pub callee: &'arena Expr<'arena>,
+    pub continuations: HashMap<'arena, Ident, Expr<'arena>>,
+}
+
+#[derive(Debug)]
+pub struct ExprUnary<'arena> {
+    pub operator: UnaryOp,
+    pub operand: &'arena Expr<'arena>,
+    pub operand_ty: &'arena Type<'arena>,
+}
+
+#[derive(Debug)]
+pub struct ExprBinary<'arena> {
+    pub left: &'arena Expr<'arena>,
+    pub left_ty: &'arena Type<'arena>,
+    pub operator: BinaryOp,
+    pub right: &'arena Expr<'arena>,
+    pub right_ty: &'arena Type<'arena>,
+}
+
+#[derive(Debug)]
+pub struct ExprAssign<'arena> {
+    pub ident: Ident,
+    pub expr: &'arena Expr<'arena>,
+}
+
+#[derive(Debug)]
+pub struct ExprSwitch<'arena> {
+    pub scrutinee: &'arena Expr<'arena>,
+    pub arms: HashMap<'arena, i64, BlockId>,
+    pub otherwise: BlockId,
+}
+
+#[derive(Debug)]
+pub struct ExprClosure<'arena> {
+    pub func_ref: FuncRef,
+    pub captures: HashMap<'arena, Ident, &'arena Type<'arena>>,
+}
+
+#[derive(Debug)]
+pub struct ExprIntrinsic<'arena> {
+    pub intrinsic: Intrinsic,
+    pub value: &'arena Expr<'arena>,
+    pub value_ty: &'arena Type<'arena>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
