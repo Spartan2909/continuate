@@ -525,8 +525,9 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
         expr.value_ty = ty;
         match expr.intrinsic {
             Intrinsic::Discriminant => Ok(self.program.insert_type(Type::Int, self.arena)),
-            Intrinsic::Terminate => Ok(self.program.insert_type(Type::None, self.arena)),
-            Intrinsic::Unreachable => Ok(self.program.insert_type(Type::None, self.arena)),
+            Intrinsic::Terminate | Intrinsic::Unreachable => {
+                Ok(self.program.insert_type(Type::None, self.arena))
+            }
         }
     }
 
