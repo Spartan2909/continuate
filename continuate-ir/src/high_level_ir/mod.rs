@@ -141,7 +141,7 @@ pub struct ExprCall<'arena> {
 pub struct ExprContApplication<'arena> {
     pub callee: Box<'arena, Expr<'arena>>,
     pub callee_ty: &'arena Type<'arena>,
-    pub continuations: HashMap<'arena, Ident, Expr<'arena>>,
+    pub continuations: Vec<'arena, (Ident, Expr<'arena>)>,
 }
 
 #[derive(Debug)]

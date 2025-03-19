@@ -431,14 +431,13 @@ impl<'arena> Executor<'arena> {
     fn cont_application(
         &mut self,
         func: &Expr<'arena>,
-        continuations: &HashMap<Ident, Expr<'arena>>,
+        continuations: &Vec<(Ident, Expr<'arena>)>,
         program: &Program<'arena>,
     ) -> ControlFlow<ValueRef<'arena>> {
         let func = value!(self.expr(func, program));
-        let mut evaluated_continuations =
-            HashMap::with_capacity_in(continuations.len(), self.arena);
-        for (&index, continuation) in continuations {
-            evaluated_continuations.insert(index, value!(self.expr(continuation, program)));
+        let mut evaluated_continuations = Vec::with_capacity_in(continuations.len(), self.arena);
+        for (index, continuation) in continuations {
+            evaluated_continuations.push((*index, value!(self.expr(continuation, program))));
         }
         ControlFlow::value(
             func.apply_continuations(evaluated_continuations, self.arena),

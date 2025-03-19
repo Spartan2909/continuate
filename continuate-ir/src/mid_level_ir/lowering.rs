@@ -337,10 +337,10 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
     ) -> Expr<'arena> {
         let callee = self.expr(&expr.callee, block, function);
 
-        let mut new_continuations = HashMap::with_capacity_in(expr.continuations.len(), self.arena);
-        for (&ident, expr) in &expr.continuations {
+        let mut new_continuations = Vec::with_capacity_in(expr.continuations.len(), self.arena);
+        for (ident, expr) in &expr.continuations {
             let expr = self.expr(expr, block, function);
-            new_continuations.insert(ident, expr);
+            new_continuations.push((*ident, expr));
         }
 
         Expr::ContApplication(ExprContApplication {

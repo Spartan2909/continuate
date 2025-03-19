@@ -103,7 +103,7 @@ pub struct ExprCall<'arena> {
 #[derive(Debug, Clone)]
 pub struct ExprContApplication<'arena> {
     pub callee: Box<'arena, Expr<'arena>>,
-    pub continuations: HashMap<'arena, Ident, Expr<'arena>>,
+    pub continuations: Vec<'arena, (Ident, Expr<'arena>)>,
 }
 
 #[derive(Debug, Clone)]

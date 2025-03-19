@@ -438,7 +438,7 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
                 ref continuations,
             }) => {
                 let (callable, mut new_continuations) = self.callable(callee)?;
-                new_continuations.extend(continuations.iter().map(|(&ident, expr)| (ident, expr)));
+                new_continuations.extend(continuations.iter().map(|(ident, expr)| (*ident, expr)));
                 Some((callable, new_continuations))
             }
             _ => Some((

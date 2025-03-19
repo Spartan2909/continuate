@@ -399,7 +399,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         callee: &AstExpr,
         arguments: &[(AstIdent, Option<AstExpr>)],
     ) -> Expr<'arena> {
-        let mut continuations = HashMap::with_capacity_in(arguments.len(), self.arena);
+        let mut continuations = Vec::with_capacity_in(arguments.len(), self.arena);
         continuations.extend(arguments.iter().map(|(ident, expr)| {
             (
                 self.ident(ident).unwrap(),
