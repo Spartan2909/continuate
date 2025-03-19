@@ -79,7 +79,6 @@ pub enum Expr<'arena> {
     Match(ExprMatch<'arena>),
     Closure(ExprClosure<'arena>),
     Intrinsic(ExprIntrinsic<'arena>),
-    Unreachable,
 }
 
 #[derive(Debug)]

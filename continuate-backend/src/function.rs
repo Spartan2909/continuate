@@ -656,6 +656,10 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
                 self.builder.ins().return_(&[value]);
                 None
             }
+            Intrinsic::Unreachable => {
+                self.builder.ins().trap(TrapCode::unwrap_user(1));
+                None
+            }
         }
     }
 
@@ -681,10 +685,6 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
             Expr::Goto(block_id) => self.expr_goto(*block_id),
             Expr::Closure { .. } => todo!(),
             Expr::Intrinsic(expr) => self.expr_intrinsic(expr),
-            Expr::Unreachable => {
-                self.builder.ins().trap(TrapCode::unwrap_user(1));
-                None
-            }
         }
     }
 

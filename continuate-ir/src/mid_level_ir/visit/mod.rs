@@ -278,7 +278,6 @@ pub fn default_expr<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut Expr<'a
         Expr::Goto(block) => v.expr_goto(*block),
         Expr::Closure(expr) => v.expr_closure(expr),
         Expr::Intrinsic(expr) => v.expr_intrinsic(expr),
-        Expr::Unreachable => v.expr_unreachable(),
     }
 }
 

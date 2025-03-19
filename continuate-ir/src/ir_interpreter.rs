@@ -623,7 +623,6 @@ impl<'arena> Executor<'arena> {
                 let value = value!(self.expr(value, program));
                 self.intrinsic(intrinsic, value)
             }
-            Expr::Unreachable => unreachable!(),
         }
     }
 
@@ -641,6 +640,7 @@ impl<'arena> Executor<'arena> {
                 let exit_code = value.as_int().unwrap();
                 ControlFlow::Terminate(exit_code)
             }
+            Intrinsic::Unreachable => unreachable!(),
         }
     }
 

@@ -161,4 +161,5 @@ impl BinaryOp {
 pub enum Intrinsic {
     Discriminant,
     Terminate,
+    Unreachable,
 }

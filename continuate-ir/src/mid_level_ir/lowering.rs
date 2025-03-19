@@ -619,7 +619,9 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
         if let Entry::Vacant(entry) = function.blocks.entry(otherwise) {
             let mut otherwise_block = Block::new(self.arena);
-            otherwise_block.exprs.push(Expr::Unreachable);
+            otherwise_block
+                .exprs
+                .push(Expr::unreachable(&mut self.program, self.arena));
             entry.insert(otherwise_block);
         }
         Expr::Switch(ExprSwitch {
@@ -689,7 +691,6 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             HirExpr::Match(expr) => self.expr_match(expr, block, function),
             HirExpr::Closure(expr) => self.expr_closure(expr),
             HirExpr::Intrinsic(expr) => self.expr_intrinsic(expr, block, function),
-            HirExpr::Unreachable => Expr::Unreachable,
         }
     }
 

@@ -44,7 +44,16 @@ pub enum Expr<'arena> {
     Goto(BlockId),
     Closure(ExprClosure<'arena>),
     Intrinsic(ExprIntrinsic<'arena>),
-    Unreachable,
+}
+
+impl<'arena> Expr<'arena> {
+    pub fn unreachable(program: &mut Program<'arena>, arena: &'arena Bump) -> Expr<'arena> {
+        Expr::Intrinsic(ExprIntrinsic {
+            intrinsic: Intrinsic::Unreachable,
+            value: Box::new_in(Expr::Literal(Literal::Int(0)), arena),
+            value_ty: program.insert_type(Type::Int, arena),
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
