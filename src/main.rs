@@ -100,10 +100,12 @@ fn main() {
 
     let mir_arena = Bump::new();
 
-    let mir_program = mid_level_ir::lower(&program, &mir_arena);
+    let mut mir_program = mid_level_ir::lower(&program, &mir_arena);
 
     drop(program);
     drop(hir_arena);
+
+    continuate_ir::mid_level_ir::run_passes(&mut mir_program, true);
 
     let object = continuate_backend::compile(mir_program, true);
 

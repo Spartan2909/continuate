@@ -1,7 +1,8 @@
 mod lowering;
 pub use lowering::lower;
 
-pub mod visit;
+mod visit;
+pub use visit::run_passes;
 
 use crate::common::BinaryOp;
 use crate::common::FuncRef;

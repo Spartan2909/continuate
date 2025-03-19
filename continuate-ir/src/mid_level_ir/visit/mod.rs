@@ -1,3 +1,5 @@
+mod combine_call_application;
+
 use crate::common::FuncRef;
 use crate::common::Ident;
 use crate::common::Literal;
@@ -21,7 +23,7 @@ use super::ExprUnary;
 use super::Function;
 use super::Program;
 
-pub trait Visit<'arena> {
+trait Visit<'arena> {
     fn always_enabled(&self) -> bool {
         false
     }
@@ -94,8 +96,6 @@ pub trait Visit<'arena> {
         default_expr_intrinsic(self, expr);
     }
 
-    fn expr_unreachable(&self) {}
-
     fn expr(&self, expr: &mut Expr<'arena>) {
         default_expr(self, expr);
     }
@@ -113,14 +113,14 @@ pub trait Visit<'arena> {
     }
 }
 
-pub fn default_expr_tuple<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut ExprTuple<'arena>) {
+fn default_expr_tuple<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut ExprTuple<'arena>) {
     let ExprTuple { ty: _, values } = expr;
     for expr in values {
         v.expr(expr);
     }
 }
 
-pub fn default_expr_constructor<'arena, V: Visit<'arena> + ?Sized>(
+fn default_expr_constructor<'arena, V: Visit<'arena> + ?Sized>(
     v: &V,
     expr: &mut ExprConstructor<'arena>,
 ) {
@@ -134,7 +134,7 @@ pub fn default_expr_constructor<'arena, V: Visit<'arena> + ?Sized>(
     }
 }
 
-pub fn default_expr_array<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut ExprArray<'arena>) {
+fn default_expr_array<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut ExprArray<'arena>) {
     let ExprArray {
         ty: _,
         values,
@@ -145,7 +145,7 @@ pub fn default_expr_array<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut E
     }
 }
 
-pub fn default_expr_get<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut ExprGet<'arena>) {
+fn default_expr_get<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut ExprGet<'arena>) {
     let ExprGet {
         object,
         object_ty: _,
@@ -155,7 +155,7 @@ pub fn default_expr_get<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut Exp
     v.expr(object);
 }
 
-pub fn default_expr_set<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut ExprSet<'arena>) {
+fn default_expr_set<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut ExprSet<'arena>) {
     let ExprSet {
         object,
         object_ty: _,
@@ -167,7 +167,7 @@ pub fn default_expr_set<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut Exp
     v.expr(value);
 }
 
-pub fn default_expr_call<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut ExprCall<'arena>) {
+fn default_expr_call<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut ExprCall<'arena>) {
     let ExprCall {
         callee,
         callee_ty: _,
@@ -179,7 +179,7 @@ pub fn default_expr_call<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut Ex
     }
 }
 
-pub fn default_expr_cont_application<'arena, V: Visit<'arena> + ?Sized>(
+fn default_expr_cont_application<'arena, V: Visit<'arena> + ?Sized>(
     v: &V,
     expr: &mut ExprContApplication<'arena>,
 ) {
@@ -193,7 +193,7 @@ pub fn default_expr_cont_application<'arena, V: Visit<'arena> + ?Sized>(
     }
 }
 
-pub fn default_expr_unary<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut ExprUnary<'arena>) {
+fn default_expr_unary<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut ExprUnary<'arena>) {
     let ExprUnary {
         operator: _,
         operand,
@@ -202,10 +202,7 @@ pub fn default_expr_unary<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut E
     v.expr(operand);
 }
 
-pub fn default_expr_binary<'arena, V: Visit<'arena> + ?Sized>(
-    v: &V,
-    expr: &mut ExprBinary<'arena>,
-) {
+fn default_expr_binary<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut ExprBinary<'arena>) {
     let ExprBinary {
         left,
         left_ty: _,
@@ -217,18 +214,12 @@ pub fn default_expr_binary<'arena, V: Visit<'arena> + ?Sized>(
     v.expr(right);
 }
 
-pub fn default_expr_assign<'arena, V: Visit<'arena> + ?Sized>(
-    v: &V,
-    expr: &mut ExprAssign<'arena>,
-) {
+fn default_expr_assign<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut ExprAssign<'arena>) {
     let ExprAssign { ident: _, expr } = expr;
     v.expr(expr);
 }
 
-pub fn default_expr_switch<'arena, V: Visit<'arena> + ?Sized>(
-    v: &V,
-    expr: &mut ExprSwitch<'arena>,
-) {
+fn default_expr_switch<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut ExprSwitch<'arena>) {
     let ExprSwitch {
         scrutinee,
         arms: _,
@@ -237,17 +228,15 @@ pub fn default_expr_switch<'arena, V: Visit<'arena> + ?Sized>(
     v.expr(scrutinee);
 }
 
-pub fn default_expr_closure<'arena, V: Visit<'arena> + ?Sized>(
-    _v: &V,
-    expr: &mut ExprClosure<'arena>,
-) {
+#[allow(clippy::needless_pass_by_ref_mut, reason = "forwards compatibility")]
+fn default_expr_closure<'arena, V: Visit<'arena> + ?Sized>(_v: &V, expr: &mut ExprClosure<'arena>) {
     let ExprClosure {
         func_ref: _,
         captures: _,
     } = expr;
 }
 
-pub fn default_expr_intrinsic<'arena, V: Visit<'arena> + ?Sized>(
+fn default_expr_intrinsic<'arena, V: Visit<'arena> + ?Sized>(
     v: &V,
     expr: &mut ExprIntrinsic<'arena>,
 ) {
@@ -259,7 +248,7 @@ pub fn default_expr_intrinsic<'arena, V: Visit<'arena> + ?Sized>(
     v.expr(value);
 }
 
-pub fn default_expr<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut Expr<'arena>) {
+fn default_expr<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut Expr<'arena>) {
     match expr {
         Expr::Literal(literal) => v.expr_literal(literal),
         Expr::Ident(ident) => v.expr_ident(*ident),
@@ -281,20 +270,34 @@ pub fn default_expr<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut Expr<'a
     }
 }
 
-pub fn default_block<'arena, V: Visit<'arena> + ?Sized>(v: &V, block: &mut Block<'arena>) {
+fn default_block<'arena, V: Visit<'arena> + ?Sized>(v: &V, block: &mut Block<'arena>) {
     for expr in &mut block.exprs {
         v.expr(expr);
     }
 }
 
-pub fn default_function<'arena, V: Visit<'arena> + ?Sized>(v: &V, function: &mut Function<'arena>) {
+fn default_function<'arena, V: Visit<'arena> + ?Sized>(v: &V, function: &mut Function<'arena>) {
     for (_, block) in &mut function.blocks {
         v.block(block);
     }
 }
 
-pub fn default_visit<'arena, V: Visit<'arena> + ?Sized>(v: &V, program: &mut Program<'arena>) {
+fn default_visit<'arena, V: Visit<'arena> + ?Sized>(v: &V, program: &mut Program<'arena>) {
     for (_, function) in &mut program.functions {
         v.function(function);
+    }
+}
+
+trait VisitAny: for<'arena> Visit<'arena> {}
+
+impl<T: for<'arena> Visit<'arena> + ?Sized> VisitAny for T {}
+
+const PASSES: &[&dyn VisitAny] = &[&combine_call_application::CombineCallApplication];
+
+pub fn run_passes(program: &mut Program, optimisations: bool) {
+    for pass in PASSES {
+        if optimisations || pass.always_enabled() {
+            pass.visit(program);
+        }
     }
 }
