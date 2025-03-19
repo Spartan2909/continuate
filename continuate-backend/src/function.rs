@@ -7,8 +7,6 @@ use super::ty_for;
 use super::ty_ref_size_align_ptr;
 use super::Callable;
 
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
 use std::iter;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
@@ -41,6 +39,11 @@ use continuate_ir::mid_level_ir::UserDefinedType;
 
 use continuate_common::SingleLayout;
 use continuate_common::TyLayout;
+
+use continuate_utils::hash_map::Entry;
+use continuate_utils::HashMap;
+
+use bumpalo::Bump;
 
 use cranelift::codegen::ir;
 use cranelift::codegen::ir::condcodes::FloatCC;
@@ -101,17 +104,21 @@ pub(super) struct FunctionCompiler<'arena, 'function, 'builder, M: ?Sized> {
     pub(super) module: &'function mut M,
     pub(super) data_description: &'function mut DataDescription,
     pub(super) triple: &'function Triple,
-    pub(super) functions: &'function HashMap<FuncRef, (FuncId, Signature)>,
-    pub(super) ty_layouts:
-        &'function HashMap<&'function MirType<'arena>, (&'arena TyLayout<'arena>, DataId)>,
+    pub(super) functions: &'function HashMap<'function, FuncRef, (FuncId, Signature)>,
+    pub(super) ty_layouts: &'function HashMap<
+        'function,
+        &'function MirType<'arena>,
+        (&'arena TyLayout<'arena>, DataId),
+    >,
     pub(super) builder: &'function mut FunctionBuilder<'builder>,
-    pub(super) block_map: &'function HashMap<BlockId, Block>,
+    pub(super) block_map: &'function HashMap<'function, BlockId, Block>,
     pub(super) mir_function: &'function MirFunction<'function>,
     pub(super) params: &'function [(Ident, &'function MirType<'function>)],
     pub(super) function_runtime: FunctionRuntime,
-    pub(super) vars: HashMap<Ident, (&'function MirType<'function>, bool)>,
+    pub(super) vars: HashMap<'arena, Ident, (&'function MirType<'function>, bool)>,
     pub(super) temp_roots: Vec<Value>,
-    pub(super) variables: HashMap<Ident, Variable>,
+    pub(super) variables: HashMap<'arena, Ident, Variable>,
+    pub(super) arena: &'arena &'arena Bump,
 }
 
 impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, '_, M> {
@@ -378,7 +385,7 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
     }
 
     fn expr_get(&mut self, expr: &ExprGet<'function>) -> Option<Value> {
-        let object = self.expr(expr.object)?;
+        let object = self.expr(&expr.object)?;
         let (layout, field_ty) =
             self.field_information(expr.object_ty, expr.object_variant, expr.field);
         let field_ty = ty_for(field_ty, self.triple);
@@ -398,11 +405,11 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
     }
 
     fn expr_set(&mut self, expr: &ExprSet<'function>) -> Option<Value> {
-        let object = self.expr(expr.object)?;
+        let object = self.expr(&expr.object)?;
         let layout = self
             .field_information(expr.object_ty, expr.object_variant, expr.field)
             .0;
-        let value = self.expr(expr.value)?;
+        let value = self.expr(&expr.value)?;
         let endianness = self.cranelift_endianness();
         self.builder.ins().store(
             MemFlags::new()
@@ -421,23 +428,28 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
     fn callable<'a>(
         &mut self,
         callee: &'a Expr<'function>,
-    ) -> Option<(Callable, HashMap<Ident, &'a Expr<'function>>)> {
+    ) -> Option<(Callable, HashMap<'arena, Ident, &'a Expr<'function>>)> {
         match *callee {
-            Expr::Function(func_ref) => Some((Callable::Static(func_ref), HashMap::new())),
+            Expr::Function(func_ref) => {
+                Some((Callable::Static(func_ref), HashMap::new_in(self.arena)))
+            }
             Expr::ContApplication(ExprContApplication {
-                callee,
+                ref callee,
                 ref continuations,
             }) => {
                 let (callable, mut new_continuations) = self.callable(callee)?;
                 new_continuations.extend(continuations.iter().map(|(&ident, expr)| (ident, expr)));
                 Some((callable, new_continuations))
             }
-            _ => Some((Callable::Dynamic(self.expr(callee)?), HashMap::new())),
+            _ => Some((
+                Callable::Dynamic(self.expr(callee)?),
+                HashMap::new_in(self.arena),
+            )),
         }
     }
 
     fn expr_call(&mut self, expr: &ExprCall<'function>) -> Option<Value> {
-        let (callable, continuations) = self.callable(expr.callee)?;
+        let (callable, continuations) = self.callable(&expr.callee)?;
 
         let args: Option<Vec<_>> = iter::once(Some(Value::reserved_value()))
             .chain(expr.args.iter().map(|expr| self.expr(expr)))
@@ -499,7 +511,7 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
     }
 
     fn expr_unary(&mut self, expr: &ExprUnary<'function>) -> Option<Value> {
-        let operand = self.expr(expr.operand)?;
+        let operand = self.expr(&expr.operand)?;
         let operand_ty = ty_for(expr.operand_ty, self.triple);
         match expr.operator {
             UnaryOp::Neg if operand_ty == types::F64 => Some(self.builder.ins().ineg(operand)),
@@ -514,9 +526,9 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
     #[allow(clippy::cognitive_complexity)]
     fn expr_binary(&mut self, expr: &ExprBinary<'function>) -> Option<Value> {
         debug_assert_eq!(expr.left_ty, expr.right_ty);
-        let left = self.expr(expr.left)?;
+        let left = self.expr(&expr.left)?;
         let left_ty = ty_for(expr.left_ty, self.triple);
-        let right = self.expr(expr.right)?;
+        let right = self.expr(&expr.right)?;
         let value = match expr.operator {
             BinaryOp::Add => match_ty! { (left_ty)
                 types::I64 => self.builder.ins().iadd(left, right),
@@ -581,7 +593,7 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
             }
         }
 
-        let value = self.expr(expr.expr)?;
+        let value = self.expr(&expr.expr)?;
         let var = self.variable(expr.ident);
         self.builder.def_var(var, value);
 
@@ -597,7 +609,7 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
     }
 
     fn expr_switch(&mut self, expr: &ExprSwitch<'function>) -> Option<Value> {
-        let scrutinee = self.expr(expr.scrutinee)?;
+        let scrutinee = self.expr(&expr.scrutinee)?;
         let mut switch = Switch::new();
         for (&val, block_id) in &expr.arms {
             switch.set_entry(val as u128, self.block_map[block_id]);
@@ -612,7 +624,7 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
     }
 
     fn expr_intrinsic(&mut self, expr: &ExprIntrinsic<'function>) -> Option<Value> {
-        let value = self.expr(expr.value)?;
+        let value = self.expr(&expr.value)?;
         match expr.intrinsic {
             Intrinsic::Discriminant => {
                 if *expr.value_ty == MirType::Bool {

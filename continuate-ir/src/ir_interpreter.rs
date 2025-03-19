@@ -127,28 +127,30 @@ impl<'arena> Value<'arena> {
         params: Vec<ValueRef<'arena>>,
         mut bound_params: HashMap<'arena, Ident, ValueRef<'arena>>,
         executor: &mut Executor<'arena>,
+        program: &Program<'arena>,
     ) -> ControlFlow<Void> {
         match *self {
             Value::Function(func_ref) => {
-                let function = *executor.program.functions.get(&func_ref).unwrap();
+                let function = program.functions.get(&func_ref).unwrap();
                 bound_params.extend(function.params.iter().map(|(ident, _)| *ident).zip(params));
-                executor.function(function, func_ref, bound_params, None)
+                executor.function(function, func_ref, bound_params, None, program)
             }
             Value::ContinuedFunction(callee, ref continuations) => {
                 bound_params.extend(continuations);
-                callee.call(params, bound_params, executor)
+                callee.call(params, bound_params, executor, program)
             }
             Value::Closure {
                 func_ref,
                 ref environment,
             } => {
-                let function = *executor.program.functions.get(&func_ref).unwrap();
+                let function = program.functions.get(&func_ref).unwrap();
                 bound_params.extend(function.params.iter().map(|(ident, _)| *ident).zip(params));
                 executor.function(
                     function,
                     func_ref,
                     bound_params,
                     Some(Rc::clone(environment)),
+                    program,
                 )
             }
             _ => unreachable!(),
@@ -390,7 +392,6 @@ type SharedEnvironment<'arena> = Rc<RefCell<Environment<'arena>>>;
 enum Void {}
 
 struct Executor<'arena> {
-    program: Program<'arena>,
     arena: &'arena Bump,
     environment: SharedEnvironment<'arena>,
     func_ref: FuncRef,
@@ -399,9 +400,8 @@ struct Executor<'arena> {
 }
 
 impl<'arena> Executor<'arena> {
-    fn new(program: Program<'arena>, arena: &'arena Bump, func_ref: FuncRef) -> Executor<'arena> {
+    fn new(arena: &'arena Bump, func_ref: FuncRef) -> Executor<'arena> {
         Executor {
-            program,
             arena,
             environment: Rc::new(RefCell::new(Environment::new(arena))),
             func_ref,
@@ -416,10 +416,14 @@ impl<'arena> Executor<'arena> {
         }
     }
 
-    fn expr_list(&mut self, exprs: &[Expr<'arena>]) -> ControlFlow<Vec<'arena, ValueRef<'arena>>> {
+    fn expr_list(
+        &mut self,
+        exprs: &[Expr<'arena>],
+        program: &Program<'arena>,
+    ) -> ControlFlow<Vec<'arena, ValueRef<'arena>>> {
         let mut values = Vec::with_capacity_in(exprs.len(), self.arena);
         for expr in exprs {
-            values.push(value!(self.expr(expr)));
+            values.push(value!(self.expr(expr, program)));
         }
         ControlFlow::Value(values)
     }
@@ -428,12 +432,13 @@ impl<'arena> Executor<'arena> {
         &mut self,
         func: &Expr<'arena>,
         continuations: &HashMap<Ident, Expr<'arena>>,
+        program: &Program<'arena>,
     ) -> ControlFlow<ValueRef<'arena>> {
-        let func = value!(self.expr(func));
+        let func = value!(self.expr(func, program));
         let mut evaluated_continuations =
             HashMap::with_capacity_in(continuations.len(), self.arena);
         for (&index, continuation) in continuations {
-            evaluated_continuations.insert(index, value!(self.expr(continuation)));
+            evaluated_continuations.insert(index, value!(self.expr(continuation, program)));
         }
         ControlFlow::value(
             func.apply_continuations(evaluated_continuations, self.arena),
@@ -445,8 +450,9 @@ impl<'arena> Executor<'arena> {
         &mut self,
         operator: UnaryOp,
         operand: &Expr<'arena>,
+        program: &Program<'arena>,
     ) -> ControlFlow<ValueRef<'arena>> {
-        let value = value!(self.expr(operand));
+        let value = value!(self.expr(operand, program));
         match operator {
             UnaryOp::Neg => ControlFlow::value(Value::Int(-value.as_int().unwrap()), self.arena),
             UnaryOp::Not => {
@@ -463,9 +469,10 @@ impl<'arena> Executor<'arena> {
         left: &Expr<'arena>,
         right: &Expr<'arena>,
         op: BinaryOp,
+        program: &Program<'arena>,
     ) -> ControlFlow<ValueRef<'arena>> {
-        let left = value!(self.expr(left));
-        let right = value!(self.expr(right));
+        let left = value!(self.expr(left, program));
+        let right = value!(self.expr(right, program));
         let result = if op.is_arithmetic() {
             let result = match op {
                 BinaryOp::Add => left + right,
@@ -512,86 +519,94 @@ impl<'arena> Executor<'arena> {
         )
     }
 
-    fn expr(&mut self, expr: &Expr<'arena>) -> ControlFlow<ValueRef<'arena>> {
+    fn expr(
+        &mut self,
+        expr: &Expr<'arena>,
+        program: &Program<'arena>,
+    ) -> ControlFlow<ValueRef<'arena>> {
         match *expr {
             Expr::Literal(ref lit) => ControlFlow::value(lit.clone().into(), self.arena),
             Expr::Ident(ident) => ControlFlow::Value(self.environment.borrow().get(ident).unwrap()),
             Expr::Function(func_ref) => ControlFlow::value(Value::Function(func_ref), self.arena),
-            Expr::Tuple(ExprTuple { ty: _, ref values }) => {
-                ControlFlow::value(Value::tuple(value!(self.expr_list(values))), self.arena)
-            }
+            Expr::Tuple(ExprTuple { ty: _, ref values }) => ControlFlow::value(
+                Value::tuple(value!(self.expr_list(values, program))),
+                self.arena,
+            ),
             Expr::Constructor(ExprConstructor {
                 ty: _,
                 index,
                 ref fields,
             }) => ControlFlow::value(
-                Value::user_defined(index, value!(self.expr_list(fields))),
+                Value::user_defined(index, value!(self.expr_list(fields, program))),
                 self.arena,
             ),
             Expr::Array(ExprArray {
                 ty: _,
                 ref values,
                 value_ty: _,
-            }) => ControlFlow::value(Value::array(value!(self.expr_list(values))), self.arena),
+            }) => ControlFlow::value(
+                Value::array(value!(self.expr_list(values, program))),
+                self.arena,
+            ),
             Expr::Get(ExprGet {
-                object,
+                ref object,
                 object_ty: _,
                 object_variant: _,
                 field,
             }) => {
-                let object = value!(self.expr(object));
+                let object = value!(self.expr(object, program));
                 ControlFlow::Value(object.get(field).unwrap())
             }
             Expr::Set(ExprSet {
-                object,
+                ref object,
                 object_ty: _,
                 object_variant: _,
                 field,
-                value,
+                ref value,
             }) => {
-                let object = value!(self.expr(object));
-                let value = value!(self.expr(value));
+                let object = value!(self.expr(object, program));
+                let value = value!(self.expr(value, program));
                 object.set(field, value);
                 ControlFlow::Value(value)
             }
             Expr::Call(ExprCall {
-                callee,
+                ref callee,
                 callee_ty: _,
                 ref args,
             }) => {
-                let callee = value!(self.expr(callee));
-                let params = value!(self.expr_list(args));
+                let callee = value!(self.expr(callee, program));
+                let params = value!(self.expr_list(args, program));
                 callee
-                    .call(params, HashMap::new_in(self.arena), self)
+                    .call(params, HashMap::new_in(self.arena), self, program)
                     .cast()
             }
             Expr::ContApplication(ExprContApplication {
-                callee,
+                ref callee,
                 ref continuations,
-            }) => self.cont_application(callee, continuations),
+            }) => self.cont_application(callee, continuations, program),
             Expr::Unary(ExprUnary {
                 operator,
-                operand,
+                ref operand,
                 operand_ty: _,
-            }) => self.unary_op(operator, operand),
+            }) => self.unary_op(operator, operand, program),
             Expr::Binary(ExprBinary {
-                left,
+                ref left,
                 left_ty: _,
                 operator,
-                right,
+                ref right,
                 right_ty: _,
-            }) => self.binary_op(left, right, operator),
-            Expr::Assign(ExprAssign { ident, expr }) => {
-                let value = value!(self.expr(expr));
+            }) => self.binary_op(left, right, operator, program),
+            Expr::Assign(ExprAssign { ident, ref expr }) => {
+                let value = value!(self.expr(expr, program));
                 self.environment.borrow_mut().set(ident, value);
                 ControlFlow::Value(value)
             }
             Expr::Switch(ExprSwitch {
-                scrutinee,
+                ref scrutinee,
                 ref arms,
                 otherwise,
             }) => {
-                let scrutinee = value!(self.expr(scrutinee)).as_int().unwrap();
+                let scrutinee = value!(self.expr(scrutinee, program)).as_int().unwrap();
                 let block_id = arms.get(&scrutinee).copied().unwrap_or(otherwise);
                 ControlFlow::Goto(block_id)
             }
@@ -602,10 +617,10 @@ impl<'arena> Executor<'arena> {
             }) => self.closure(func_ref),
             Expr::Intrinsic(ExprIntrinsic {
                 intrinsic,
-                value,
+                ref value,
                 value_ty: _,
             }) => {
-                let value = value!(self.expr(value));
+                let value = value!(self.expr(value, program));
                 self.intrinsic(intrinsic, value)
             }
             Expr::Unreachable => unreachable!(),
@@ -635,6 +650,7 @@ impl<'arena> Executor<'arena> {
         func_ref: FuncRef,
         params: HashMap<'arena, Ident, ValueRef<'arena>>,
         enclosing_environment: Option<SharedEnvironment<'arena>>,
+        program: &Program<'arena>,
     ) -> ControlFlow<Void> {
         self.func_ref = func_ref;
 
@@ -649,7 +665,7 @@ impl<'arena> Executor<'arena> {
         let mut block = function.blocks.get(&Function::entry_point()).unwrap();
         loop {
             for expr in &block.exprs {
-                match self.expr(expr) {
+                match self.expr(expr, program) {
                     ControlFlow::Goto(block_id) => block = function.blocks.get(&block_id).unwrap(),
                     ctrl => return ctrl.try_cast().unwrap(),
                 }
@@ -657,19 +673,19 @@ impl<'arena> Executor<'arena> {
         }
     }
 
-    fn run(mut self) -> i64 {
-        let entry_point = self.program.functions.get(&FuncRef::ENTRY_POINT).unwrap();
+    fn run(mut self, program: &Program<'arena>) -> i64 {
+        let entry_point = program.functions.get(&FuncRef::ENTRY_POINT).unwrap();
         let termination_param = *entry_point.continuations.keys().next().unwrap();
         let termination_fn = self
             .arena
-            .alloc(Value::Function(self.program.lib_std.fn_termination));
+            .alloc(Value::Function(program.lib_std.fn_termination));
         let mut params = HashMap::with_capacity_in(1, self.arena);
         params.insert(termination_param, &*termination_fn);
-        self.function(entry_point, FuncRef::ENTRY_POINT, params, None)
+        self.function(entry_point, FuncRef::ENTRY_POINT, params, None, program)
             .unwrap_termination()
     }
 }
 
-pub fn run<'arena>(program: Program<'arena>, arena: &'arena Bump) -> i64 {
-    Executor::new(program, arena, FuncRef::ENTRY_POINT).run()
+pub fn run<'arena>(program: &Program<'arena>, arena: &'arena Bump) -> i64 {
+    Executor::new(arena, FuncRef::ENTRY_POINT).run(program)
 }

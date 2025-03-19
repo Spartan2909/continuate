@@ -55,10 +55,10 @@ use std::slice;
 use bumpalo::Bump;
 
 use continuate_utils::collect_into;
+use continuate_utils::hash_map::Entry;
+use continuate_utils::Box;
 use continuate_utils::HashMap;
 use continuate_utils::Vec;
-
-use hashbrown::hash_map::Entry;
 
 use itertools::Itertools as _;
 
@@ -275,7 +275,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let object = self.expr(&expr.object, block, function);
         let user_defined = expr.object_ty.as_user_defined().unwrap();
         Expr::Get(ExprGet {
-            object: self.arena.alloc(object),
+            object: Box::new_in(object, self.arena),
             object_ty: self.lower_ty(expr.object_ty),
             object_variant: None,
             field: field_index(
@@ -298,7 +298,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let value = self.expr(&expr.value, block, function);
 
         Expr::Set(ExprSet {
-            object: self.arena.alloc(object),
+            object: Box::new_in(object, self.arena),
             object_ty: self.lower_ty(expr.object_ty),
             object_variant: None,
             field: field_index(
@@ -306,7 +306,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                 &expr.field,
             )
             .unwrap(),
-            value: self.arena.alloc(value),
+            value: Box::new_in(value, self.arena),
         })
     }
 
@@ -323,7 +323,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         new_params.extend(params);
         let callee_ty = self.lower_ty(expr.callee_ty).as_function().unwrap();
         Expr::Call(ExprCall {
-            callee: self.arena.alloc(callee),
+            callee: Box::new_in(callee, self.arena),
             callee_ty,
             args: new_params,
         })
@@ -344,7 +344,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         }
 
         Expr::ContApplication(ExprContApplication {
-            callee: self.arena.alloc(callee),
+            callee: Box::new_in(callee, self.arena),
             continuations: new_continuations,
         })
     }
@@ -358,7 +358,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let operand = self.expr(&expr.right, block, function);
         Expr::Unary(ExprUnary {
             operator: expr.op,
-            operand: self.arena.alloc(operand),
+            operand: Box::new_in(operand, self.arena),
             operand_ty: self.lower_ty(expr.right_ty),
         })
     }
@@ -373,10 +373,10 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let right = self.expr(&expr.right, block, function);
 
         Expr::Binary(ExprBinary {
-            left: self.arena.alloc(left),
+            left: Box::new_in(left, self.arena),
             left_ty: self.lower_ty(expr.left_ty),
             operator: expr.op,
-            right: self.arena.alloc(right),
+            right: Box::new_in(right, self.arena),
             right_ty: self.lower_ty(expr.right_ty),
         })
     }
@@ -394,7 +394,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             .insert(expr.ident, (self.lower_ty(expr.ty), None));
         Expr::Assign(ExprAssign {
             ident: expr.ident,
-            expr: self.arena.alloc(right),
+            expr: Box::new_in(right, self.arena),
         })
     }
 
@@ -408,7 +408,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
         Expr::Assign(ExprAssign {
             ident: expr.ident,
-            expr: self.arena.alloc(right),
+            expr: Box::new_in(right, self.arena),
         })
     }
 
@@ -469,7 +469,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
     fn pattern(
         &mut self,
-        scrutinee: (&'arena Expr<'arena>, &'arena Type<'arena>),
+        scrutinee: (&Expr<'arena>, &'arena Type<'arena>),
         arm_pat: &Pattern,
         arm_block: &mut Block<'arena>,
         arm_block_id: BlockId,
@@ -483,7 +483,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             Pattern::Ident(ident) => {
                 let binding = Expr::Assign(ExprAssign {
                     ident,
-                    expr: scrutinee,
+                    expr: Box::new_in(scrutinee.clone(), self.arena),
                 });
                 function.declarations.insert(ident, (scrutinee_ty, None));
                 arm_block.exprs.push(binding);
@@ -500,17 +500,17 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                     Self::order_destructure_fields(fields, ty, variant.as_deref()).enumerate()
                 {
                     let get = Expr::Get(ExprGet {
-                        object: scrutinee,
+                        object: Box::new_in(scrutinee.clone(), self.arena),
                         object_ty: scrutinee_ty,
                         object_variant: variant_index,
                         field,
                     });
-                    let get = self.arena.alloc(get);
+                    let get = Box::new_in(get, self.arena);
                     let field_ty_ref = scrutinee_ty.field(variant_index, field).unwrap();
                     let mut new_block = Block::new(self.arena);
                     let new_block_id = function.block();
                     match self.pattern(
-                        (get, field_ty_ref),
+                        (&get, field_ty_ref),
                         pattern,
                         &mut new_block,
                         new_block_id,
@@ -531,7 +531,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                             });
                             let arms = iter::once((variant as i64, switch_arm_id));
                             let switch = Expr::Switch(ExprSwitch {
-                                scrutinee: self.arena.alloc(discriminant),
+                                scrutinee: Box::new_in(discriminant, self.arena),
                                 arms: collect_into(HashMap::new_in(self.arena), arms),
                                 otherwise,
                             });
@@ -559,7 +559,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         function: &mut Function<'arena>,
     ) -> Expr<'arena> {
         let scrutinee = self.expr(&expr.scrutinee, block, function);
-        let scrutinee = &*self.arena.alloc(scrutinee);
+        let scrutinee = scrutinee;
 
         let mut discriminants = vec![];
         let otherwise = function.block();
@@ -571,7 +571,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
             let scrutinee_ty = self.lower_ty(expr.scrutinee_ty);
             let arm_data = self.pattern(
-                (scrutinee, scrutinee_ty),
+                (&scrutinee, scrutinee_ty),
                 arm_pat,
                 &mut arm_block,
                 arm_block_id,
@@ -610,11 +610,11 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let scrutinee = if discriminants.is_empty() {
             scrutinee
         } else {
-            self.arena.alloc(Expr::Intrinsic(ExprIntrinsic {
+            Expr::Intrinsic(ExprIntrinsic {
                 intrinsic: Intrinsic::Discriminant,
-                value: scrutinee,
+                value: Box::new_in(scrutinee.clone(), self.arena),
                 value_ty: self.lower_ty(expr.scrutinee_ty),
-            }))
+            })
         };
 
         if let Entry::Vacant(entry) = function.blocks.entry(otherwise) {
@@ -623,7 +623,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             entry.insert(otherwise_block);
         }
         Expr::Switch(ExprSwitch {
-            scrutinee,
+            scrutinee: Box::new_in(scrutinee, self.arena),
             arms: collect_into(
                 HashMap::new_in(self.arena),
                 discriminants
@@ -644,9 +644,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         );
 
         let func = self.function(func, captures.clone());
-        self.program
-            .functions
-            .insert(expr.func, self.arena.alloc(func));
+        self.program.functions.insert(expr.func, func);
 
         let func_ref = expr.func;
         Expr::Closure(ExprClosure { func_ref, captures })
@@ -661,7 +659,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let value = self.expr(&expr.value, block, function);
         Expr::Intrinsic(ExprIntrinsic {
             intrinsic: expr.intrinsic,
-            value: self.arena.alloc(value),
+            value: Box::new_in(value, self.arena),
             value_ty: self.lower_ty(expr.value_ty),
         })
     }
@@ -753,9 +751,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             if !function.captures.is_empty() {
                 continue;
             }
-            let function = lowerer
-                .arena
-                .alloc(lowerer.function(function, HashMap::new_in(arena)));
+            let function = lowerer.function(function, HashMap::new_in(arena));
             lowerer.program.functions.insert(func_ref, function);
         }
 

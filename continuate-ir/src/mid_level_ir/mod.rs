@@ -1,6 +1,8 @@
 mod lowering;
 pub use lowering::lower;
 
+pub mod visit;
+
 use crate::common::BinaryOp;
 use crate::common::FuncRef;
 use crate::common::Ident;
@@ -16,13 +18,14 @@ use std::hash;
 use bumpalo::Bump;
 
 use continuate_utils::collect_into;
+use continuate_utils::Box;
 use continuate_utils::HashMap;
 use continuate_utils::HashSet;
 use continuate_utils::Vec;
 
 use itertools::Itertools as _;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expr<'arena> {
     Literal(Literal),
     Ident(Ident),
@@ -44,95 +47,95 @@ pub enum Expr<'arena> {
     Unreachable,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExprTuple<'arena> {
     pub ty: &'arena Type<'arena>,
     pub values: Vec<'arena, Expr<'arena>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExprConstructor<'arena> {
     pub ty: &'arena Type<'arena>,
     pub index: Option<usize>,
     pub fields: Vec<'arena, Expr<'arena>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExprArray<'arena> {
     pub ty: &'arena Type<'arena>,
     pub values: Vec<'arena, Expr<'arena>>,
     pub value_ty: &'arena Type<'arena>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExprGet<'arena> {
-    pub object: &'arena Expr<'arena>,
+    pub object: Box<'arena, Expr<'arena>>,
     pub object_ty: &'arena Type<'arena>,
     pub object_variant: Option<usize>,
     pub field: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExprSet<'arena> {
-    pub object: &'arena Expr<'arena>,
+    pub object: Box<'arena, Expr<'arena>>,
     pub object_ty: &'arena Type<'arena>,
     pub object_variant: Option<usize>,
     pub field: usize,
-    pub value: &'arena Expr<'arena>,
+    pub value: Box<'arena, Expr<'arena>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExprCall<'arena> {
-    pub callee: &'arena Expr<'arena>,
+    pub callee: Box<'arena, Expr<'arena>>,
     pub callee_ty: &'arena FunctionTy<'arena>,
     pub args: Vec<'arena, Expr<'arena>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExprContApplication<'arena> {
-    pub callee: &'arena Expr<'arena>,
+    pub callee: Box<'arena, Expr<'arena>>,
     pub continuations: HashMap<'arena, Ident, Expr<'arena>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExprUnary<'arena> {
     pub operator: UnaryOp,
-    pub operand: &'arena Expr<'arena>,
+    pub operand: Box<'arena, Expr<'arena>>,
     pub operand_ty: &'arena Type<'arena>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExprBinary<'arena> {
-    pub left: &'arena Expr<'arena>,
+    pub left: Box<'arena, Expr<'arena>>,
     pub left_ty: &'arena Type<'arena>,
     pub operator: BinaryOp,
-    pub right: &'arena Expr<'arena>,
+    pub right: Box<'arena, Expr<'arena>>,
     pub right_ty: &'arena Type<'arena>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExprAssign<'arena> {
     pub ident: Ident,
-    pub expr: &'arena Expr<'arena>,
+    pub expr: Box<'arena, Expr<'arena>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExprSwitch<'arena> {
-    pub scrutinee: &'arena Expr<'arena>,
+    pub scrutinee: Box<'arena, Expr<'arena>>,
     pub arms: HashMap<'arena, i64, BlockId>,
     pub otherwise: BlockId,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExprClosure<'arena> {
     pub func_ref: FuncRef,
     pub captures: HashMap<'arena, Ident, &'arena Type<'arena>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExprIntrinsic<'arena> {
     pub intrinsic: Intrinsic,
-    pub value: &'arena Expr<'arena>,
+    pub value: Box<'arena, Expr<'arena>>,
     pub value_ty: &'arena Type<'arena>,
 }
 
@@ -312,7 +315,7 @@ impl<'arena> Function<'arena> {
 
 #[derive(Debug)]
 pub struct Program<'arena> {
-    pub functions: HashMap<'arena, FuncRef, &'arena Function<'arena>>,
+    pub functions: HashMap<'arena, FuncRef, Function<'arena>>,
     pub signatures: HashMap<'arena, FuncRef, &'arena Type<'arena>>,
     pub types: HashSet<'arena, &'arena Type<'arena>>,
     pub lib_std: StdLib,

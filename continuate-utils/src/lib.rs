@@ -2,6 +2,9 @@
 
 use bumpalo::Bump;
 
+pub use hashbrown::hash_map;
+pub use hashbrown::hash_set;
+
 pub type Box<'a, T> = std::boxed::Box<T, &'a Bump>;
 
 pub type Vec<'a, T> = std::vec::Vec<T, &'a bumpalo::Bump>;

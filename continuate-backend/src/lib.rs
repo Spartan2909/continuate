@@ -2,7 +2,6 @@ mod function;
 use function::FunctionCompiler;
 use function::FunctionRuntime;
 
-use std::collections::HashMap;
 use std::fmt;
 use std::mem;
 
@@ -19,6 +18,9 @@ use continuate_ir::mid_level_ir::UserDefinedType;
 use continuate_common::SingleLayout;
 use continuate_common::Slice;
 use continuate_common::TyLayout;
+
+use continuate_utils::collect_into;
+use continuate_utils::HashMap;
 
 use cranelift::codegen::ir::entities::Value;
 use cranelift::codegen::ir::types;
@@ -281,8 +283,8 @@ struct Compiler<'arena, 'a, M: ?Sized> {
     data_description: DataDescription,
     triple: Triple,
     runtime: Runtime,
-    functions: HashMap<FuncRef, (FuncId, Signature)>,
-    ty_layouts: HashMap<&'a MirType<'a>, (&'arena TyLayout<'arena>, DataId)>,
+    functions: HashMap<'arena, FuncRef, (FuncId, Signature)>,
+    ty_layouts: HashMap<'arena, &'a MirType<'a>, (&'arena TyLayout<'arena>, DataId)>,
     arena: &'arena &'arena Bump,
     module: M,
 }
@@ -302,14 +304,14 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
             data_description: DataDescription::new(),
             triple,
             runtime,
-            functions: HashMap::new(),
-            ty_layouts: HashMap::new(),
+            functions: HashMap::new_in(arena),
+            ty_layouts: HashMap::new_in(arena),
             arena,
         }
     }
 }
 
-impl<'arena, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
+impl<'arena: 'a, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
     #[tracing::instrument(skip(self))]
     fn c_int_ty(&self) -> Type {
         Type::int(self.triple.data_model().unwrap().int_size().bits().into()).unwrap()
@@ -344,11 +346,13 @@ impl<'arena, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
         let mut function = Function::with_name_signature(name, sig.clone());
         let mut builder = FunctionBuilder::new(&mut function, func_ctx);
 
-        let block_map: HashMap<_, _> = mir_function
-            .blocks
-            .keys()
-            .map(|&id| (id, builder.create_block()))
-            .collect();
+        let block_map: HashMap<_, _> = collect_into(
+            HashMap::new_in(self.arena),
+            mir_function
+                .blocks
+                .keys()
+                .map(|&id| (id, builder.create_block())),
+        );
 
         let function_runtime = FunctionRuntime {
             alloc_gc: self
@@ -377,9 +381,10 @@ impl<'arena, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
             mir_function,
             params: &params,
             function_runtime,
-            vars: HashMap::new(),
+            vars: HashMap::new_in(self.arena),
             temp_roots: Vec::new(),
-            variables: HashMap::new(),
+            variables: HashMap::new_in(self.arena),
+            arena: self.arena,
         };
 
         function_compiler.compile();
@@ -621,7 +626,7 @@ impl<'arena, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
     }
 
     fn declare_functions(&mut self) {
-        for (&func_ref, &function) in &self.program.functions {
+        for (&func_ref, function) in &self.program.functions {
             let function_ty = self.program.signatures[&func_ref];
             let function_ty = function_ty.as_function().unwrap();
             let sig = signature_from_function_ty(function_ty, CallConv::Tail, &self.triple);
@@ -640,19 +645,14 @@ impl<'arena, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
 
         self.declare_functions();
 
-        let functions: Vec<_> = self
-            .program
-            .functions
-            .iter()
-            .map(|(&func_ref, &func)| (func_ref, func))
-            .collect();
+        let functions = mem::replace(&mut self.program.functions, HashMap::new_in(self.arena));
         for (func_ref, function) in functions {
-            self.function(function, func_ref, func_ctx);
+            self.function(&function, func_ref, func_ctx);
         }
     }
 }
 
-impl Compiler<'_, '_, ObjectModule> {
+impl<'arena: 'a, 'a> Compiler<'arena, 'a, ObjectModule> {
     fn compile_library(mut self) -> ObjectProduct {
         self.compile_module(&mut FunctionBuilderContext::new());
 

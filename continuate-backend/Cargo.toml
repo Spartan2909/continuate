@@ -9,6 +9,7 @@ rust-version.workspace = true
 bumpalo.workspace = true
 continuate-common.workspace = true
 continuate-ir.workspace = true
+continuate-utils.workspace = true
 cranelift = "0.114.0"
 cranelift-module = "0.114.0"
 cranelift-object = "0.114.0"

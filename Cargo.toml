@@ -46,10 +46,6 @@ continuate-error = { version = "0.1.0", path = "./continuate-error" }
 continuate-frontend = { version = "0.1.0", path = "./continuate-frontend" }
 continuate-ir = { version = "0.1.0", path = "./continuate-ir" }
 continuate-utils = { version = "0.1.0", path = "./continuate-utils" }
-hashbrown = { version = "0.15.2", default-features = false, features = [
-    "inline-more",
-    "nightly",
-] }
 itertools = "0.14.0"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"

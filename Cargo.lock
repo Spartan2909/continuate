@@ -244,6 +244,7 @@ dependencies = [
  "bumpalo",
  "continuate-common",
  "continuate-ir",
+ "continuate-utils",
  "cranelift",
  "cranelift-module",
  "cranelift-object",
@@ -286,7 +287,6 @@ dependencies = [
  "continuate-error",
  "continuate-frontend",
  "continuate-utils",
- "hashbrown 0.15.2",
  "itertools",
 ]
 
