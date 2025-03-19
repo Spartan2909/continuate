@@ -320,7 +320,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         let params = self.expr_list(&expr.args, block, function);
 
         let mut new_params = Vec::with_capacity_in(params.len(), self.arena);
-        new_params.extend(params);
+        new_params.extend(params.into_iter().map(|expr| (None, expr)));
         let callee_ty = self.lower_ty(expr.callee_ty).as_function().unwrap();
         Expr::Call(ExprCall {
             callee: Box::new_in(callee, self.arena),

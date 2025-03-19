@@ -174,7 +174,7 @@ fn default_expr_call<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut ExprCa
         args,
     } = expr;
     v.expr(callee);
-    for expr in args {
+    for (_, expr) in args {
         v.expr(expr);
     }
 }

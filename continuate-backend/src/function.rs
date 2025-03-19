@@ -24,7 +24,6 @@ use continuate_ir::mid_level_ir::ExprAssign;
 use continuate_ir::mid_level_ir::ExprBinary;
 use continuate_ir::mid_level_ir::ExprCall;
 use continuate_ir::mid_level_ir::ExprConstructor;
-use continuate_ir::mid_level_ir::ExprContApplication;
 use continuate_ir::mid_level_ir::ExprGet;
 use continuate_ir::mid_level_ir::ExprIntrinsic;
 use continuate_ir::mid_level_ir::ExprSet;
@@ -42,8 +41,6 @@ use continuate_common::TyLayout;
 
 use continuate_utils::hash_map::Entry;
 use continuate_utils::HashMap;
-
-use bumpalo::Bump;
 
 use cranelift::codegen::ir;
 use cranelift::codegen::ir::condcodes::FloatCC;
@@ -118,7 +115,6 @@ pub(super) struct FunctionCompiler<'arena, 'function, 'builder, M: ?Sized> {
     pub(super) vars: HashMap<'arena, Ident, (&'function MirType<'function>, bool)>,
     pub(super) temp_roots: Vec<Value>,
     pub(super) variables: HashMap<'arena, Ident, Variable>,
-    pub(super) arena: &'arena &'arena Bump,
 }
 
 impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, '_, M> {
@@ -425,43 +421,26 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
         Some(value)
     }
 
-    fn callable<'a>(
-        &mut self,
-        callee: &'a Expr<'function>,
-    ) -> Option<(Callable, HashMap<'arena, Ident, &'a Expr<'function>>)> {
+    fn callable<'a>(&mut self, callee: &'a Expr<'function>) -> Option<Callable> {
         match *callee {
-            Expr::Function(func_ref) => {
-                Some((Callable::Static(func_ref), HashMap::new_in(self.arena)))
-            }
-            Expr::ContApplication(ExprContApplication {
-                ref callee,
-                ref continuations,
-            }) => {
-                let (callable, mut new_continuations) = self.callable(callee)?;
-                new_continuations.extend(continuations.iter().map(|(ident, expr)| (*ident, expr)));
-                Some((callable, new_continuations))
-            }
-            _ => Some((
-                Callable::Dynamic(self.expr(callee)?),
-                HashMap::new_in(self.arena),
-            )),
+            Expr::Function(func_ref) => Some(Callable::Static(func_ref)),
+            _ => Some(Callable::Dynamic(self.expr(callee)?)),
         }
     }
 
     fn expr_call(&mut self, expr: &ExprCall<'function>) -> Option<Value> {
-        let (callable, continuations) = self.callable(&expr.callee)?;
+        let callable = self.callable(&expr.callee)?;
 
         let args: Option<Vec<_>> = iter::once(Some(Value::reserved_value()))
-            .chain(expr.args.iter().map(|expr| self.expr(expr)))
+            .chain(
+                expr.args
+                    .iter()
+                    .map(|(ident, expr)| (*ident, self.expr(expr)))
+                    .sorted_by_key(|(ident, _)| *ident)
+                    .map(|(_, value)| value),
+            )
             .collect();
         let mut args = args?;
-
-        let continuations: Option<Vec<_>> = continuations
-            .into_iter()
-            .sorted_unstable_by_key(|&(ident, _)| ident)
-            .map(|(_, expr)| self.expr(expr))
-            .collect();
-        args.append(&mut continuations?);
 
         let vars: Vec<_> = self
             .vars

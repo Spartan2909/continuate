@@ -416,12 +416,15 @@ impl<'arena> Executor<'arena> {
         }
     }
 
-    fn expr_list(
+    fn expr_list<'a>(
         &mut self,
-        exprs: &[Expr<'arena>],
+        exprs: impl IntoIterator<Item = &'a Expr<'arena>>,
         program: &Program<'arena>,
-    ) -> ControlFlow<Vec<'arena, ValueRef<'arena>>> {
-        let mut values = Vec::with_capacity_in(exprs.len(), self.arena);
+    ) -> ControlFlow<Vec<'arena, ValueRef<'arena>>>
+    where
+        'arena: 'a,
+    {
+        let mut values = Vec::new_in(self.arena);
         for expr in exprs {
             values.push(value!(self.expr(expr, program)));
         }

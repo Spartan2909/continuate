@@ -384,7 +384,6 @@ impl<'arena: 'a, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
             vars: HashMap::new_in(self.arena),
             temp_roots: Vec::new(),
             variables: HashMap::new_in(self.arena),
-            arena: self.arena,
         };
 
         function_compiler.compile();
