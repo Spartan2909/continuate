@@ -233,6 +233,7 @@ fn default_expr_closure<'arena, V: Visit<'arena> + ?Sized>(_v: &V, expr: &mut Ex
     let ExprClosure {
         func_ref: _,
         captures: _,
+        storage_ty: _,
     } = expr;
 }
 

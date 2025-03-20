@@ -139,7 +139,8 @@ pub struct ExprSwitch<'arena> {
 #[derive(Debug, Clone)]
 pub struct ExprClosure<'arena> {
     pub func_ref: FuncRef,
-    pub captures: HashMap<'arena, Ident, &'arena Type<'arena>>,
+    pub captures: Vec<'arena, Ident>,
+    pub storage_ty: &'arena Type<'arena>,
 }
 
 #[derive(Debug, Clone)]
@@ -269,12 +270,18 @@ impl<'arena> Block<'arena> {
 }
 
 #[derive(Debug)]
+pub struct ClosureCaptures<'arena> {
+    pub captures: Vec<'arena, Ident>,
+    pub storage_ty: &'arena Type<'arena>,
+}
+
+#[derive(Debug)]
 pub struct Function<'arena> {
     pub params: Vec<'arena, (Ident, &'arena Type<'arena>)>,
     pub continuations: HashMap<'arena, Ident, &'arena Type<'arena>>,
     pub declarations: HashMap<'arena, Ident, (&'arena Type<'arena>, Option<Literal>)>,
     pub blocks: HashMap<'arena, BlockId, Block<'arena>>,
-    pub captures: HashMap<'arena, Ident, &'arena Type<'arena>>,
+    pub captures: Option<ClosureCaptures<'arena>>,
     next_block: u64,
     pub name: String,
 }
@@ -286,7 +293,7 @@ impl<'arena> Function<'arena> {
             continuations: HashMap::new_in(arena),
             declarations: HashMap::new_in(arena),
             blocks: HashMap::new_in(arena),
-            captures: HashMap::new_in(arena),
+            captures: None,
             next_block: 1,
             name,
         }

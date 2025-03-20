@@ -28,6 +28,7 @@ use crate::high_level_ir::UserDefinedType as HirUserDefinedType;
 use crate::high_level_ir::UserDefinedTypeFields;
 use crate::mid_level_ir::Block;
 use crate::mid_level_ir::BlockId;
+use crate::mid_level_ir::ClosureCaptures;
 use crate::mid_level_ir::Expr;
 use crate::mid_level_ir::ExprArray;
 use crate::mid_level_ir::ExprAssign;
@@ -639,17 +640,36 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
     fn expr_closure(&mut self, expr: &HirExprClosure) -> Expr<'arena> {
         let func = &self.hir_program.functions[&expr.func];
         let captures = collect_into(
-            HashMap::new_in(self.arena),
-            func.captures
-                .iter()
-                .map(|&ident| (ident, self.environment[&ident])),
+            Vec::new_in(self.arena),
+            func.captures.iter().copied().sorted_unstable(),
         );
 
-        let func = self.function(func, captures.clone());
+        let func = self.function(
+            func,
+            Some(&collect_into(
+                Vec::new_in(self.arena),
+                captures
+                    .iter()
+                    .map(|ident| (*ident, self.environment[ident])),
+            )),
+        );
         self.program.functions.insert(expr.func, func);
 
+        let storage_ty = UserDefinedType {
+            constructor: TypeConstructor::Product(collect_into(
+                Vec::new_in(self.arena),
+                captures.iter().map(|ident| self.environment[ident]),
+            )),
+        };
+
         let func_ref = expr.func;
-        Expr::Closure(ExprClosure { func_ref, captures })
+        Expr::Closure(ExprClosure {
+            func_ref,
+            captures,
+            storage_ty: self
+                .program
+                .insert_type(Type::UserDefined(storage_ty), self.arena),
+        })
     }
 
     fn expr_intrinsic(
@@ -694,10 +714,31 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         }
     }
 
+    fn captures(&mut self, captures: &[(Ident, &'arena Type<'arena>)]) -> ClosureCaptures<'arena> {
+        let storage_ty = UserDefinedType {
+            constructor: TypeConstructor::Product(collect_into(
+                Vec::new_in(self.arena),
+                captures
+                    .iter()
+                    .sorted_unstable_by_key(|(ident, _)| *ident)
+                    .map(|(_, ty)| ty),
+            )),
+        };
+        ClosureCaptures {
+            captures: collect_into(
+                Vec::new_in(self.arena),
+                captures.iter().map(|(ident, _)| *ident).sorted_unstable(),
+            ),
+            storage_ty: self
+                .program
+                .insert_type(Type::UserDefined(storage_ty), self.arena),
+        }
+    }
+
     fn function(
         &mut self,
         function: &'a HirFunction,
-        captures: HashMap<'arena, Ident, &'arena Type<'arena>>,
+        captures: Option<&[(Ident, &'arena Type<'arena>)]>,
     ) -> Function<'arena> {
         let mut mir_function = Function::new(function.name.clone(), self.arena);
         mir_function.params.reserve(function.params.len());
@@ -711,8 +752,15 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             mir_function.continuations.insert(param, self.lower_ty(ty));
         }
 
-        self.environment.clone_from(&captures);
-        mir_function.captures = captures;
+        self.environment.clear();
+
+        if let Some(captures) = captures {
+            self.environment.extend(captures);
+            mir_function
+                .declarations
+                .extend(captures.iter().map(|(ident, ty)| (*ident, (*ty, None))));
+            mir_function.captures = Some(self.captures(captures));
+        }
 
         for (&param, &ty) in mir_function
             .params
@@ -752,7 +800,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             if !function.captures.is_empty() {
                 continue;
             }
-            let function = lowerer.function(function, HashMap::new_in(arena));
+            let function = lowerer.function(function, None);
             lowerer.program.functions.insert(func_ref, function);
         }
 

@@ -1,5 +1,6 @@
 use super::dangling_static_ptr;
 use super::declare_static;
+use super::fat_ptr;
 use super::fat_ptr_ty;
 use super::ptr_ty;
 use super::signature_from_function_ty;
@@ -23,6 +24,7 @@ use continuate_ir::mid_level_ir::ExprArray;
 use continuate_ir::mid_level_ir::ExprAssign;
 use continuate_ir::mid_level_ir::ExprBinary;
 use continuate_ir::mid_level_ir::ExprCall;
+use continuate_ir::mid_level_ir::ExprClosure;
 use continuate_ir::mid_level_ir::ExprConstructor;
 use continuate_ir::mid_level_ir::ExprGet;
 use continuate_ir::mid_level_ir::ExprIntrinsic;
@@ -117,7 +119,7 @@ pub(super) struct FunctionCompiler<'arena, 'function, 'builder, M: ?Sized> {
     pub(super) variables: HashMap<'arena, Ident, Variable>,
 }
 
-impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, '_, M> {
+impl<'arena, M: Module + ?Sized> FunctionCompiler<'arena, '_, '_, M> {
     fn variable(&mut self, ident: Ident) -> Variable {
         static NEXT: AtomicU32 = AtomicU32::new(0);
 
@@ -197,6 +199,26 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
         values[0]
     }
 
+    fn closure<'a>(
+        &mut self,
+        func_ref: FuncRef,
+        captures: impl IntoIterator<Item = &'a Expr<'a>>,
+        storage_ty: &MirType,
+    ) -> Option<Value> {
+        let layout = self
+            .ty_layouts
+            .get(storage_ty)
+            .unwrap()
+            .0
+            .as_single()
+            .unwrap();
+        let storage = self.compound_ty(storage_ty, layout, captures)?;
+        let func_id = self.functions[&func_ref].0;
+        let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
+        let function_ptr = self.builder.ins().func_addr(ptr_ty(self.triple), func_ref);
+        Some(fat_ptr(function_ptr, storage, self.triple, self.builder))
+    }
+
     fn expr_literal(&mut self, literal: &Literal) -> Value {
         match *literal {
             Literal::Int(n) => self.builder.ins().iconst(types::I64, n),
@@ -264,11 +286,11 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
         self.fat_ptr(function_ptr, metadata)
     }
 
-    fn compound_ty(
+    fn compound_ty<'a>(
         &mut self,
-        ty: &'function MirType<'function>,
+        ty: &MirType,
         layout: &SingleLayout,
-        values: &[&[Expr<'function>]],
+        values: impl IntoIterator<Item = &'a Expr<'a>>,
     ) -> Option<Value> {
         let stack_slot_data = StackSlotData {
             kind: StackSlotKind::ExplicitSlot,
@@ -277,11 +299,7 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
         };
         let stack_slot = self.builder.create_sized_stack_slot(stack_slot_data);
 
-        for (&field_location, field) in layout
-            .field_locations
-            .iter()
-            .zip(values.iter().copied().flatten())
-        {
+        for (&field_location, field) in layout.field_locations.iter().zip(values) {
             let field = self.expr(field)?;
             self.builder.ins().stack_store(
                 field,
@@ -308,27 +326,27 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
         Some(dest_ptr)
     }
 
-    fn expr_tuple(&mut self, expr: &ExprTuple<'function>) -> Option<Value> {
+    fn expr_tuple(&mut self, expr: &ExprTuple) -> Option<Value> {
         let layout = self.ty_layouts[expr.ty].0.as_single().unwrap();
-        self.compound_ty(expr.ty, layout, &[&expr.values])
+        self.compound_ty(expr.ty, layout, &expr.values)
     }
 
-    fn expr_constructor(&mut self, expr: &ExprConstructor<'function>) -> Option<Value> {
+    fn expr_constructor(&mut self, expr: &ExprConstructor) -> Option<Value> {
         let layout = self.ty_layouts[expr.ty].0;
         if let Some(index) = expr.index {
             let layout = &layout.as_sum().unwrap()[index];
             self.compound_ty(
                 expr.ty,
                 layout,
-                &[&[Expr::Literal(Literal::Int(index as i64))], &expr.fields],
+                iter::once(&Expr::Literal(Literal::Int(index as i64))).chain(&expr.fields),
             )
         } else {
             let layout = layout.as_single().unwrap();
-            self.compound_ty(expr.ty, layout, &[&expr.fields])
+            self.compound_ty(expr.ty, layout, &expr.fields)
         }
     }
 
-    fn expr_array(&mut self, expr: &ExprArray<'function>) -> Option<Value> {
+    fn expr_array(&mut self, expr: &ExprArray) -> Option<Value> {
         let (value_size, _, _) = ty_ref_size_align_ptr(expr.value_ty);
         let size = value_size * expr.values.len() as u64;
 
@@ -362,12 +380,12 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
         Some(dest_ptr)
     }
 
-    fn field_information(
+    fn field_information<'a>(
         &self,
-        object_ty: &'function MirType<'function>,
+        object_ty: &'a MirType<'a>,
         object_variant: Option<usize>,
         field: usize,
-    ) -> (&'arena SingleLayout<'arena>, &'function MirType<'function>) {
+    ) -> (&'arena SingleLayout<'arena>, &'a MirType<'a>) {
         let constructor = &object_ty.as_user_defined().unwrap().constructor;
         match (self.ty_layouts[&object_ty].0, object_variant, constructor) {
             (TyLayout::Single(layout), None, TypeConstructor::Product(fields)) => {
@@ -380,27 +398,34 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
         }
     }
 
-    fn expr_get(&mut self, expr: &ExprGet<'function>) -> Option<Value> {
-        let object = self.expr(&expr.object)?;
-        let (layout, field_ty) =
-            self.field_information(expr.object_ty, expr.object_variant, expr.field);
+    fn get(
+        &mut self,
+        object: Value,
+        object_ty: &MirType,
+        object_variant: Option<usize>,
+        field: usize,
+    ) -> Value {
+        let (layout, field_ty) = self.field_information(object_ty, object_variant, field);
         let field_ty = ty_for(field_ty, self.triple);
         let endianness = self.cranelift_endianness();
-        Some(
-            self.builder.ins().load(
-                field_ty,
-                MemFlags::new()
-                    .with_endianness(endianness)
-                    .with_aligned()
-                    .with_alias_region(Some(AliasRegion::Heap))
-                    .with_notrap(),
-                object,
-                layout.field_locations[expr.field] as i32,
-            ),
+        self.builder.ins().load(
+            field_ty,
+            MemFlags::new()
+                .with_endianness(endianness)
+                .with_aligned()
+                .with_alias_region(Some(AliasRegion::Heap))
+                .with_notrap(),
+            object,
+            layout.field_locations[field] as i32,
         )
     }
 
-    fn expr_set(&mut self, expr: &ExprSet<'function>) -> Option<Value> {
+    fn expr_get(&mut self, expr: &ExprGet) -> Option<Value> {
+        let object = self.expr(&expr.object)?;
+        Some(self.get(object, expr.object_ty, expr.object_variant, expr.field))
+    }
+
+    fn expr_set(&mut self, expr: &ExprSet) -> Option<Value> {
         let object = self.expr(&expr.object)?;
         let layout = self
             .field_information(expr.object_ty, expr.object_variant, expr.field)
@@ -421,14 +446,14 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
         Some(value)
     }
 
-    fn callable<'a>(&mut self, callee: &'a Expr<'function>) -> Option<Callable> {
+    fn callable(&mut self, callee: &Expr) -> Option<Callable> {
         match *callee {
             Expr::Function(func_ref) => Some(Callable::Static(func_ref)),
             _ => Some(Callable::Dynamic(self.expr(callee)?)),
         }
     }
 
-    fn expr_call(&mut self, expr: &ExprCall<'function>) -> Option<Value> {
+    fn expr_call(&mut self, expr: &ExprCall) -> Option<Value> {
         let callable = self.callable(&expr.callee)?;
 
         let args: Option<Vec<_>> = iter::once(Some(Value::reserved_value()))
@@ -489,7 +514,7 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
         None
     }
 
-    fn expr_unary(&mut self, expr: &ExprUnary<'function>) -> Option<Value> {
+    fn expr_unary(&mut self, expr: &ExprUnary) -> Option<Value> {
         let operand = self.expr(&expr.operand)?;
         let operand_ty = ty_for(expr.operand_ty, self.triple);
         match expr.operator {
@@ -503,7 +528,7 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
     }
 
     #[allow(clippy::cognitive_complexity)]
-    fn expr_binary(&mut self, expr: &ExprBinary<'function>) -> Option<Value> {
+    fn expr_binary(&mut self, expr: &ExprBinary) -> Option<Value> {
         debug_assert_eq!(expr.left_ty, expr.right_ty);
         let left = self.expr(&expr.left)?;
         let left_ty = ty_for(expr.left_ty, self.triple);
@@ -557,7 +582,7 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
         Some(value)
     }
 
-    fn expr_assign(&mut self, expr: &ExprAssign<'function>) -> Option<Value> {
+    fn expr_assign(&mut self, expr: &ExprAssign) -> Option<Value> {
         let (var_ty, initialised_ref) = self.vars.get_mut(&expr.ident).unwrap();
         let (var_ty, initialised) = (*var_ty, *initialised_ref);
         *initialised_ref = true;
@@ -587,7 +612,7 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
         Some(value)
     }
 
-    fn expr_switch(&mut self, expr: &ExprSwitch<'function>) -> Option<Value> {
+    fn expr_switch(&mut self, expr: &ExprSwitch) -> Option<Value> {
         let scrutinee = self.expr(&expr.scrutinee)?;
         let mut switch = Switch::new();
         for (&val, block_id) in &expr.arms {
@@ -602,7 +627,18 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
         None
     }
 
-    fn expr_intrinsic(&mut self, expr: &ExprIntrinsic<'function>) -> Option<Value> {
+    fn expr_closure(&mut self, expr: &ExprClosure) -> Option<Value> {
+        let captures: Vec<_> = expr
+            .captures
+            .iter()
+            .copied()
+            .sorted_unstable()
+            .map(Expr::Ident)
+            .collect();
+        self.closure(expr.func_ref, &captures, expr.storage_ty)
+    }
+
+    fn expr_intrinsic(&mut self, expr: &ExprIntrinsic) -> Option<Value> {
         let value = self.expr(&expr.value)?;
         match expr.intrinsic {
             Intrinsic::Discriminant => {
@@ -642,7 +678,7 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
         }
     }
 
-    fn expr(&mut self, expr: &Expr<'function>) -> Option<Value> {
+    fn expr(&mut self, expr: &Expr) -> Option<Value> {
         match expr {
             Expr::Literal(literal) => Some(self.expr_literal(literal)),
             Expr::Ident(ident) => {
@@ -662,7 +698,7 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
             Expr::Assign(expr) => self.expr_assign(expr),
             Expr::Switch(expr) => self.expr_switch(expr),
             Expr::Goto(block_id) => self.expr_goto(*block_id),
-            Expr::Closure { .. } => todo!(),
+            Expr::Closure(expr) => self.expr_closure(expr),
             Expr::Intrinsic(expr) => self.expr_intrinsic(expr),
         }
     }
@@ -696,6 +732,15 @@ impl<'arena, 'function, M: Module + ?Sized> FunctionCompiler<'arena, 'function, 
             }
 
             self.vars.insert(ident, (var_ty, initialiser.is_some()));
+        }
+
+        if let Some(captures) = &self.mir_function.captures {
+            let storage = self.builder.block_params(entry_point)[0];
+            for (i, &ident) in captures.captures.iter().enumerate() {
+                let value = self.get(storage, captures.storage_ty, None, i);
+                let var = self.variable(ident);
+                self.builder.def_var(var, value);
+            }
         }
 
         for (&block_id, block) in &self.mir_function.blocks {
