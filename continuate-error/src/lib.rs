@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
+use std::fmt::Write as _;
 use std::io;
 use std::io::Write;
 use std::iter;
@@ -40,7 +41,7 @@ impl SourceId {
         unreachable!()
     };
 
-    fn next(&mut self) -> SourceId {
+    const fn next(&mut self) -> SourceId {
         let id = *self;
         self.0 = id.0.checked_add(1).unwrap();
         id
@@ -427,7 +428,8 @@ impl SingleError {
                     }
                     buf
                 };
-                expected_message.push_str(&format!("found {}", format_token(found.as_ref())));
+                let _ = write!(expected_message, "found {}", format_token(found.as_ref()));
+                // expected_message.push_str(&format!("found {}", format_token(found.as_ref())));
                 builder.add_label(Label::new(span).with_message(expected_message));
             }
             ErrorInner::UnclosedDelimiter {

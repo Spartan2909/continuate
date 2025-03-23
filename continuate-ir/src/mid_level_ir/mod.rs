@@ -326,7 +326,7 @@ impl<'arena> Function<'arena> {
         BlockId(0)
     }
 
-    pub fn block(&mut self) -> BlockId {
+    pub const fn block(&mut self) -> BlockId {
         let block = BlockId(self.next_block);
         self.next_block += 1;
         block

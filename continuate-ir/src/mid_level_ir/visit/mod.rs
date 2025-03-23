@@ -232,7 +232,10 @@ fn default_expr_switch<'arena, V: Visit<'arena> + ?Sized>(v: &V, expr: &mut Expr
 }
 
 #[allow(clippy::needless_pass_by_ref_mut, reason = "forwards compatibility")]
-fn default_expr_closure<'arena, V: Visit<'arena> + ?Sized>(_v: &V, expr: &mut ExprClosure<'arena>) {
+const fn default_expr_closure<'arena, V: Visit<'arena> + ?Sized>(
+    _v: &V,
+    expr: &mut ExprClosure<'arena>,
+) {
     let ExprClosure {
         func_ref: _,
         captures: _,
