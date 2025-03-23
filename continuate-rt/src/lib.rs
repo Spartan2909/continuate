@@ -17,3 +17,13 @@ pub extern "C" fn enable_log() {
     #[cfg(debug_assertions)]
     debug!("runtime initialised");
 }
+
+#[export_name = "cont_rt_cleanup"]
+pub unsafe extern "C" fn cleanup() {
+    #[cfg(debug_assertions)]
+    debug!("runtime cleaning up");
+
+    unsafe {
+        garbage_collector::clear();
+    }
+}

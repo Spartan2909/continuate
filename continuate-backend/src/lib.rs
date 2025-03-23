@@ -80,6 +80,9 @@ struct Runtime {
 
     /// `fn()`
     init: FuncId,
+
+    /// `fn()`
+    cleanup: FuncId,
 }
 
 impl Runtime {
@@ -123,12 +126,19 @@ impl Runtime {
             &module.make_signature(),
         ));
 
+        let cleanup = pretty_unwrap(module.declare_function(
+            "cont_rt_cleanup",
+            Linkage::Import,
+            &module.make_signature(),
+        ));
+
         Runtime {
             alloc_gc,
             alloc_string,
             mark_root,
             unmark_root,
             init,
+            cleanup,
         }
     }
 }
@@ -700,6 +710,12 @@ impl<'arena: 'a, 'a> Compiler<'arena, 'a, ObjectModule> {
         let rvals = builder.inst_results(result);
         debug_assert_eq!(rvals.len(), 1);
         let rval = rvals[0];
+
+        let cleanup = self
+            .module
+            .declare_func_in_func(self.runtime.cleanup, builder.func);
+        let results = builder.ins().call(cleanup, &[]);
+        debug_assert_eq!(builder.inst_results(results).len(), 0);
 
         let rval = builder.ins().ireduce(c_int, rval);
         builder.ins().return_(&[rval]);

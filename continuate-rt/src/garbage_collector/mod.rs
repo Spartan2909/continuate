@@ -309,6 +309,24 @@ impl<A: Allocator + ?Sized> GarbageCollector<A> {
         }
         self.values = Some(ptr);
     }
+
+    /// ## Safety
+    ///
+    /// - All values in `self` must be valid.
+    ///
+    /// - No values in `self` may be accessed again.
+    unsafe fn clear(&mut self) {
+        let mut current = self.values;
+        while let Some(mut value) = current {
+            // SAFETY: Must be ensured by caller.
+            let value = unsafe { value.as_mut() };
+            current = value.next;
+            // SAFETY: `value` is never accessed again.
+            unsafe {
+                self.free_object(NonNull::from(value));
+            }
+        }
+    }
 }
 
 // SAFETY: Every pointer in a `GarbageCollector` is owned by that collector.
@@ -457,6 +475,12 @@ pub extern "C" fn alloc_string(len: usize) -> NonNull<()> {
 
     // SAFETY: `value_ptr` is directly derived from a `NonNull`.
     unsafe { NonNull::new_unchecked(value_ptr.cast()) }
+}
+
+pub unsafe fn clear() {
+    unsafe {
+        GARBAGE_COLLECTOR.lock().unwrap().clear();
+    }
 }
 
 #[cfg(test)]
