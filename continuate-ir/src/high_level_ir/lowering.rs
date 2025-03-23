@@ -412,6 +412,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             callee: Box::new_in(self.expr(callee), self.arena),
             callee_ty: self.program.insert_type(Type::Unknown, self.arena),
             continuations,
+            result_ty: self.program.insert_type(Type::Unknown, self.arena),
         })
     }
 

@@ -185,7 +185,10 @@ fn default_expr_cont_application<'arena, V: Visit<'arena> + ?Sized>(
 ) {
     let ExprContApplication {
         callee,
+        callee_ty: _,
         continuations,
+        result_ty: _,
+        storage_ty: _,
     } = expr;
     v.expr(callee);
     for (_, expr) in continuations {

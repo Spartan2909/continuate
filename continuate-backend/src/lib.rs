@@ -1,6 +1,10 @@
 mod function;
+use cranelift::prelude::FunctionBuilderContext;
 use function::FunctionCompiler;
 use function::FunctionRuntime;
+
+mod linked_list;
+use linked_list::LinkedList;
 
 use std::fmt;
 use std::mem;
@@ -40,7 +44,6 @@ use cranelift::codegen::settings::FlagsOrIsa;
 use cranelift::codegen::verify_function;
 use cranelift::codegen::Context;
 use cranelift::frontend::FunctionBuilder;
-use cranelift::frontend::FunctionBuilderContext;
 
 use cranelift_module::default_libcall_names;
 use cranelift_module::DataDescription;
@@ -252,12 +255,8 @@ fn ty_ref_size_align_ptr(ty: &MirType) -> (u64, u64, bool) {
     }
 }
 
-fn signature_from_function_ty(
-    function_ty: &FunctionTy,
-    call_conv: CallConv,
-    triple: &Triple,
-) -> Signature {
-    let mut signature = Signature::new(call_conv);
+fn signature_from_function_ty(function_ty: &FunctionTy, triple: &Triple) -> Signature {
+    let mut signature = Signature::new(CallConv::Tail);
     signature.params.push(AbiParam::new(ptr_ty(triple)));
     signature.params.extend(
         function_ty
@@ -279,13 +278,14 @@ fn signature_from_function_ty(
 
 struct Compiler<'arena, 'a, M: ?Sized> {
     program: Program<'a>,
-    context: Context,
+    contexts: LinkedList<Context>,
     data_description: DataDescription,
     triple: Triple,
     runtime: Runtime,
     functions: HashMap<'arena, FuncRef, (FuncId, Signature)>,
     ty_layouts: HashMap<'arena, &'a MirType<'a>, (&'arena TyLayout<'arena>, DataId)>,
     arena: &'arena &'arena Bump,
+    builder_contexts: LinkedList<FunctionBuilderContext>,
     module: M,
 }
 
@@ -300,13 +300,14 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
         Compiler {
             program,
             module,
-            context: Context::new(),
+            contexts: LinkedList::new(Context::new),
             data_description: DataDescription::new(),
             triple,
             runtime,
             functions: HashMap::new_in(arena),
             ty_layouts: HashMap::new_in(arena),
             arena,
+            builder_contexts: LinkedList::new(FunctionBuilderContext::new),
         }
     }
 }
@@ -318,12 +319,7 @@ impl<'arena: 'a, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
     }
 
     #[tracing::instrument(skip_all)]
-    fn function(
-        &mut self,
-        mir_function: &MirFunction,
-        func_ref: FuncRef,
-        func_ctx: &mut FunctionBuilderContext,
-    ) {
+    fn function(&mut self, mir_function: &MirFunction, func_ref: FuncRef) {
         let name = &mir_function.name;
         info!("compiling function '{name}'");
 
@@ -344,7 +340,8 @@ impl<'arena: 'a, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
 
         let name = UserFuncName::User(UserExternalName::new(2, func_ref.into()));
         let mut function = Function::with_name_signature(name, sig.clone());
-        let mut builder = FunctionBuilder::new(&mut function, func_ctx);
+        let mut func_ctx = self.builder_contexts.get();
+        let mut builder = FunctionBuilder::new(&mut function, &mut func_ctx);
 
         let block_map: HashMap<_, _> = collect_into(
             HashMap::new_in(self.arena),
@@ -381,6 +378,8 @@ impl<'arena: 'a, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
             mir_function,
             params: &params,
             function_runtime,
+            contexts: &self.contexts,
+            builder_contexts: &self.builder_contexts,
             vars: HashMap::new_in(self.arena),
             temp_roots: Vec::new(),
             variables: HashMap::new_in(self.arena),
@@ -400,10 +399,11 @@ impl<'arena: 'a, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
             panic!("{errors}");
         }
 
-        self.context.clear();
-        self.context.want_disasm = cfg!(debug_assertions);
-        self.context.func = function;
-        pretty_unwrap(self.module.define_function(func_id, &mut self.context));
+        let mut context = self.contexts.get();
+        context.clear();
+        context.want_disasm = cfg!(debug_assertions);
+        context.func = function;
+        pretty_unwrap(self.module.define_function(func_id, &mut context));
     }
 
     fn compound_ty_layout(&self, types: &[&[&MirType]]) -> SingleLayout<'arena> {
@@ -628,7 +628,7 @@ impl<'arena: 'a, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
         for (&func_ref, function) in &self.program.functions {
             let function_ty = self.program.signatures[&func_ref];
             let function_ty = function_ty.as_function().unwrap();
-            let sig = signature_from_function_ty(function_ty, CallConv::Tail, &self.triple);
+            let sig = signature_from_function_ty(function_ty, &self.triple);
 
             let id = pretty_unwrap(self.module.declare_function(
                 &function.name,
@@ -639,29 +639,27 @@ impl<'arena: 'a, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
         }
     }
 
-    fn compile_module(&mut self, func_ctx: &mut FunctionBuilderContext) {
+    fn compile_module(&mut self) {
         self.calc_ty_layouts();
 
         self.declare_functions();
 
         let functions = mem::replace(&mut self.program.functions, HashMap::new_in(self.arena));
         for (func_ref, function) in functions {
-            self.function(&function, func_ref, func_ctx);
+            self.function(&function, func_ref);
         }
     }
 }
 
 impl<'arena: 'a, 'a> Compiler<'arena, 'a, ObjectModule> {
     fn compile_library(mut self) -> ObjectProduct {
-        self.compile_module(&mut FunctionBuilderContext::new());
+        self.compile_module();
 
         self.module.finish()
     }
 
     fn compile_binary(mut self) -> ObjectProduct {
-        let mut func_ctx = FunctionBuilderContext::new();
-
-        self.compile_module(&mut func_ctx);
+        self.compile_module();
 
         let c_int = self.c_int_ty();
 
@@ -674,6 +672,7 @@ impl<'arena: 'a, 'a> Compiler<'arena, 'a, ObjectModule> {
         );
         let name = UserFuncName::User(UserExternalName::new(1, 0));
         let mut function = Function::with_name_signature(name, signature);
+        let mut func_ctx = self.builder_contexts.get();
         let mut builder = FunctionBuilder::new(&mut function, &mut func_ctx);
 
         let block = builder.create_block();
@@ -707,9 +706,10 @@ impl<'arena: 'a, 'a> Compiler<'arena, 'a, ObjectModule> {
 
         builder.finalize();
 
-        self.context.clear();
-        self.context.func = function;
-        pretty_unwrap(self.module.define_function(main, &mut self.context));
+        let mut context = self.contexts.get();
+        context.clear();
+        context.func = function;
+        pretty_unwrap(self.module.define_function(main, &mut context));
 
         self.module.finish()
     }

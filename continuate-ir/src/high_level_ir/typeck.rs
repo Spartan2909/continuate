@@ -320,18 +320,18 @@ impl<'a, 'arena> TypeCk<'a, 'arena> {
             Err("{ty:?} is not a function")?
         };
 
-        let expr_str = format!("{expr:#?}");
-
         let mut ty_continuations = ty_continuations.clone();
         for (ident, cont) in &mut expr.continuations {
             let cont = self.expr(cont)?;
-            let expected = ty_continuations.remove(ident).expect(&expr_str);
-            // .ok_or_else(|| format!("no such continuation {ident:?}"))?;
+            let expected = ty_continuations
+                .remove(ident)
+                .ok_or_else(|| format!("no such continuation {ident:?}"))?;
             cont.unify(expected, self.program, self.arena)?;
         }
 
         let ty = Type::function(params.clone(), ty_continuations);
-        Ok(self.program.insert_type(ty, self.arena))
+        expr.result_ty = self.program.insert_type(ty, self.arena);
+        Ok(expr.result_ty)
     }
 
     fn expr_unary(&mut self, expr: &mut ExprUnary<'arena>) -> Result<&'arena Type<'arena>> {

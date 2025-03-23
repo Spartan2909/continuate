@@ -344,9 +344,27 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             new_continuations.push((*ident, expr));
         }
 
+        let callee_ty = self.lower_ty(expr.callee_ty).as_function().unwrap();
+        let storage_ty = UserDefinedType {
+            constructor: TypeConstructor::Product(collect_into(
+                Vec::new_in(self.arena),
+                iter::once(self.lower_ty(expr.callee_ty)).chain(
+                    expr.continuations
+                        .iter()
+                        .sorted_unstable_by_key(|(ident, _)| *ident)
+                        .map(|(ident, _)| callee_ty.continuations[ident]),
+                ),
+            )),
+        };
+
         Expr::ContApplication(ExprContApplication {
             callee: Box::new_in(callee, self.arena),
+            callee_ty: self.lower_ty(expr.callee_ty),
             continuations: new_continuations,
+            result_ty: self.lower_ty(expr.result_ty),
+            storage_ty: self
+                .program
+                .insert_type(Type::UserDefined(storage_ty), self.arena),
         })
     }
 

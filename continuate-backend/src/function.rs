@@ -1,3 +1,5 @@
+use crate::linked_list::LinkedList;
+
 use super::dangling_static_ptr;
 use super::declare_static;
 use super::fat_ptr;
@@ -26,6 +28,7 @@ use continuate_ir::mid_level_ir::ExprBinary;
 use continuate_ir::mid_level_ir::ExprCall;
 use continuate_ir::mid_level_ir::ExprClosure;
 use continuate_ir::mid_level_ir::ExprConstructor;
+use continuate_ir::mid_level_ir::ExprContApplication;
 use continuate_ir::mid_level_ir::ExprGet;
 use continuate_ir::mid_level_ir::ExprIntrinsic;
 use continuate_ir::mid_level_ir::ExprSet;
@@ -33,6 +36,7 @@ use continuate_ir::mid_level_ir::ExprSwitch;
 use continuate_ir::mid_level_ir::ExprTuple;
 use continuate_ir::mid_level_ir::ExprUnary;
 use continuate_ir::mid_level_ir::Function as MirFunction;
+use continuate_ir::mid_level_ir::FunctionTy;
 use continuate_ir::mid_level_ir::Program;
 use continuate_ir::mid_level_ir::Type as MirType;
 use continuate_ir::mid_level_ir::TypeConstructor;
@@ -51,18 +55,21 @@ use cranelift::codegen::ir::entities::Value;
 use cranelift::codegen::ir::types;
 use cranelift::codegen::ir::AliasRegion;
 use cranelift::codegen::ir::Block;
+use cranelift::codegen::ir::Function;
 use cranelift::codegen::ir::InstBuilder;
 use cranelift::codegen::ir::MemFlags;
 use cranelift::codegen::ir::Signature;
 use cranelift::codegen::ir::StackSlotData;
 use cranelift::codegen::ir::StackSlotKind;
 use cranelift::codegen::ir::TrapCode;
-use cranelift::codegen::isa::CallConv;
+use cranelift::codegen::ir::UserExternalName;
 use cranelift::codegen::packed_option::ReservedValue;
+use cranelift::codegen::Context;
 use cranelift::frontend::FunctionBuilder;
 use cranelift::frontend::Switch;
 use cranelift::frontend::Variable;
 
+use cranelift::prelude::FunctionBuilderContext;
 use cranelift_module::DataDescription;
 use cranelift_module::DataId;
 use cranelift_module::FuncId;
@@ -114,9 +121,43 @@ pub(super) struct FunctionCompiler<'arena, 'function, 'builder, M: ?Sized> {
     pub(super) mir_function: &'function MirFunction<'function>,
     pub(super) params: &'function [(Ident, &'function MirType<'function>)],
     pub(super) function_runtime: FunctionRuntime,
+    pub(super) contexts: &'function LinkedList<Context>,
+    pub(super) builder_contexts: &'function LinkedList<FunctionBuilderContext>,
     pub(super) vars: HashMap<'arena, Ident, (&'function MirType<'function>, bool)>,
     pub(super) temp_roots: Vec<Value>,
     pub(super) variables: HashMap<'arena, Ident, Variable>,
+}
+
+fn fat_ptr_addr(fat_ptr: Value, builder: &mut FunctionBuilder, triple: &Triple) -> Value {
+    let rotation_places = i64::from(ptr_ty(triple).bits());
+    let thin_ptr = builder.ins().rotr_imm(fat_ptr, rotation_places);
+    builder.ins().ireduce(ptr_ty(triple), thin_ptr)
+}
+
+fn fat_ptr_meta(fat_ptr: Value, builder: &mut FunctionBuilder, triple: &Triple) -> Value {
+    builder.ins().ireduce(ptr_ty(triple), fat_ptr)
+}
+
+fn get(
+    endianness: cranelift::codegen::ir::Endianness,
+    builder: &mut FunctionBuilder,
+    triple: &Triple,
+    object: Value,
+    field: usize,
+    layout: &SingleLayout,
+    field_ty: &MirType,
+) -> Value {
+    let field_ty = ty_for(field_ty, triple);
+    builder.ins().load(
+        field_ty,
+        MemFlags::new()
+            .with_endianness(endianness)
+            .with_aligned()
+            .with_alias_region(Some(AliasRegion::Heap))
+            .with_notrap(),
+        object,
+        layout.field_locations[field] as i32,
+    )
 }
 
 impl<'arena, M: Module + ?Sized> FunctionCompiler<'arena, '_, '_, M> {
@@ -146,21 +187,11 @@ impl<'arena, M: Module + ?Sized> FunctionCompiler<'arena, '_, '_, M> {
         super::fat_ptr(thin_ptr, metadata, self.triple, self.builder)
     }
 
-    fn fat_ptr_addr(&mut self, fat_ptr: Value) -> Value {
-        let rotation_places = i64::from(ptr_ty(self.triple).bits());
-        let thin_ptr = self.builder.ins().rotr_imm(fat_ptr, rotation_places);
-        self.builder.ins().ireduce(ptr_ty(self.triple), thin_ptr)
-    }
-
-    fn fat_ptr_meta(&mut self, fat_ptr: Value) -> Value {
-        self.builder.ins().ireduce(ptr_ty(self.triple), fat_ptr)
-    }
-
     fn value_ptr(&mut self, value: Value, ty: &MirType) -> Option<Value> {
         if !self.program.is_primitive(ty) {
             Some(value)
         } else if *ty == MirType::String {
-            let str_ptr = self.fat_ptr_addr(value);
+            let str_ptr = fat_ptr_addr(value, self.builder, self.triple);
             Some(str_ptr)
         } else {
             None
@@ -201,7 +232,7 @@ impl<'arena, M: Module + ?Sized> FunctionCompiler<'arena, '_, '_, M> {
 
     fn closure<'a>(
         &mut self,
-        func_ref: FuncRef,
+        func_ref: cranelift::codegen::ir::entities::FuncRef,
         captures: impl IntoIterator<Item = &'a Expr<'a>>,
         storage_ty: &MirType,
     ) -> Option<Value> {
@@ -213,8 +244,6 @@ impl<'arena, M: Module + ?Sized> FunctionCompiler<'arena, '_, '_, M> {
             .as_single()
             .unwrap();
         let storage = self.compound_ty(storage_ty, layout, captures)?;
-        let func_id = self.functions[&func_ref].0;
-        let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
         let function_ptr = self.builder.ins().func_addr(ptr_ty(self.triple), func_ref);
         Some(fat_ptr(function_ptr, storage, self.triple, self.builder))
     }
@@ -398,31 +427,19 @@ impl<'arena, M: Module + ?Sized> FunctionCompiler<'arena, '_, '_, M> {
         }
     }
 
-    fn get(
-        &mut self,
-        object: Value,
-        object_ty: &MirType,
-        object_variant: Option<usize>,
-        field: usize,
-    ) -> Value {
-        let (layout, field_ty) = self.field_information(object_ty, object_variant, field);
-        let field_ty = ty_for(field_ty, self.triple);
-        let endianness = self.cranelift_endianness();
-        self.builder.ins().load(
-            field_ty,
-            MemFlags::new()
-                .with_endianness(endianness)
-                .with_aligned()
-                .with_alias_region(Some(AliasRegion::Heap))
-                .with_notrap(),
-            object,
-            layout.field_locations[field] as i32,
-        )
-    }
-
     fn expr_get(&mut self, expr: &ExprGet) -> Option<Value> {
         let object = self.expr(&expr.object)?;
-        Some(self.get(object, expr.object_ty, expr.object_variant, expr.field))
+        let (layout, field_ty) =
+            self.field_information(expr.object_ty, expr.object_variant, expr.field);
+        Some(get(
+            self.cranelift_endianness(),
+            self.builder,
+            self.triple,
+            object,
+            expr.field,
+            layout,
+            field_ty,
+        ))
     }
 
     fn expr_set(&mut self, expr: &ExprSet) -> Option<Value> {
@@ -497,13 +514,12 @@ impl<'arena, M: Module + ?Sized> FunctionCompiler<'arena, '_, '_, M> {
                 self.builder.ins().return_call(func, &args);
             }
             Callable::Dynamic(callee) => {
-                let signature =
-                    signature_from_function_ty(expr.callee_ty, CallConv::Tail, self.triple);
+                let signature = signature_from_function_ty(expr.callee_ty, self.triple);
                 let sig_ref = self.builder.import_signature(signature);
 
-                let function_ptr = self.fat_ptr_addr(callee);
+                let function_ptr = fat_ptr_addr(callee, self.builder, self.triple);
 
-                args[0] = self.fat_ptr_meta(callee);
+                args[0] = fat_ptr_meta(callee, self.builder, self.triple);
 
                 self.builder
                     .ins()
@@ -512,6 +528,105 @@ impl<'arena, M: Module + ?Sized> FunctionCompiler<'arena, '_, '_, M> {
         }
 
         None
+    }
+
+    fn application_function(
+        &mut self,
+        ty: &FunctionTy,
+        storage_ty: &MirType,
+        callee_ty: &MirType,
+        continuations: impl IntoIterator<Item = Ident>,
+    ) -> FuncId {
+        let signature = signature_from_function_ty(ty, self.triple);
+        let func_id = self.module.declare_anonymous_function(&signature).unwrap();
+
+        let mut function = Function::with_name_signature(
+            ir::UserFuncName::User(UserExternalName::new(2, 0)),
+            signature,
+        );
+        let mut func_ctx = self.builder_contexts.get();
+        let mut builder = FunctionBuilder::new(&mut function, &mut func_ctx);
+        let block = builder.create_block();
+        builder.switch_to_block(block);
+        builder.append_block_params_for_function_params(block);
+        let storage = builder.block_params(block)[0];
+
+        let (layout, field_ty) = self.field_information(storage_ty, None, 0);
+        let callee = get(
+            self.cranelift_endianness(),
+            &mut builder,
+            self.triple,
+            storage,
+            0,
+            layout,
+            field_ty,
+        );
+
+        let params = ty
+            .params
+            .iter()
+            .map(|_| None)
+            .chain(ty.continuations.iter().map(|(ident, _)| Some(*ident)))
+            .sorted()
+            .collect_vec();
+        let mut args: Vec<_> = builder
+            .block_params(block)
+            .iter()
+            .skip(1)
+            .enumerate()
+            .map(|(i, value)| (*value, params[i]))
+            .collect();
+        args.extend(continuations.into_iter().enumerate().map(|(field, ident)| {
+            let (layout, field_ty) = self.field_information(storage_ty, None, field + 1);
+            (
+                get(
+                    self.cranelift_endianness(),
+                    &mut builder,
+                    self.triple,
+                    storage,
+                    field + 1,
+                    layout,
+                    field_ty,
+                ),
+                Some(ident),
+            )
+        }));
+        args.sort_unstable_by_key(|(_, ident)| *ident);
+        let args = iter::once(fat_ptr_meta(callee, &mut builder, self.triple))
+            .chain(args.into_iter().map(|(value, _)| value))
+            .collect_vec();
+
+        let signature = signature_from_function_ty(callee_ty.as_function().unwrap(), self.triple);
+        let sig_ref = builder.import_signature(signature);
+
+        let callee = fat_ptr_addr(callee, &mut builder, self.triple);
+        builder.ins().return_call_indirect(sig_ref, callee, &args);
+
+        let mut context = self.contexts.get();
+        context.clear();
+        context.want_disasm = cfg!(debug_assertions);
+        context.func = function;
+        self.module.define_function(func_id, &mut context).unwrap();
+        func_id
+    }
+
+    fn expr_cont_application(&mut self, expr: &ExprContApplication) -> Option<Value> {
+        let func_id = self.application_function(
+            expr.result_ty.as_function().unwrap(),
+            expr.storage_ty,
+            expr.callee_ty,
+            expr.continuations
+                .iter()
+                .map(|(ident, _)| *ident)
+                .sorted_unstable(),
+        );
+        let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
+
+        self.closure(
+            func_ref,
+            iter::once(&*expr.callee).chain(expr.continuations.iter().map(|(_, expr)| expr)),
+            expr.storage_ty,
+        )
     }
 
     fn expr_unary(&mut self, expr: &ExprUnary) -> Option<Value> {
@@ -635,7 +750,9 @@ impl<'arena, M: Module + ?Sized> FunctionCompiler<'arena, '_, '_, M> {
             .sorted_unstable()
             .map(Expr::Ident)
             .collect();
-        self.closure(expr.func_ref, &captures, expr.storage_ty)
+        let func_id = self.functions[&expr.func_ref].0;
+        let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
+        self.closure(func_ref, &captures, expr.storage_ty)
     }
 
     fn expr_intrinsic(&mut self, expr: &ExprIntrinsic) -> Option<Value> {
@@ -692,7 +809,7 @@ impl<'arena, M: Module + ?Sized> FunctionCompiler<'arena, '_, '_, M> {
             Expr::Get(expr) => self.expr_get(expr),
             Expr::Set(expr) => self.expr_set(expr),
             Expr::Call(expr) => self.expr_call(expr),
-            Expr::ContApplication(_) => todo!(),
+            Expr::ContApplication(expr) => self.expr_cont_application(expr),
             Expr::Unary(expr) => self.expr_unary(expr),
             Expr::Binary(expr) => self.expr_binary(expr),
             Expr::Assign(expr) => self.expr_assign(expr),
@@ -737,7 +854,16 @@ impl<'arena, M: Module + ?Sized> FunctionCompiler<'arena, '_, '_, M> {
         if let Some(captures) = &self.mir_function.captures {
             let storage = self.builder.block_params(entry_point)[0];
             for (i, &ident) in captures.captures.iter().enumerate() {
-                let value = self.get(storage, captures.storage_ty, None, i);
+                let (layout, field_ty) = self.field_information(captures.storage_ty, None, i);
+                let value = get(
+                    self.cranelift_endianness(),
+                    self.builder,
+                    self.triple,
+                    storage,
+                    i,
+                    layout,
+                    field_ty,
+                );
                 let var = self.variable(ident);
                 self.builder.def_var(var, value);
             }

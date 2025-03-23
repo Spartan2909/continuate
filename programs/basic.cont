@@ -4,5 +4,6 @@ fn sum(left: int, right: int)[ret: fn(int)] {
 
 fn main()[ret: fn(int)] {
     let world = "hewwo";
-    sum[ret](3, 7)
+    let x = sum[ret];
+    x(3, 7)
 }
