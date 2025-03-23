@@ -66,6 +66,7 @@ strip = "debuginfo"
 codegen-units = 1
 
 [workspace.lints.rust]
+unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "forbid"
 
 [workspace.lints.clippy]
