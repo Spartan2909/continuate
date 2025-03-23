@@ -255,11 +255,8 @@ fn ty_ref_size_align_ptr(ty: &MirType) -> (u64, u64, bool) {
     match ty {
         MirType::Bool => (1, 1, false),
         MirType::Int | MirType::Float => (8, 8, false),
-        MirType::Array(_, _)
-        | MirType::Tuple(_)
-        | MirType::Function(_)
-        | MirType::UserDefined(_) => (8, 8, true),
-        MirType::String => (16, 8, true),
+        MirType::Array(_, _) | MirType::Tuple(_) | MirType::UserDefined(_) => (8, 8, true),
+        MirType::String | MirType::Function(_) => (16, 8, true),
         MirType::Unknown => unreachable!(),
         MirType::None => (0, 1, false),
     }
