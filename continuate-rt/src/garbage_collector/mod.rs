@@ -47,7 +47,7 @@ impl<T: ?Sized> GcValue<T> {
         unsafe { mark_ptr.read() }
     }
 
-    unsafe fn set_mark(this: *mut GcValue<T>, mark: bool) {
+    const unsafe fn set_mark(this: *mut GcValue<T>, mark: bool) {
         // SAFETY: Must be ensured by caller.
         let mark_ptr: *mut bool =
             unsafe { this.byte_add(mem::offset_of!(GcValue<()>, mark)).cast() };
@@ -231,7 +231,7 @@ impl<A: Allocator + ?Sized> GarbageCollector<A> {
     /// ## Safety
     ///
     /// - Any memory allocated in `self` which is accessed after this method is called must be
-    ///     marked.
+    ///   marked.
     ///
     /// - All values in `self` must be valid.
     unsafe fn sweep(&mut self) {
@@ -267,7 +267,7 @@ impl<A: Allocator + ?Sized> GarbageCollector<A> {
     /// ## Safety
     ///
     /// - Any memory allocated in `self` which is accessed after this method is called must be
-    ///     reachable from an element of `self.roots` or `self.temp_roots`.
+    ///   reachable from an element of `self.roots` or `self.temp_roots`.
     ///
     /// - All values in `self` must be valid.
     unsafe fn collect(&mut self) {
@@ -395,7 +395,7 @@ pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull
 /// ## Safety
 ///
 /// - `ptr` must point to memory allocated with [`cont_rt_alloc_gc`], and must not have
-///     previously been passed to this function.
+///   previously been passed to this function.
 ///
 /// - `ptr` must be valid for writes.
 ///
@@ -420,7 +420,7 @@ pub unsafe extern "C" fn mark_root(ptr: NonNull<()>) {
 /// ## Safety
 ///
 /// - `ptr` must point to memory allocated with [`cont_rt_alloc_gc`] and marked by
-///     [`cont_rt_mark_root`], and must not have previously been passed to this function.
+///   [`cont_rt_mark_root`], and must not have previously been passed to this function.
 ///
 /// - The garbage collector must be initialised.
 ///
@@ -478,6 +478,7 @@ pub extern "C" fn alloc_string(len: usize) -> NonNull<()> {
 }
 
 pub unsafe fn clear() {
+    // SAFETY: Must be ensured by caller.
     unsafe {
         GARBAGE_COLLECTOR.lock().unwrap().clear();
     }

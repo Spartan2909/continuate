@@ -18,11 +18,17 @@ pub extern "C" fn enable_log() {
     debug!("runtime initialised");
 }
 
+/// ## Safety
+///
+/// - All garbage-collected values must be valid.
+///
+/// - No garbage-collected values may be accessed again.
 #[export_name = "cont_rt_cleanup"]
 pub unsafe extern "C" fn cleanup() {
     #[cfg(debug_assertions)]
     debug!("runtime cleaning up");
 
+    // SAFETY: Must be ensured by caller.
     unsafe {
         garbage_collector::clear();
     }
