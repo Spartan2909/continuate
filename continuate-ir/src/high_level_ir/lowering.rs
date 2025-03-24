@@ -27,9 +27,9 @@ use crate::high_level_ir::UnaryOp;
 use crate::high_level_ir::UserDefinedType;
 use crate::high_level_ir::UserDefinedTypeFields;
 
+use std::collections::HashMap;
 use std::iter;
-
-use bumpalo::Bump;
+use std::rc::Rc;
 
 use continuate_error::Span;
 
@@ -49,43 +49,32 @@ use continuate_frontend::UnaryOp as AstUnaryOp;
 use continuate_frontend::UserDefinedTy as AstUserDefinedTy;
 use continuate_frontend::UserDefinedTyFields as AstUserDefinedTyFields;
 
-use continuate_utils::collect_into;
-use continuate_utils::HashMap;
-use continuate_utils::Vec;
-
-struct Lowerer<'a, 'arena> {
-    arena: &'arena Bump,
-    program: Program<'arena>,
+struct Lowerer<'a> {
+    program: Program,
     ast: &'a AstProgram<'a>,
-    user_defined_types: HashMap<'arena, Span, UserDefinedTyRef>,
+    user_defined_types: HashMap<Span, UserDefinedTyRef>,
     names: NameMap,
-    idents: HashMap<'arena, Span, Ident>,
-    functions: HashMap<'arena, Span, FuncRef>,
+    idents: HashMap<Span, Ident>,
+    functions: HashMap<Span, FuncRef>,
 }
 
-impl<'a, 'arena> Lowerer<'a, 'arena> {
-    fn new(
-        program_name: String,
-        arena: &'arena Bump,
-        ast: &'a AstProgram<'a>,
-        names: NameMap,
-    ) -> Lowerer<'a, 'arena> {
+impl<'a> Lowerer<'a> {
+    fn new(program_name: String, ast: &'a AstProgram<'a>, names: NameMap) -> Lowerer<'a> {
         Lowerer {
-            arena,
-            program: Program::new(program_name, arena),
+            program: Program::new(program_name),
             ast,
-            user_defined_types: HashMap::new_in(arena),
+            user_defined_types: HashMap::new(),
             names,
-            idents: HashMap::new_in(arena),
-            functions: HashMap::new_in(arena),
+            idents: HashMap::new(),
+            functions: HashMap::new(),
         }
     }
 
-    fn resolve_ty_path(&mut self, path: &Path) -> Option<&'arena Type<'arena>> {
+    fn resolve_ty_path(&mut self, path: &Path) -> Option<Rc<Type>> {
         self.names
             .get_path(path)
             .and_then(|span| self.user_defined_types.get(&span))
-            .map(|&ty| self.program.insert_type(Type::UserDefined(ty), self.arena))
+            .map(|&ty| self.program.insert_type(Type::UserDefined(ty)))
     }
 
     fn resolve_fn_path(&self, path: &Path) -> Option<FuncRef> {
@@ -102,19 +91,16 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             .copied()
     }
 
-    fn ty(&mut self, ty: &AstType) -> &'arena Type<'arena> {
+    fn ty(&mut self, ty: &AstType) -> Rc<Type> {
         match ty {
-            AstType::Bool(_) => self.program.insert_type(Type::Bool, self.arena),
-            AstType::Int(_) => self.program.insert_type(Type::Int, self.arena),
-            AstType::Float(_) => self.program.insert_type(Type::Float, self.arena),
-            AstType::String(_) => self.program.insert_type(Type::String, self.arena),
+            AstType::Bool(_) => self.program.insert_type(Type::Bool),
+            AstType::Int(_) => self.program.insert_type(Type::Int),
+            AstType::Float(_) => self.program.insert_type(Type::Float),
+            AstType::String(_) => self.program.insert_type(Type::String),
             AstType::Path(path) => self.resolve_ty_path(path).unwrap(),
             AstType::Tuple { items, span: _ } => {
-                let ty = Type::Tuple(collect_into(
-                    Vec::new_in(self.arena),
-                    items.iter().map(|ty| self.ty(ty)),
-                ));
-                self.program.insert_type(ty, self.arena)
+                let ty = Type::Tuple(items.iter().map(|ty| self.ty(ty)).collect());
+                self.program.insert_type(ty)
             }
             AstType::Function {
                 params,
@@ -122,18 +108,18 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                 span: _,
             } => {
                 let ty = Type::function(
-                    collect_into(Vec::new_in(self.arena), params.iter().map(|ty| self.ty(ty))),
-                    collect_into(
-                        HashMap::new_in(self.arena),
-                        continuations.iter().map(|(name, ty)| {
+                    params.iter().map(|ty| self.ty(ty)).collect(),
+                    continuations
+                        .iter()
+                        .map(|(name, ty)| {
                             (
                                 self.program.continuation_ident(name.string, name.span),
                                 self.ty(ty),
                             )
-                        }),
-                    ),
+                        })
+                        .collect(),
                 );
-                self.program.insert_type(ty, self.arena)
+                self.program.insert_type(ty)
             }
         }
     }
@@ -143,17 +129,17 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             .insert(ty.name().span, UserDefinedTyRef::new());
     }
 
-    fn ty_fields(&mut self, fields: &AstUserDefinedTyFields) -> UserDefinedTypeFields<'arena> {
+    fn ty_fields(&mut self, fields: &AstUserDefinedTyFields) -> UserDefinedTypeFields {
         match fields {
-            AstUserDefinedTyFields::Named(fields) => UserDefinedTypeFields::Named(collect_into(
-                Vec::new_in(self.arena),
+            AstUserDefinedTyFields::Named(fields) => UserDefinedTypeFields::Named(
                 fields
                     .iter()
-                    .map(|(ident, ty)| (ident.string.to_owned(), self.ty(ty))),
-            )),
-            AstUserDefinedTyFields::Anonymous(fields) => UserDefinedTypeFields::Anonymous(
-                collect_into(Vec::new_in(self.arena), fields.iter().map(|ty| self.ty(ty))),
+                    .map(|(ident, ty)| (ident.string.to_owned(), self.ty(ty)))
+                    .collect(),
             ),
+            AstUserDefinedTyFields::Anonymous(fields) => {
+                UserDefinedTypeFields::Anonymous(fields.iter().map(|ty| self.ty(ty)).collect())
+            }
             AstUserDefinedTyFields::Unit => UserDefinedTypeFields::Unit,
         }
     }
@@ -165,9 +151,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                 fields,
                 span: _,
             } => {
-                let ty = self
-                    .arena
-                    .alloc(UserDefinedType::Product(self.ty_fields(fields)));
+                let ty = Rc::new(UserDefinedType::Product(self.ty_fields(fields)));
                 self.program
                     .user_defined_types
                     .insert(self.user_defined_types[&name.span], ty);
@@ -177,15 +161,15 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                 variants,
                 span: _,
             } => {
-                let ty = UserDefinedType::Sum(collect_into(
-                    Vec::new_in(self.arena),
+                let ty = UserDefinedType::Sum(
                     variants
                         .iter()
-                        .map(|(name, fields)| (name.string.to_owned(), self.ty_fields(fields))),
-                ));
+                        .map(|(name, fields)| (name.string.to_owned(), self.ty_fields(fields)))
+                        .collect(),
+                );
                 self.program
                     .user_defined_types
-                    .insert(self.user_defined_types[&name.span], self.arena.alloc(ty));
+                    .insert(self.user_defined_types[&name.span], Rc::new(ty));
             }
         }
     }
@@ -226,7 +210,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             }));
     }
 
-    fn expr_literal(literal: &AstLiteral) -> Expr<'arena> {
+    fn expr_literal(literal: &AstLiteral) -> Expr {
         match *literal {
             AstLiteral::Int(value, _) => Expr::Literal(Literal::Int(value)),
             AstLiteral::Float(value, _) => Expr::Literal(Literal::Float(value)),
@@ -234,7 +218,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         }
     }
 
-    fn expr_path(&self, path: &AstPath) -> Expr<'arena> {
+    fn expr_path(&self, path: &AstPath) -> Expr {
         if let Some(ident) = path.as_ident() {
             if let Some(ident) = self.ident(ident) {
                 return Expr::Ident(ident);
@@ -244,22 +228,23 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         Expr::Function(self.resolve_fn_path(path).unwrap())
     }
 
-    fn expr_block(&mut self, exprs: &[AstExpr], tail: Option<&AstExpr>) -> Expr<'arena> {
-        let mut result =
-            Vec::with_capacity_in(exprs.len() + usize::from(tail.is_some()), self.arena);
-        result.extend(exprs.iter().chain(tail).map(|expr| self.expr(expr)));
+    fn expr_block(&mut self, exprs: &[AstExpr], tail: Option<&AstExpr>) -> Expr {
+        let exprs = exprs
+            .iter()
+            .chain(tail)
+            .map(|expr| self.expr(expr))
+            .collect();
         Expr::Block(ExprBlock {
-            exprs: result,
-            ty: self.program.insert_type(Type::Unknown, self.arena),
+            exprs,
+            ty: self.program.insert_type(Type::Unknown),
         })
     }
 
-    fn expr_tuple(&mut self, exprs: &[AstExpr]) -> Expr<'arena> {
-        let mut result = Vec::with_capacity_in(exprs.len(), self.arena);
-        result.extend(exprs.iter().map(|expr| self.expr(expr)));
+    fn expr_tuple(&mut self, exprs: &[AstExpr]) -> Expr {
+        let exprs = exprs.iter().map(|expr| self.expr(expr)).collect();
         Expr::Tuple(ExprTuple {
-            exprs: result,
-            ty: self.program.insert_type(Type::Unknown, self.arena),
+            exprs,
+            ty: self.program.insert_type(Type::Unknown),
         })
     }
 
@@ -271,31 +256,32 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         &mut self,
         path: &AstPath,
         fields: &[(AstIdent, Option<AstExpr>)],
-    ) -> Expr<'arena> {
+    ) -> Expr {
         let ty = self.resolve_ty_path(path).unwrap();
-        let mut result = Vec::with_capacity_in(fields.len(), self.arena);
-        result.extend(fields.iter().map(|(ident, expr)| {
-            (
-                ident.string.to_string(),
-                expr.as_ref()
-                    .map(|expr| self.expr(expr))
-                    .unwrap_or_else(|| Expr::Ident(self.ident(ident).unwrap())),
-            )
-        }));
+        let fields = fields
+            .iter()
+            .map(|(ident, expr)| {
+                (
+                    ident.string.to_string(),
+                    expr.as_ref()
+                        .map(|expr| self.expr(expr))
+                        .unwrap_or_else(|| Expr::Ident(self.ident(ident).unwrap())),
+                )
+            })
+            .collect();
         Expr::Constructor(ExprConstructor {
             ty,
             variant: None,
-            fields: ExprConstructorFields::Named(result),
+            fields: ExprConstructorFields::Named(fields),
         })
     }
 
-    fn expr_array(&mut self, exprs: &[AstExpr]) -> Expr<'arena> {
-        let mut result = Vec::with_capacity_in(exprs.len(), self.arena);
-        result.extend(exprs.iter().map(|expr| self.expr(expr)));
-        let ty_unknown = self.program.insert_type(Type::Unknown, self.arena);
+    fn expr_array(&mut self, exprs: &[AstExpr]) -> Expr {
+        let exprs = exprs.iter().map(|expr| self.expr(expr)).collect();
+        let ty_unknown = self.program.insert_type(Type::Unknown);
         Expr::Array(ExprArray {
-            exprs: result,
-            ty: ty_unknown,
+            exprs,
+            ty: Rc::clone(&ty_unknown),
             element_ty: ty_unknown,
         })
     }
@@ -304,7 +290,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         clippy::map_unwrap_or,
         reason = "required to satisfy the borrow checker"
     )]
-    fn pattern(&mut self, pattern: &AstPattern) -> Pattern<'arena> {
+    fn pattern(&mut self, pattern: &AstPattern) -> Pattern {
         match pattern {
             AstPattern::Wildcard(_) => Pattern::Wildcard,
             AstPattern::Ident(ident) => Pattern::Ident(self.ident(ident).unwrap()),
@@ -313,17 +299,19 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                 fields,
                 brace_span: _,
             } => {
-                let mut result = Vec::with_capacity_in(fields.len(), self.arena);
-                result.extend(fields.iter().map(|(ident, pat)| {
-                    (
-                        ident.string.to_string(),
-                        self.pattern(&pat.clone().unwrap_or(AstPattern::Ident(*ident))),
-                    )
-                }));
+                let fields = fields
+                    .iter()
+                    .map(|(ident, pat)| {
+                        (
+                            ident.string.to_string(),
+                            self.pattern(&pat.clone().unwrap_or(AstPattern::Ident(*ident))),
+                        )
+                    })
+                    .collect();
                 Pattern::Destructure {
                     ty: self.resolve_ty_path(ty).unwrap(),
                     variant: None,
-                    fields: DestructureFields::Named(result),
+                    fields: DestructureFields::Named(fields),
                 }
             }
             AstPattern::AnonymousDestructure {
@@ -331,62 +319,59 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
                 fields,
                 paren_span: _,
             } => {
-                let mut result = Vec::with_capacity_in(fields.len(), self.arena);
-                result.extend(fields.iter().map(|pat| self.pattern(pat)));
+                let fields = fields.iter().map(|pat| self.pattern(pat)).collect();
                 Pattern::Destructure {
                     ty: ty
                         .as_ref()
                         .map(|ty| self.resolve_ty_path(ty).unwrap())
-                        .unwrap_or_else(|| self.program.insert_type(Type::Unknown, self.arena)),
+                        .unwrap_or_else(|| self.program.insert_type(Type::Unknown)),
                     variant: None,
-                    fields: DestructureFields::Anonymous(result),
+                    fields: DestructureFields::Anonymous(fields),
                 }
             }
         }
     }
 
-    fn expr_match(&mut self, scrutinee: &AstExpr, arms: &[(AstPattern, AstExpr)]) -> Expr<'arena> {
+    fn expr_match(&mut self, scrutinee: &AstExpr, arms: &[(AstPattern, AstExpr)]) -> Expr {
         let scrutinee = self.expr(scrutinee);
-        let mut result = Vec::with_capacity_in(arms.len(), self.arena);
-        result.extend(
-            arms.iter()
-                .map(|(pat, expr)| (self.pattern(pat), self.expr(expr))),
-        );
-        let ty_unknown = self.program.insert_type(Type::Unknown, self.arena);
+        let arms = arms
+            .iter()
+            .map(|(pat, expr)| (self.pattern(pat), self.expr(expr)))
+            .collect();
+        let ty_unknown = self.program.insert_type(Type::Unknown);
         Expr::Match(ExprMatch {
-            scrutinee: Box::new_in(scrutinee, self.arena),
-            scrutinee_ty: ty_unknown,
+            scrutinee: Box::new(scrutinee),
+            scrutinee_ty: Rc::clone(&ty_unknown),
             ty: ty_unknown,
-            arms: result,
+            arms,
         })
     }
 
-    fn expr_get(&mut self, object: &AstExpr, field: &AstIdent) -> Expr<'arena> {
+    fn expr_get(&mut self, object: &AstExpr, field: &AstIdent) -> Expr {
         Expr::Get(ExprGet {
-            object: Box::new_in(self.expr(object), self.arena),
-            object_ty: self.program.insert_type(Type::Unknown, self.arena),
+            object: Box::new(self.expr(object)),
+            object_ty: self.program.insert_type(Type::Unknown),
             field: field.string.to_string(),
         })
     }
 
-    fn expr_set(&mut self, object: &AstExpr, field: &AstIdent, value: &AstExpr) -> Expr<'arena> {
-        let ty_unknown = self.program.insert_type(Type::Unknown, self.arena);
+    fn expr_set(&mut self, object: &AstExpr, field: &AstIdent, value: &AstExpr) -> Expr {
+        let ty_unknown = self.program.insert_type(Type::Unknown);
         Expr::Set(ExprSet {
-            object: Box::new_in(self.expr(object), self.arena),
-            object_ty: ty_unknown,
+            object: Box::new(self.expr(object)),
+            object_ty: Rc::clone(&ty_unknown),
             field: field.string.to_string(),
-            value: Box::new_in(self.expr(value), self.arena),
+            value: Box::new(self.expr(value)),
             value_ty: ty_unknown,
         })
     }
 
-    fn expr_call(&mut self, callee: &AstExpr, arguments: &[AstExpr]) -> Expr<'arena> {
-        let mut result = Vec::with_capacity_in(arguments.len(), self.arena);
-        result.extend(arguments.iter().map(|expr| self.expr(expr)));
+    fn expr_call(&mut self, callee: &AstExpr, arguments: &[AstExpr]) -> Expr {
+        let args = arguments.iter().map(|expr| self.expr(expr)).collect();
         Expr::Call(ExprCall {
-            callee: Box::new_in(self.expr(callee), self.arena),
-            callee_ty: self.program.insert_type(Type::Unknown, self.arena),
-            args: result,
+            callee: Box::new(self.expr(callee)),
+            callee_ty: self.program.insert_type(Type::Unknown),
+            args,
         })
     }
 
@@ -398,42 +383,39 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
         &mut self,
         callee: &AstExpr,
         arguments: &[(AstIdent, Option<AstExpr>)],
-    ) -> Expr<'arena> {
-        let mut continuations = Vec::with_capacity_in(arguments.len(), self.arena);
-        continuations.extend(arguments.iter().map(|(ident, expr)| {
-            (
-                self.ident(ident).unwrap(),
-                expr.as_ref()
-                    .map(|expr| self.expr(expr))
-                    .unwrap_or_else(|| Expr::Ident(self.ident(ident).unwrap())),
-            )
-        }));
+    ) -> Expr {
+        let continuations = arguments
+            .iter()
+            .map(|(ident, expr)| {
+                (
+                    self.ident(ident).unwrap(),
+                    expr.as_ref()
+                        .map(|expr| self.expr(expr))
+                        .unwrap_or_else(|| Expr::Ident(self.ident(ident).unwrap())),
+                )
+            })
+            .collect();
         Expr::ContApplication(ExprContApplication {
-            callee: Box::new_in(self.expr(callee), self.arena),
-            callee_ty: self.program.insert_type(Type::Unknown, self.arena),
+            callee: Box::new(self.expr(callee)),
+            callee_ty: self.program.insert_type(Type::Unknown),
             continuations,
-            result_ty: self.program.insert_type(Type::Unknown, self.arena),
+            result_ty: self.program.insert_type(Type::Unknown),
         })
     }
 
-    fn expr_unary(&mut self, operator: &AstUnaryOp, operand: &AstExpr) -> Expr<'arena> {
+    fn expr_unary(&mut self, operator: &AstUnaryOp, operand: &AstExpr) -> Expr {
         let op = match operator {
             AstUnaryOp::Neg(_) => UnaryOp::Neg,
             AstUnaryOp::Not(_) => UnaryOp::Not,
         };
         Expr::Unary(ExprUnary {
             op,
-            right: Box::new_in(self.expr(operand), self.arena),
-            right_ty: self.program.insert_type(Type::Unknown, self.arena),
+            right: Box::new(self.expr(operand)),
+            right_ty: self.program.insert_type(Type::Unknown),
         })
     }
 
-    fn expr_binary(
-        &mut self,
-        left: &AstExpr,
-        operator: &AstBinaryOp,
-        right: &AstExpr,
-    ) -> Expr<'arena> {
+    fn expr_binary(&mut self, left: &AstExpr, operator: &AstBinaryOp, right: &AstExpr) -> Expr {
         let op = match operator {
             AstBinaryOp::Add(_) => BinaryOp::Add,
             AstBinaryOp::Sub(_) => BinaryOp::Sub,
@@ -447,38 +429,33 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             AstBinaryOp::Gt(_) => BinaryOp::Gt,
             AstBinaryOp::Ge(_) => BinaryOp::Ge,
         };
-        let ty_unknown = self.program.insert_type(Type::Unknown, self.arena);
+        let ty_unknown = self.program.insert_type(Type::Unknown);
         Expr::Binary(ExprBinary {
-            left: Box::new_in(self.expr(left), self.arena),
-            left_ty: ty_unknown,
+            left: Box::new(self.expr(left)),
+            left_ty: Rc::clone(&ty_unknown),
             op,
-            right: Box::new_in(self.expr(right), self.arena),
+            right: Box::new(self.expr(right)),
             right_ty: ty_unknown,
         })
     }
 
-    fn expr_declare(
-        &mut self,
-        name: &AstIdent,
-        ty: Option<&AstType>,
-        value: &AstExpr,
-    ) -> Expr<'arena> {
-        let ty_unknown = self.program.insert_type(Type::Unknown, self.arena);
+    fn expr_declare(&mut self, name: &AstIdent, ty: Option<&AstType>, value: &AstExpr) -> Expr {
+        let ty_unknown = self.program.insert_type(Type::Unknown);
         Expr::Declare(ExprDeclare {
             ident: self.ident(name).unwrap(),
             ty: ty.map_or(ty_unknown, |ty| self.ty(ty)),
-            expr: Box::new_in(self.expr(value), self.arena),
+            expr: Box::new(self.expr(value)),
         })
     }
 
-    fn expr_assign(&mut self, name: &AstIdent, value: &AstExpr) -> Expr<'arena> {
+    fn expr_assign(&mut self, name: &AstIdent, value: &AstExpr) -> Expr {
         Expr::Assign(ExprAssign {
             ident: self.ident(name).unwrap(),
-            expr: Box::new_in(self.expr(value), self.arena),
+            expr: Box::new(self.expr(value)),
         })
     }
 
-    fn expr(&mut self, expr: &AstExpr) -> Expr<'arena> {
+    fn expr(&mut self, expr: &AstExpr) -> Expr {
         match expr {
             AstExpr::Literal(literal) => Self::expr_literal(literal),
             AstExpr::Path(path) => self.expr_path(path),
@@ -533,23 +510,19 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
 
     fn define_fn(&mut self, fun: &AstFunction) {
         let name = format!("{}::{}", self.program.name, fun.name.string);
-        let mut ir_fun = Function::new(name, self.arena);
+        let mut ir_fun = Function::new(name);
 
-        let mut params = Vec::with_capacity_in(fun.params.len(), self.arena);
-        params.extend(
-            fun.params
-                .iter()
-                .map(|(name, ty)| (self.ident(name).unwrap(), self.ty(ty))),
-        );
-        ir_fun.params = params;
+        ir_fun.params = fun
+            .params
+            .iter()
+            .map(|(name, ty)| (self.ident(name).unwrap(), self.ty(ty)))
+            .collect();
 
-        let mut continuations = HashMap::with_capacity_in(fun.continuations.len(), self.arena);
-        continuations.extend(
-            fun.continuations
-                .iter()
-                .map(|(name, ty)| (self.ident(name).unwrap(), self.ty(ty))),
-        );
-        ir_fun.continuations = continuations;
+        ir_fun.continuations = fun
+            .continuations
+            .iter()
+            .map(|(name, ty)| (self.ident(name).unwrap(), self.ty(ty)))
+            .collect();
 
         ir_fun
             .body
@@ -560,7 +533,7 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
             .insert(self.functions[&fun.name.span], ir_fun);
     }
 
-    fn lower(mut self) -> Program<'arena> {
+    fn lower(mut self) -> Program {
         for ty in self.ast.items.iter().filter_map(Item::as_user_defined_ty) {
             self.declare_ty(ty);
         }
@@ -581,11 +554,6 @@ impl<'a, 'arena> Lowerer<'a, 'arena> {
     }
 }
 
-pub fn lower<'arena>(
-    ast: &AstProgram,
-    names: NameMap,
-    program_name: String,
-    arena: &'arena Bump,
-) -> Program<'arena> {
-    Lowerer::new(program_name, arena, ast, names).lower()
+pub fn lower(ast: &AstProgram, names: NameMap, program_name: String) -> Program {
+    Lowerer::new(program_name, ast, names).lower()
 }

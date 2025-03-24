@@ -232,7 +232,6 @@ dependencies = [
  "continuate-error",
  "continuate-frontend",
  "continuate-ir",
- "continuate-utils",
  "tracing",
  "tracing-subscriber",
 ]
@@ -244,7 +243,6 @@ dependencies = [
  "bumpalo",
  "continuate-common",
  "continuate-ir",
- "continuate-utils",
  "cranelift",
  "cranelift-module",
  "cranelift-object",
@@ -286,7 +284,6 @@ dependencies = [
  "bumpalo",
  "continuate-error",
  "continuate-frontend",
- "continuate-utils",
  "itertools",
 ]
 
@@ -298,14 +295,6 @@ dependencies = [
  "nohash-hasher",
  "tracing",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "continuate-utils"
-version = "0.1.0"
-dependencies = [
- "bumpalo",
- "hashbrown 0.15.2",
 ]
 
 [[package]]

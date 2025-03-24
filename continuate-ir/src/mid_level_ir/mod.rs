@@ -13,156 +13,151 @@ use crate::common::UnaryOp;
 use crate::high_level_ir::Program as HirProgram;
 use crate::lib_std::StdLib;
 
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt;
 use std::hash;
-
-use bumpalo::Bump;
-
-use continuate_utils::collect_into;
-use continuate_utils::Box;
-use continuate_utils::HashMap;
-use continuate_utils::HashSet;
-use continuate_utils::Vec;
+use std::rc::Rc;
 
 use itertools::Itertools as _;
 
 #[derive(Debug, Clone)]
-pub enum Expr<'arena> {
+pub enum Expr {
     Literal(Literal),
     Ident(Ident),
     Function(FuncRef),
-    Tuple(ExprTuple<'arena>),
-    Constructor(ExprConstructor<'arena>),
-    Array(ExprArray<'arena>),
-    Get(ExprGet<'arena>),
-    Set(ExprSet<'arena>),
-    Call(ExprCall<'arena>),
-    ContApplication(ExprContApplication<'arena>),
-    Unary(ExprUnary<'arena>),
-    Binary(ExprBinary<'arena>),
-    Assign(ExprAssign<'arena>),
-    Switch(ExprSwitch<'arena>),
+    Tuple(ExprTuple),
+    Constructor(ExprConstructor),
+    Array(ExprArray),
+    Get(ExprGet),
+    Set(ExprSet),
+    Call(ExprCall),
+    ContApplication(ExprContApplication),
+    Unary(ExprUnary),
+    Binary(ExprBinary),
+    Assign(ExprAssign),
+    Switch(ExprSwitch),
     Goto(BlockId),
-    Closure(ExprClosure<'arena>),
-    Intrinsic(ExprIntrinsic<'arena>),
+    Closure(ExprClosure),
+    Intrinsic(ExprIntrinsic),
 }
 
-impl<'arena> Expr<'arena> {
-    pub fn unreachable(program: &mut Program<'arena>, arena: &'arena Bump) -> Expr<'arena> {
+impl Expr {
+    pub fn unreachable(program: &mut Program) -> Expr {
         Expr::Intrinsic(ExprIntrinsic {
             intrinsic: Intrinsic::Unreachable,
-            value: Box::new_in(Expr::Literal(Literal::Int(0)), arena),
-            value_ty: program.insert_type(Type::Int, arena),
+            value: Box::new(Expr::Literal(Literal::Int(0))),
+            value_ty: program.insert_type(Type::Int),
         })
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct ExprTuple<'arena> {
-    pub ty: &'arena Type<'arena>,
-    pub values: Vec<'arena, Expr<'arena>>,
+pub struct ExprTuple {
+    pub ty: Rc<Type>,
+    pub values: Vec<Expr>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ExprConstructor<'arena> {
-    pub ty: &'arena Type<'arena>,
+pub struct ExprConstructor {
+    pub ty: Rc<Type>,
     pub index: Option<usize>,
-    pub fields: Vec<'arena, Expr<'arena>>,
+    pub fields: Vec<Expr>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ExprArray<'arena> {
-    pub ty: &'arena Type<'arena>,
-    pub values: Vec<'arena, Expr<'arena>>,
-    pub value_ty: &'arena Type<'arena>,
+pub struct ExprArray {
+    pub ty: Rc<Type>,
+    pub values: Vec<Expr>,
+    pub value_ty: Rc<Type>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ExprGet<'arena> {
-    pub object: Box<'arena, Expr<'arena>>,
-    pub object_ty: &'arena Type<'arena>,
+pub struct ExprGet {
+    pub object: Box<Expr>,
+    pub object_ty: Rc<Type>,
     pub object_variant: Option<usize>,
     pub field: usize,
 }
 
 #[derive(Debug, Clone)]
-pub struct ExprSet<'arena> {
-    pub object: Box<'arena, Expr<'arena>>,
-    pub object_ty: &'arena Type<'arena>,
+pub struct ExprSet {
+    pub object: Box<Expr>,
+    pub object_ty: Rc<Type>,
     pub object_variant: Option<usize>,
     pub field: usize,
-    pub value: Box<'arena, Expr<'arena>>,
+    pub value: Box<Expr>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ExprCall<'arena> {
-    pub callee: Box<'arena, Expr<'arena>>,
-    pub callee_ty: &'arena FunctionTy<'arena>,
-    pub args: Vec<'arena, (Option<Ident>, Expr<'arena>)>,
+pub struct ExprCall {
+    pub callee: Box<Expr>,
+    pub callee_ty: Rc<Type>,
+    pub args: Vec<(Option<Ident>, Expr)>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ExprContApplication<'arena> {
-    pub callee: Box<'arena, Expr<'arena>>,
-    pub callee_ty: &'arena Type<'arena>,
-    pub continuations: Vec<'arena, (Ident, Expr<'arena>)>,
-    pub result_ty: &'arena Type<'arena>,
-    pub storage_ty: &'arena Type<'arena>,
+pub struct ExprContApplication {
+    pub callee: Box<Expr>,
+    pub callee_ty: Rc<Type>,
+    pub continuations: Vec<(Ident, Expr)>,
+    pub result_ty: Rc<Type>,
+    pub storage_ty: Rc<Type>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ExprUnary<'arena> {
+pub struct ExprUnary {
     pub operator: UnaryOp,
-    pub operand: Box<'arena, Expr<'arena>>,
-    pub operand_ty: &'arena Type<'arena>,
+    pub operand: Box<Expr>,
+    pub operand_ty: Rc<Type>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ExprBinary<'arena> {
-    pub left: Box<'arena, Expr<'arena>>,
-    pub left_ty: &'arena Type<'arena>,
+pub struct ExprBinary {
+    pub left: Box<Expr>,
+    pub left_ty: Rc<Type>,
     pub operator: BinaryOp,
-    pub right: Box<'arena, Expr<'arena>>,
-    pub right_ty: &'arena Type<'arena>,
+    pub right: Box<Expr>,
+    pub right_ty: Rc<Type>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ExprAssign<'arena> {
+pub struct ExprAssign {
     pub ident: Ident,
-    pub expr: Box<'arena, Expr<'arena>>,
+    pub expr: Box<Expr>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ExprSwitch<'arena> {
-    pub scrutinee: Box<'arena, Expr<'arena>>,
-    pub arms: HashMap<'arena, i64, BlockId>,
+pub struct ExprSwitch {
+    pub scrutinee: Box<Expr>,
+    pub arms: HashMap<i64, BlockId>,
     pub otherwise: BlockId,
 }
 
 #[derive(Debug, Clone)]
-pub struct ExprClosure<'arena> {
+pub struct ExprClosure {
     pub func_ref: FuncRef,
-    pub captures: Vec<'arena, Ident>,
-    pub storage_ty: &'arena Type<'arena>,
+    pub captures: Vec<Ident>,
+    pub storage_ty: Rc<Type>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ExprIntrinsic<'arena> {
+pub struct ExprIntrinsic {
     pub intrinsic: Intrinsic,
-    pub value: Box<'arena, Expr<'arena>>,
-    pub value_ty: &'arena Type<'arena>,
+    pub value: Box<Expr>,
+    pub value_ty: Rc<Type>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct FunctionTy<'arena> {
-    pub params: Vec<'arena, &'arena Type<'arena>>,
-    pub continuations: HashMap<'arena, Ident, &'arena Type<'arena>>,
+pub struct FunctionTy {
+    pub params: Vec<Rc<Type>>,
+    pub continuations: HashMap<Ident, Rc<Type>>,
 }
 
-impl hash::Hash for FunctionTy<'_> {
+impl hash::Hash for FunctionTy {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
         self.params.hash(state);
-        for (&name, &ty) in self
+        for (&name, ty) in self
             .continuations
             .iter()
             .sorted_unstable_by_key(|(&ident, _)| ident)
@@ -173,24 +168,21 @@ impl hash::Hash for FunctionTy<'_> {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub enum Type<'arena> {
+pub enum Type {
     Bool,
     Int,
     Float,
     String,
-    Array(&'arena Type<'arena>, u64),
-    Tuple(Vec<'arena, &'arena Type<'arena>>),
-    Function(FunctionTy<'arena>),
-    UserDefined(UserDefinedType<'arena>),
+    Array(Rc<Type>, u64),
+    Tuple(Vec<Rc<Type>>),
+    Function(FunctionTy),
+    UserDefined(UserDefinedType),
     Unknown,
     None,
 }
 
-impl<'arena> Type<'arena> {
-    pub const fn function(
-        params: Vec<'arena, &'arena Type<'arena>>,
-        continuations: HashMap<'arena, Ident, &'arena Type<'arena>>,
-    ) -> Type<'arena> {
+impl Type {
+    pub const fn function(params: Vec<Rc<Type>>, continuations: HashMap<Ident, Rc<Type>>) -> Type {
         Type::Function(FunctionTy {
             params,
             continuations,
@@ -213,36 +205,34 @@ impl<'arena> Type<'arena> {
         }
     }
 
-    pub(crate) fn field(
-        &'arena self,
-        variant: Option<usize>,
-        field: usize,
-    ) -> Option<&'arena Type<'arena>> {
+    pub(crate) fn field(&self, variant: Option<usize>, field: usize) -> Option<Rc<Type>> {
         let user_defined = self.as_user_defined()?;
-        match (variant, &user_defined.constructor) {
-            (None, TypeConstructor::Product(fields)) => fields.get(field).copied(),
-            (Some(variant), TypeConstructor::Sum(variants)) => {
-                variants.get(variant)?.get(field).copied()
+        match (variant, &user_defined) {
+            (None, UserDefinedType::Product(fields)) => fields.get(field).cloned(),
+            (Some(variant), UserDefinedType::Sum(variants)) => {
+                variants.get(variant)?.get(field).cloned()
             }
             _ => None,
         }
     }
+
+    pub const fn is_primitive(&self) -> bool {
+        matches!(
+            self,
+            Type::Bool | Type::Int | Type::Float | Type::String | Type::Function(_)
+        )
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct UserDefinedType<'arena> {
-    pub constructor: TypeConstructor<'arena>,
+pub enum UserDefinedType {
+    Product(Vec<Rc<Type>>),
+    Sum(Vec<Vec<Rc<Type>>>),
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
-pub enum TypeConstructor<'arena> {
-    Product(Vec<'arena, &'arena Type<'arena>>),
-    Sum(Vec<'arena, Vec<'arena, &'arena Type<'arena>>>),
-}
-
-impl<'arena> TypeConstructor<'arena> {
-    pub const fn as_sum(&self) -> Option<&Vec<'arena, Vec<'arena, &'arena Type<'arena>>>> {
-        if let TypeConstructor::Sum(variants) = self {
+impl UserDefinedType {
+    pub const fn as_sum(&self) -> Option<&Vec<Vec<Rc<Type>>>> {
+        if let UserDefinedType::Sum(variants) = self {
             Some(variants)
         } else {
             None
@@ -259,50 +249,48 @@ impl fmt::Debug for BlockId {
     }
 }
 
-#[derive(Debug)]
-pub struct Block<'arena> {
-    pub exprs: Vec<'arena, Expr<'arena>>,
+#[derive(Debug, Clone, Default)]
+pub struct Block {
+    pub exprs: Vec<Expr>,
 }
 
-impl<'arena> Block<'arena> {
-    pub const fn new(arena: &'arena Bump) -> Block<'arena> {
-        Block {
-            exprs: Vec::new_in(arena),
-        }
+impl Block {
+    pub const fn new() -> Block {
+        Block { exprs: Vec::new() }
     }
 }
 
 #[derive(Debug)]
-pub struct ClosureCaptures<'arena> {
-    pub captures: Vec<'arena, Ident>,
-    pub storage_ty: &'arena Type<'arena>,
+pub struct ClosureCaptures {
+    pub captures: Vec<Ident>,
+    pub storage_ty: Rc<Type>,
 }
 
 #[derive(Debug)]
-pub struct Function<'arena> {
-    pub params: Vec<'arena, (Ident, &'arena Type<'arena>)>,
-    pub continuations: HashMap<'arena, Ident, &'arena Type<'arena>>,
-    pub declarations: HashMap<'arena, Ident, (&'arena Type<'arena>, Option<Literal>)>,
-    pub blocks: HashMap<'arena, BlockId, Block<'arena>>,
-    pub captures: Option<ClosureCaptures<'arena>>,
+pub struct Function {
+    pub params: Vec<(Ident, Rc<Type>)>,
+    pub continuations: HashMap<Ident, Rc<Type>>,
+    pub declarations: HashMap<Ident, (Rc<Type>, Option<Literal>)>,
+    pub blocks: HashMap<BlockId, Block>,
+    pub captures: Option<ClosureCaptures>,
     next_block: u64,
     pub name: String,
 }
 
-impl<'arena> Function<'arena> {
-    pub fn new(name: String, arena: &'arena Bump) -> Function<'arena> {
+impl Function {
+    pub fn new(name: String) -> Function {
         Function {
-            params: Vec::new_in(arena),
-            continuations: HashMap::new_in(arena),
-            declarations: HashMap::new_in(arena),
-            blocks: HashMap::new_in(arena),
+            params: Vec::new(),
+            continuations: HashMap::new(),
+            declarations: HashMap::new(),
+            blocks: HashMap::new(),
             captures: None,
             next_block: 1,
             name,
         }
     }
 
-    pub fn type_of_var(&self, var: Ident) -> Option<&'arena Type<'arena>> {
+    pub fn type_of_var(&self, var: Ident) -> Option<&Rc<Type>> {
         self.continuations
             .get(&var)
             .or_else(|| self.declarations.get(&var).map(|(ty, _)| ty))
@@ -312,12 +300,11 @@ impl<'arena> Function<'arena> {
                     .find(|&&(ident, _)| ident == var)
                     .map(|(_, var)| var)
             })
-            .copied()
     }
 
-    pub fn ty(&self, arena: &'arena Bump) -> FunctionTy {
+    pub fn ty(&self) -> FunctionTy {
         FunctionTy {
-            params: collect_into(Vec::new_in(arena), self.params.iter().map(|&(_, ty)| ty)),
+            params: self.params.iter().map(|(_, ty)| Rc::clone(ty)).collect(),
             continuations: self.continuations.clone(),
         }
     }
@@ -334,38 +321,32 @@ impl<'arena> Function<'arena> {
 }
 
 #[derive(Debug)]
-pub struct Program<'arena> {
-    pub functions: HashMap<'arena, FuncRef, Function<'arena>>,
-    pub signatures: HashMap<'arena, FuncRef, &'arena Type<'arena>>,
-    pub types: HashSet<'arena, &'arena Type<'arena>>,
+pub struct Program {
+    pub functions: HashMap<FuncRef, Function>,
+    pub signatures: HashMap<FuncRef, Rc<Type>>,
+    pub types: HashSet<Rc<Type>>,
     pub lib_std: StdLib,
     pub name: String,
 }
 
-impl<'arena> Program<'arena> {
-    pub fn new(program: &HirProgram, arena: &'arena Bump) -> Program<'arena> {
+impl Program {
+    pub fn new(program: &HirProgram) -> Program {
         Program {
-            functions: HashMap::new_in(arena),
-            signatures: HashMap::new_in(arena),
-            types: HashSet::new_in(arena),
+            functions: HashMap::new(),
+            signatures: HashMap::new(),
+            types: HashSet::new(),
             lib_std: *program.lib_std(),
             name: program.name.clone(),
         }
     }
 
-    pub fn insert_type(&mut self, ty: Type<'arena>, arena: &'arena Bump) -> &'arena Type<'arena> {
+    pub fn insert_type(&mut self, ty: Type) -> Rc<Type> {
         if let Some(ty) = self.types.get(&ty) {
-            ty
+            Rc::clone(ty)
         } else {
-            let ty = arena.alloc(ty);
-            self.types.insert(ty);
+            let ty = Rc::new(ty);
+            self.types.insert(Rc::clone(&ty));
             ty
         }
-    }
-
-    #[allow(clippy::missing_panics_doc)]
-    pub fn is_primitive(&self, ty: &'arena Type<'arena>) -> bool {
-        [Type::Bool, Type::Int, Type::Float, Type::String].contains(ty)
-            || ty.as_function().is_some()
     }
 }

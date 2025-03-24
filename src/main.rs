@@ -1,11 +1,7 @@
-#![feature(allocator_api)]
-
 use std::fs;
 use std::path::PathBuf;
 use std::process;
 use std::process::Stdio;
-
-use bumpalo::Bump;
 
 use clap::Parser;
 
@@ -93,23 +89,17 @@ fn main() {
 
     let name_map = continuate_frontend::resolve_names(&ast);
 
-    let hir_arena = Bump::new();
-    let mut program = continuate_ir::high_level_ir::lower(&ast, name_map, program_name, &hir_arena);
+    let mut program = continuate_ir::high_level_ir::lower(&ast, name_map, program_name);
 
-    typeck(&hir_arena, &mut program).unwrap();
+    typeck(&mut program).unwrap();
 
-    let mir_arena = Bump::new();
-
-    let mut mir_program = mid_level_ir::lower(&program, &mir_arena);
+    let mut mir_program = mid_level_ir::lower(&program);
 
     drop(program);
-    drop(hir_arena);
 
     continuate_ir::mid_level_ir::run_passes(&mut mir_program, true);
 
     let object = continuate_backend::compile(mir_program, true);
-
-    drop(mir_arena);
 
     let object = object.emit().unwrap();
     fs::create_dir_all("./out").unwrap();

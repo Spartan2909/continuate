@@ -6,8 +6,10 @@ use function::FunctionRuntime;
 mod linked_list;
 use linked_list::LinkedList;
 
+use std::collections::HashMap;
 use std::fmt;
 use std::mem;
+use std::rc::Rc;
 
 use bumpalo::Bump;
 
@@ -16,15 +18,11 @@ use continuate_ir::mid_level_ir::Function as MirFunction;
 use continuate_ir::mid_level_ir::FunctionTy;
 use continuate_ir::mid_level_ir::Program;
 use continuate_ir::mid_level_ir::Type as MirType;
-use continuate_ir::mid_level_ir::TypeConstructor;
 use continuate_ir::mid_level_ir::UserDefinedType;
 
 use continuate_common::SingleLayout;
 use continuate_common::Slice;
 use continuate_common::TyLayout;
-
-use continuate_utils::collect_into;
-use continuate_utils::HashMap;
 
 use cranelift::codegen::ir::entities::Value;
 use cranelift::codegen::ir::types;
@@ -269,7 +267,6 @@ fn signature_from_function_ty(function_ty: &FunctionTy, triple: &Triple) -> Sign
         function_ty
             .params
             .iter()
-            .copied()
             .map(|param_ty| AbiParam::new(ty_for(param_ty, triple))),
     );
     signature.params.extend(
@@ -277,31 +274,27 @@ fn signature_from_function_ty(function_ty: &FunctionTy, triple: &Triple) -> Sign
             .continuations
             .iter()
             .sorted_by_key(|&(&param, _)| param)
-            .map(|(_, &param_ty)| AbiParam::new(ty_for(param_ty, triple))),
+            .map(|(_, param_ty)| AbiParam::new(ty_for(param_ty, triple))),
     );
     signature.returns.push(AbiParam::new(types::I64));
     signature
 }
 
-struct Compiler<'arena, 'a, M: ?Sized> {
-    program: Program<'a>,
+struct Compiler<'arena, M: ?Sized> {
+    program: Program,
     contexts: LinkedList<Context>,
     data_description: DataDescription,
     triple: Triple,
     runtime: Runtime,
-    functions: HashMap<'arena, FuncRef, (FuncId, Signature)>,
-    ty_layouts: HashMap<'arena, &'a MirType<'a>, (&'arena TyLayout<'arena>, DataId)>,
+    functions: HashMap<FuncRef, (FuncId, Signature)>,
+    ty_layouts: HashMap<Rc<MirType>, (&'arena TyLayout<'arena>, DataId)>,
     arena: &'arena &'arena Bump,
     builder_contexts: LinkedList<FunctionBuilderContext>,
     module: M,
 }
 
-impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
-    fn new(
-        program: Program<'a>,
-        mut module: M,
-        arena: &'arena &'arena Bump,
-    ) -> Compiler<'arena, 'a, M> {
+impl<'arena, M: Module> Compiler<'arena, M> {
+    fn new(program: Program, mut module: M, arena: &'arena &'arena Bump) -> Compiler<'arena, M> {
         let triple = module.isa().triple().clone();
         let runtime = Runtime::new(&mut module);
         Compiler {
@@ -311,15 +304,15 @@ impl<'arena, 'a, M: Module> Compiler<'arena, 'a, M> {
             data_description: DataDescription::new(),
             triple,
             runtime,
-            functions: HashMap::new_in(arena),
-            ty_layouts: HashMap::new_in(arena),
+            functions: HashMap::new(),
+            ty_layouts: HashMap::new(),
             arena,
             builder_contexts: LinkedList::new(FunctionBuilderContext::new),
         }
     }
 }
 
-impl<'arena: 'a, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
+impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
     #[tracing::instrument(skip(self))]
     fn c_int_ty(&self) -> Type {
         Type::int(self.triple.data_model().unwrap().int_size().bits().into()).unwrap()
@@ -333,12 +326,12 @@ impl<'arena: 'a, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
         let params: Vec<_> = mir_function
             .params
             .iter()
-            .copied()
+            .cloned()
             .chain(
                 mir_function
                     .continuations
                     .iter()
-                    .map(|(&param, &param_ty)| (param, param_ty))
+                    .map(|(&param, param_ty)| (param, Rc::clone(param_ty)))
                     .sorted_by_key(|&(param, _)| param),
             )
             .collect();
@@ -350,13 +343,11 @@ impl<'arena: 'a, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
         let mut func_ctx = self.builder_contexts.get();
         let mut builder = FunctionBuilder::new(&mut function, &mut func_ctx);
 
-        let block_map: HashMap<_, _> = collect_into(
-            HashMap::new_in(self.arena),
-            mir_function
-                .blocks
-                .keys()
-                .map(|&id| (id, builder.create_block())),
-        );
+        let block_map: HashMap<_, _> = mir_function
+            .blocks
+            .keys()
+            .map(|&id| (id, builder.create_block()))
+            .collect();
 
         let function_runtime = FunctionRuntime {
             alloc_gc: self
@@ -374,7 +365,6 @@ impl<'arena: 'a, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
         };
 
         let function_compiler = FunctionCompiler {
-            program: &self.program,
             module: &mut self.module,
             data_description: &mut self.data_description,
             triple: &self.triple,
@@ -387,9 +377,9 @@ impl<'arena: 'a, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
             function_runtime,
             contexts: &self.contexts,
             builder_contexts: &self.builder_contexts,
-            vars: HashMap::new_in(self.arena),
+            vars: HashMap::new(),
             temp_roots: Vec::new(),
-            variables: HashMap::new_in(self.arena),
+            variables: HashMap::new(),
         };
 
         function_compiler.compile();
@@ -413,7 +403,7 @@ impl<'arena: 'a, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
         pretty_unwrap(self.module.define_function(func_id, &mut context));
     }
 
-    fn compound_ty_layout(&self, types: &[&[&MirType]]) -> SingleLayout<'arena> {
+    fn compound_ty_layout(&self, types: &[&[Rc<MirType>]]) -> SingleLayout<'arena> {
         let mut size = 0;
         let mut align = 1;
         let mut field_locations = Vec::with_capacity(types.len());
@@ -569,14 +559,14 @@ impl<'arena: 'a, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
         }
     }
 
-    fn calc_ty_layout(&mut self, ty: &'a MirType<'a>) {
+    fn calc_ty_layout(&mut self, ty: Rc<MirType>) {
         let layout: TyLayout<'arena> = match *ty {
             MirType::Bool => SingleLayout::primitive(1, 1).into(),
             MirType::Int | MirType::Float | MirType::Function(_) => {
                 SingleLayout::primitive(8, 8).into()
             }
             MirType::String => TyLayout::String,
-            MirType::Array(elem_ty, len) => {
+            MirType::Array(ref elem_ty, len) => {
                 let (elem_size, elem_align, ptr) = ty_ref_size_align_ptr(elem_ty);
                 let field_locations: Vec<_> =
                     (0..elem_size * len).step_by(elem_size as usize).collect();
@@ -594,15 +584,13 @@ impl<'arena: 'a, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
                 .into()
             }
             MirType::Tuple(ref types)
-            | MirType::UserDefined(UserDefinedType {
-                constructor: TypeConstructor::Product(ref types),
-            }) => self.compound_ty_layout(&[types]).into(),
-            MirType::UserDefined(UserDefinedType {
-                constructor: TypeConstructor::Sum(ref variants),
-            }) => {
+            | MirType::UserDefined(UserDefinedType::Product(ref types)) => {
+                self.compound_ty_layout(&[types]).into()
+            }
+            MirType::UserDefined(UserDefinedType::Sum(ref variants)) => {
                 let layouts: Vec<_> = variants
                     .iter()
-                    .map(|types| self.compound_ty_layout(&[&[&MirType::Int], types]))
+                    .map(|types| self.compound_ty_layout(&[&[Rc::new(MirType::Int)], types]))
                     .collect();
                 let size = layouts.iter().fold(8, |size, layout| size.max(layout.size));
                 let align = layouts
@@ -625,7 +613,7 @@ impl<'arena: 'a, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
     }
 
     fn calc_ty_layouts(&mut self) {
-        let types: Vec<_> = self.program.types.iter().copied().collect();
+        let types: Vec<_> = self.program.types.iter().cloned().collect();
         for ty in types {
             self.calc_ty_layout(ty);
         }
@@ -633,8 +621,7 @@ impl<'arena: 'a, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
 
     fn declare_functions(&mut self) {
         for (&func_ref, function) in &self.program.functions {
-            let function_ty = self.program.signatures[&func_ref];
-            let function_ty = function_ty.as_function().unwrap();
+            let function_ty = self.program.signatures[&func_ref].as_function().unwrap();
             let sig = signature_from_function_ty(function_ty, &self.triple);
 
             let id = pretty_unwrap(self.module.declare_function(
@@ -651,14 +638,14 @@ impl<'arena: 'a, 'a, M: Module + ?Sized> Compiler<'arena, 'a, M> {
 
         self.declare_functions();
 
-        let functions = mem::replace(&mut self.program.functions, HashMap::new_in(self.arena));
+        let functions = mem::take(&mut self.program.functions);
         for (func_ref, function) in functions {
             self.function(&function, func_ref);
         }
     }
 }
 
-impl<'arena: 'a, 'a> Compiler<'arena, 'a, ObjectModule> {
+impl Compiler<'_, ObjectModule> {
     fn compile_library(mut self) -> ObjectProduct {
         self.compile_module();
 

@@ -9,7 +9,6 @@ rust-version.workspace = true
 bumpalo.workspace = true
 continuate-error.workspace = true
 continuate-frontend.workspace = true
-continuate-utils.workspace = true
 itertools.workspace = true
 
 [lints]
