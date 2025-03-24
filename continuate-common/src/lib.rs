@@ -1,5 +1,3 @@
-#![feature(allocator_api)]
-#![feature(non_null_from_ref)]
 #![warn(clippy::missing_inline_in_public_items)]
 
 use std::error::Error;
@@ -9,12 +7,14 @@ use tracing_subscriber::filter::LevelFilter;
 
 #[allow(unsafe_code)]
 mod slice {
-    use std::alloc::Allocator;
+    use std::alloc;
+    use std::alloc::handle_alloc_error;
     use std::alloc::Layout;
     use std::fmt;
     use std::marker::PhantomData;
     use std::mem;
     use std::ops;
+    use std::ptr;
     use std::ptr::NonNull;
     use std::slice;
 
@@ -33,8 +33,10 @@ mod slice {
     impl<'a, T> Slice<'a, T> {
         #[inline]
         pub const fn new(slice: &'a [T]) -> Slice<'a, T> {
+            // SAFETY: The pointer is derived from a reference, and so must be non-null.
+            let ptr = unsafe { NonNull::new_unchecked(ptr::from_ref(slice).cast_mut()) };
             Slice {
-                ptr: NonNull::from_ref(slice).cast(),
+                ptr: ptr.cast(),
                 len: slice.len(),
                 _marker: PhantomData,
             }
@@ -90,13 +92,20 @@ mod slice {
 
         #[allow(clippy::missing_panics_doc)]
         #[inline]
-        pub fn allocate_slice<'b, A: Allocator + 'b>(slice: &[T], alloc: &'b A) -> Slice<'b, T>
+        pub fn allocate_slice<'b>(slice: &[T]) -> Slice<'b, T>
         where
             T: Copy + 'b,
         {
+            if slice.is_empty() {
+                return Slice::new(&[]);
+            }
+
             let layout = Layout::array::<T>(slice.len()).unwrap();
-            let ptr = alloc.allocate(layout).unwrap();
-            let ptr: *mut T = ptr.as_ptr().cast();
+            // SAFETY: `slice.len()` is greater than 0.
+            let ptr: *mut T = unsafe { alloc::alloc(layout).cast() };
+            if ptr.is_null() {
+                handle_alloc_error(layout);
+            }
             // SAFETY: `ptr` was just allocated, and `slice` is still valid.
             unsafe { ptr.copy_from_nonoverlapping(slice.as_ptr(), slice.len()) }
             // SAFETY: `ptr` has just been initialised with a slice.

@@ -280,6 +280,32 @@ fn signature_from_function_ty(function_ty: &FunctionTy, triple: &Triple) -> Sign
     signature
 }
 
+fn compound_ty_layout(types: &[&[Rc<MirType>]]) -> SingleLayout<'static> {
+    let mut size = 0;
+    let mut align = 1;
+    let mut field_locations = Vec::with_capacity(types.len());
+    let mut gc_pointer_locations = Vec::with_capacity(types.len());
+    for ty in types.iter().copied().flatten() {
+        let (field_size, field_align, ptr) = ty_ref_size_align_ptr(ty);
+        let misalignment = size % field_align;
+        if misalignment != 0 {
+            size += field_align - misalignment;
+        }
+        field_locations.push(size);
+        if ptr {
+            gc_pointer_locations.push(size);
+        }
+        size += field_size;
+        align = align.max(field_align);
+    }
+    SingleLayout {
+        size,
+        align,
+        field_locations: Slice::allocate_slice(&field_locations),
+        gc_pointer_locations: Slice::allocate_slice(&gc_pointer_locations),
+    }
+}
+
 struct Compiler<'arena, M: ?Sized> {
     program: Program,
     contexts: LinkedList<Context>,
@@ -401,32 +427,6 @@ impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
         context.want_disasm = cfg!(debug_assertions);
         context.func = function;
         pretty_unwrap(self.module.define_function(func_id, &mut context));
-    }
-
-    fn compound_ty_layout(&self, types: &[&[Rc<MirType>]]) -> SingleLayout<'arena> {
-        let mut size = 0;
-        let mut align = 1;
-        let mut field_locations = Vec::with_capacity(types.len());
-        let mut gc_pointer_locations = Vec::with_capacity(types.len());
-        for ty in types.iter().copied().flatten() {
-            let (field_size, field_align, ptr) = ty_ref_size_align_ptr(ty);
-            let misalignment = size % field_align;
-            if misalignment != 0 {
-                size += field_align - misalignment;
-            }
-            field_locations.push(size);
-            if ptr {
-                gc_pointer_locations.push(size);
-            }
-            size += field_size;
-            align = align.max(field_align);
-        }
-        SingleLayout {
-            size,
-            align,
-            field_locations: Slice::allocate_slice(&field_locations, self.arena),
-            gc_pointer_locations: Slice::allocate_slice(&gc_pointer_locations, self.arena),
-        }
     }
 
     fn append_single_layout_global(
@@ -570,7 +570,7 @@ impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
                 let (elem_size, elem_align, ptr) = ty_ref_size_align_ptr(elem_ty);
                 let field_locations: Vec<_> =
                     (0..elem_size * len).step_by(elem_size as usize).collect();
-                let field_locations = Slice::allocate_slice(&field_locations, self.arena);
+                let field_locations = Slice::allocate_slice(&field_locations);
                 SingleLayout {
                     size: elem_align * len,
                     align: elem_align,
@@ -585,12 +585,12 @@ impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
             }
             MirType::Tuple(ref types)
             | MirType::UserDefined(UserDefinedType::Product(ref types)) => {
-                self.compound_ty_layout(&[types]).into()
+                compound_ty_layout(&[types]).into()
             }
             MirType::UserDefined(UserDefinedType::Sum(ref variants)) => {
                 let layouts: Vec<_> = variants
                     .iter()
-                    .map(|types| self.compound_ty_layout(&[&[Rc::new(MirType::Int)], types]))
+                    .map(|types| compound_ty_layout(&[&[Rc::new(MirType::Int)], types]))
                     .collect();
                 let size = layouts.iter().fold(8, |size, layout| size.max(layout.size));
                 let align = layouts
@@ -598,7 +598,7 @@ impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
                     .fold(1, |align, layout| align.max(layout.align));
 
                 TyLayout::Sum {
-                    layouts: Slice::allocate_slice(&layouts, self.arena),
+                    layouts: Slice::allocate_slice(&layouts),
                     size,
                     align,
                 }
