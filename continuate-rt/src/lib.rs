@@ -1,4 +1,3 @@
-#![feature(allocator_api)]
 #![allow(unsafe_code)]
 
 mod garbage_collector;

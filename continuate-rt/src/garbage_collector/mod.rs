@@ -1,6 +1,5 @@
+use std::alloc;
 use std::alloc::handle_alloc_error;
-use std::alloc::Allocator;
-use std::alloc::Global;
 use std::alloc::Layout;
 use std::borrow::Borrow;
 use std::ffi::c_char;
@@ -110,12 +109,11 @@ unsafe impl<T> Send for HashableGcValue<T> {}
 
 impl<T> nohash_hasher::IsEnabled for HashableGcValue<T> {}
 
-struct GarbageCollector<A: ?Sized> {
+struct GarbageCollector {
     values: Option<NonNull<GcValue<()>>>,
     roots: IntSet<HashableGcValue<()>>,
     bytes_allocated: usize,
     next_gc: usize,
-    allocator: A,
 }
 
 /// ## Safety
@@ -167,7 +165,7 @@ unsafe fn mark_object(value: *mut GcValue<()>) {
     }
 }
 
-impl<A: Allocator + ?Sized> GarbageCollector<A> {
+impl GarbageCollector {
     const HEAP_GROW_FACTOR: usize = 2;
 
     /// ## Safety
@@ -203,7 +201,7 @@ impl<A: Allocator + ?Sized> GarbageCollector<A> {
                 let layout = Layout::from_size_align(size, align as usize).unwrap();
                 // SAFETY: `object` was allocated with `Global` with `layout`.
                 unsafe {
-                    self.allocator.deallocate(object.cast(), layout);
+                    alloc::dealloc(object.cast().as_ptr(), layout);
                 }
                 self.bytes_allocated -= size;
             }
@@ -221,7 +219,7 @@ impl<A: Allocator + ?Sized> GarbageCollector<A> {
                 let layout = Layout::from_size_align(size, mem::align_of::<GcValue<()>>()).unwrap();
                 // SAFETY: `object` was allocated with `Global` with `layout`.
                 unsafe {
-                    self.allocator.deallocate(object.cast(), layout);
+                    alloc::dealloc(object.cast().as_ptr(), layout);
                 }
                 self.bytes_allocated -= size;
             }
@@ -330,14 +328,13 @@ impl<A: Allocator + ?Sized> GarbageCollector<A> {
 }
 
 // SAFETY: Every pointer in a `GarbageCollector` is owned by that collector.
-unsafe impl<A: Send + ?Sized> Send for GarbageCollector<A> {}
+unsafe impl Send for GarbageCollector {}
 
-static GARBAGE_COLLECTOR: Mutex<GarbageCollector<Global>> = Mutex::new(GarbageCollector {
+static GARBAGE_COLLECTOR: Mutex<GarbageCollector> = Mutex::new(GarbageCollector {
     values: None,
     roots: IntSet::with_hasher(BuildHasherDefault::new()),
     bytes_allocated: 0,
     next_gc: 1024 * 1024,
-    allocator: Global,
 });
 
 /// ## Safety
@@ -366,10 +363,11 @@ pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull
 
     // SAFETY: Must be ensured by caller.
     let mem_layout = unsafe { Layout::from_size_align_unchecked(size, align) };
-    let ptr: NonNull<[u8]> = gc
-        .allocator
-        .allocate_zeroed(mem_layout)
-        .unwrap_or_else(|_| handle_alloc_error(mem_layout));
+    // SAFETY: `GcValue`s are not zero-sized.
+    let ptr: NonNull<GcValue<()>> = unsafe {
+        NonNull::new(alloc::alloc_zeroed(mem_layout).cast())
+            .unwrap_or_else(|| handle_alloc_error(mem_layout))
+    };
 
     let ptr: NonNull<GcValue<()>> = ptr.cast();
     let layout_ptr: *mut &TyLayout = ptr.as_ptr().cast();
@@ -452,11 +450,11 @@ pub extern "C" fn alloc_string(len: usize) -> NonNull<()> {
 
     let mut gc = GARBAGE_COLLECTOR.lock().unwrap();
 
-    let ptr: NonNull<GcValue<()>> = gc
-        .allocator
-        .allocate(mem_layout)
-        .unwrap_or_else(|_| handle_alloc_error(mem_layout))
-        .cast();
+    // SAFETY: `GcValue`s are not zero-sized.
+    let ptr: NonNull<GcValue<()>> = unsafe {
+        NonNull::new(alloc::alloc_zeroed(mem_layout).cast())
+            .unwrap_or_else(|| handle_alloc_error(mem_layout))
+    };
     let layout_ptr: NonNull<&TyLayout> = ptr.cast();
     // SAFETY: `ptr` has just been allocated with enough space for a `usize`.
     unsafe {
