@@ -6,7 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-bumpalo.workspace = true
 clap = { version = "4.5.31", features = ["derive"] }
 continuate-backend.workspace = true 
 continuate-common.workspace = true
@@ -36,8 +35,7 @@ license = "MIT OR Apache-2.0"
 rust-version = "1.85"
 
 [workspace.dependencies]
-bumpalo = { version = "3.17.0", default-features = false, features = ["allocator_api"] }
-chumsky = { version = "1.0.0-alpha.8", features = ["nightly"] }
+chumsky = { version = "1.0.0-alpha.8" }
 continuate-backend = { version = "0.1.0", path = "./continuate-backend" }
 continuate-common = { version = "0.1.0", path = "./continuate-common" }
 continuate-error = { version = "0.1.0", path = "./continuate-error" }

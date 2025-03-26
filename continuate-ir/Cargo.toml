@@ -6,7 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-bumpalo.workspace = true
 continuate-error.workspace = true
 continuate-frontend.workspace = true
 itertools.workspace = true

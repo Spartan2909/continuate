@@ -280,32 +280,6 @@ fn signature_from_function_ty(function_ty: &FunctionTy, triple: &Triple) -> Sign
     signature
 }
 
-fn compound_ty_layout(types: &[&[Rc<MirType>]]) -> SingleLayout<'static> {
-    let mut size = 0;
-    let mut align = 1;
-    let mut field_locations = Vec::with_capacity(types.len());
-    let mut gc_pointer_locations = Vec::with_capacity(types.len());
-    for ty in types.iter().copied().flatten() {
-        let (field_size, field_align, ptr) = ty_ref_size_align_ptr(ty);
-        let misalignment = size % field_align;
-        if misalignment != 0 {
-            size += field_align - misalignment;
-        }
-        field_locations.push(size);
-        if ptr {
-            gc_pointer_locations.push(size);
-        }
-        size += field_size;
-        align = align.max(field_align);
-    }
-    SingleLayout {
-        size,
-        align,
-        field_locations: Slice::allocate_slice(&field_locations),
-        gc_pointer_locations: Slice::allocate_slice(&gc_pointer_locations),
-    }
-}
-
 struct Compiler<'arena, M: ?Sized> {
     program: Program,
     contexts: LinkedList<Context>,
@@ -313,14 +287,14 @@ struct Compiler<'arena, M: ?Sized> {
     triple: Triple,
     runtime: Runtime,
     functions: HashMap<FuncRef, (FuncId, Signature)>,
-    ty_layouts: HashMap<Rc<MirType>, (&'arena TyLayout<'arena>, DataId)>,
-    arena: &'arena &'arena Bump,
+    ty_layouts: HashMap<Rc<MirType>, (TyLayout<'arena>, DataId)>,
     builder_contexts: LinkedList<FunctionBuilderContext>,
+    arena: &'arena Bump,
     module: M,
 }
 
 impl<'arena, M: Module> Compiler<'arena, M> {
-    fn new(program: Program, mut module: M, arena: &'arena &'arena Bump) -> Compiler<'arena, M> {
+    fn new(program: Program, mut module: M, arena: &'arena Bump) -> Compiler<'arena, M> {
         let triple = module.isa().triple().clone();
         let runtime = Runtime::new(&mut module);
         Compiler {
@@ -559,8 +533,34 @@ impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
         }
     }
 
+    fn compound_ty_layout(&self, types: &[&[Rc<MirType>]]) -> SingleLayout<'arena> {
+        let mut size = 0;
+        let mut align = 1;
+        let mut field_locations = Vec::with_capacity(types.len());
+        let mut gc_pointer_locations = Vec::with_capacity(types.len());
+        for ty in types.iter().copied().flatten() {
+            let (field_size, field_align, ptr) = ty_ref_size_align_ptr(ty);
+            let misalignment = size % field_align;
+            if misalignment != 0 {
+                size += field_align - misalignment;
+            }
+            field_locations.push(size);
+            if ptr {
+                gc_pointer_locations.push(size);
+            }
+            size += field_size;
+            align = align.max(field_align);
+        }
+        SingleLayout {
+            size,
+            align,
+            field_locations: Slice::new(self.arena.alloc_slice_copy(&field_locations)),
+            gc_pointer_locations: Slice::new(self.arena.alloc_slice_copy(&gc_pointer_locations)),
+        }
+    }
+
     fn calc_ty_layout(&mut self, ty: Rc<MirType>) {
-        let layout: TyLayout<'arena> = match *ty {
+        let layout = match *ty {
             MirType::Bool => SingleLayout::primitive(1, 1).into(),
             MirType::Int | MirType::Float | MirType::Function(_) => {
                 SingleLayout::primitive(8, 8).into()
@@ -570,7 +570,7 @@ impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
                 let (elem_size, elem_align, ptr) = ty_ref_size_align_ptr(elem_ty);
                 let field_locations: Vec<_> =
                     (0..elem_size * len).step_by(elem_size as usize).collect();
-                let field_locations = Slice::allocate_slice(&field_locations);
+                let field_locations = Slice::new(self.arena.alloc_slice_copy(&field_locations));
                 SingleLayout {
                     size: elem_align * len,
                     align: elem_align,
@@ -585,12 +585,12 @@ impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
             }
             MirType::Tuple(ref types)
             | MirType::UserDefined(UserDefinedType::Product(ref types)) => {
-                compound_ty_layout(&[types]).into()
+                self.compound_ty_layout(&[types]).into()
             }
             MirType::UserDefined(UserDefinedType::Sum(ref variants)) => {
                 let layouts: Vec<_> = variants
                     .iter()
-                    .map(|types| compound_ty_layout(&[&[Rc::new(MirType::Int)], types]))
+                    .map(|types| self.compound_ty_layout(&[&[Rc::new(MirType::Int)], types]))
                     .collect();
                 let size = layouts.iter().fold(8, |size, layout| size.max(layout.size));
                 let align = layouts
@@ -598,7 +598,7 @@ impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
                     .fold(1, |align, layout| align.max(layout.align));
 
                 TyLayout::Sum {
-                    layouts: Slice::allocate_slice(&layouts),
+                    layouts: Slice::new(self.arena.alloc_slice_copy(&layouts)),
                     size,
                     align,
                 }
@@ -608,8 +608,7 @@ impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
         };
 
         let global_id = self.declare_ty_layout_global(&layout);
-        self.ty_layouts
-            .insert(ty, (self.arena.alloc(layout), global_id));
+        self.ty_layouts.insert(ty, (layout, global_id));
     }
 
     fn calc_ty_layouts(&mut self) {
@@ -734,8 +733,7 @@ pub fn compile(program: Program, binary: bool) -> ObjectProduct {
     let module = ObjectModule::new(builder);
 
     let arena = Bump::new();
-    let tmp = &arena;
-    let compiler = Compiler::new(program, module, &tmp);
+    let compiler = Compiler::new(program, module, &arena);
     if binary {
         compiler.compile_binary()
     } else {

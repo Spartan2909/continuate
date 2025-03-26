@@ -103,12 +103,12 @@ macro_rules! match_ty {
     };
 }
 
-pub(super) struct FunctionCompiler<'arena, 'function, 'builder, M: ?Sized> {
+pub(super) struct FunctionCompiler<'function, 'builder, M: ?Sized> {
     pub(super) module: &'function mut M,
     pub(super) data_description: &'function mut DataDescription,
     pub(super) triple: &'function Triple,
     pub(super) functions: &'function HashMap<FuncRef, (FuncId, Signature)>,
-    pub(super) ty_layouts: &'function HashMap<Rc<MirType>, (&'arena TyLayout<'arena>, DataId)>,
+    pub(super) ty_layouts: &'function HashMap<Rc<MirType>, (TyLayout<'function>, DataId)>,
     pub(super) builder: &'function mut FunctionBuilder<'builder>,
     pub(super) block_map: &'function HashMap<BlockId, Block>,
     pub(super) mir_function: &'function MirFunction,
@@ -153,7 +153,7 @@ fn get(
     )
 }
 
-impl<'arena, M: Module + ?Sized> FunctionCompiler<'arena, '_, '_, M> {
+impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
     fn variable(&mut self, ident: Ident) -> Variable {
         static NEXT: AtomicU32 = AtomicU32::new(0);
 
@@ -407,14 +407,14 @@ impl<'arena, M: Module + ?Sized> FunctionCompiler<'arena, '_, '_, M> {
         object_ty: &'a MirType,
         object_variant: Option<usize>,
         field: usize,
-    ) -> (&'arena SingleLayout<'arena>, &'a MirType) {
+    ) -> (SingleLayout<'function>, &'a MirType) {
         let ty = object_ty.as_user_defined().unwrap();
         match (self.ty_layouts[object_ty].0, object_variant, ty) {
-            (TyLayout::Single(ref layout), None, UserDefinedType::Product(fields)) => {
+            (TyLayout::Single(layout), None, UserDefinedType::Product(fields)) => {
                 (layout, &fields[field])
             }
             (TyLayout::Sum { layouts, .. }, Some(variant), UserDefinedType::Sum(variants)) => {
-                (&layouts[variant], &variants[variant][field])
+                (layouts[variant], &variants[variant][field])
             }
             _ => unreachable!(),
         }
@@ -430,7 +430,7 @@ impl<'arena, M: Module + ?Sized> FunctionCompiler<'arena, '_, '_, M> {
             self.triple,
             object,
             expr.field,
-            layout,
+            &layout,
             field_ty,
         ))
     }
@@ -552,7 +552,7 @@ impl<'arena, M: Module + ?Sized> FunctionCompiler<'arena, '_, '_, M> {
             self.triple,
             storage,
             0,
-            layout,
+            &layout,
             field_ty,
         );
 
@@ -579,7 +579,7 @@ impl<'arena, M: Module + ?Sized> FunctionCompiler<'arena, '_, '_, M> {
                     self.triple,
                     storage,
                     field + 1,
-                    layout,
+                    &layout,
                     field_ty,
                 ),
                 Some(ident),
@@ -853,7 +853,7 @@ impl<'arena, M: Module + ?Sized> FunctionCompiler<'arena, '_, '_, M> {
                     self.triple,
                     storage,
                     i,
-                    layout,
+                    &layout,
                     field_ty,
                 );
                 let var = self.variable(ident);

@@ -7,9 +7,6 @@ use tracing_subscriber::filter::LevelFilter;
 
 #[allow(unsafe_code)]
 mod slice {
-    use std::alloc;
-    use std::alloc::handle_alloc_error;
-    use std::alloc::Layout;
     use std::fmt;
     use std::marker::PhantomData;
     use std::mem;
@@ -88,28 +85,6 @@ mod slice {
                 len: self.len * mem::size_of::<T>(),
                 _marker: PhantomData,
             }
-        }
-
-        #[allow(clippy::missing_panics_doc)]
-        #[inline]
-        pub fn allocate_slice<'b>(slice: &[T]) -> Slice<'b, T>
-        where
-            T: Copy + 'b,
-        {
-            if slice.is_empty() {
-                return Slice::new(&[]);
-            }
-
-            let layout = Layout::array::<T>(slice.len()).unwrap();
-            // SAFETY: `slice.len()` is greater than 0.
-            let ptr: *mut T = unsafe { alloc::alloc(layout).cast() };
-            if ptr.is_null() {
-                handle_alloc_error(layout);
-            }
-            // SAFETY: `ptr` was just allocated, and `slice` is still valid.
-            unsafe { ptr.copy_from_nonoverlapping(slice.as_ptr(), slice.len()) }
-            // SAFETY: `ptr` has just been initialised with a slice.
-            unsafe { Slice::from_raw_parts(ptr, slice.len()) }
         }
     }
 
