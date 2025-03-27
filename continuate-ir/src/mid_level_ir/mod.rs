@@ -42,16 +42,6 @@ pub enum Expr {
     Intrinsic(ExprIntrinsic),
 }
 
-impl Expr {
-    pub fn unreachable(program: &mut Program) -> Expr {
-        Expr::Intrinsic(ExprIntrinsic {
-            intrinsic: Intrinsic::Unreachable,
-            value: Box::new(Expr::Literal(Literal::Int(0))),
-            value_ty: program.insert_type(Type::Int),
-        })
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct ExprTuple {
     pub ty: Rc<Type>,
@@ -144,8 +134,7 @@ pub struct ExprClosure {
 #[derive(Debug, Clone)]
 pub struct ExprIntrinsic {
     pub intrinsic: Intrinsic,
-    pub value: Box<Expr>,
-    pub value_ty: Rc<Type>,
+    pub values: Vec<(Expr, Rc<Type>)>,
 }
 
 #[derive(Debug, PartialEq, Eq)]

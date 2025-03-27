@@ -750,15 +750,18 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
     }
 
     fn expr_intrinsic(&mut self, expr: &ExprIntrinsic) -> Option<Value> {
-        let value = self.expr(&expr.value)?;
+        let values: Option<Vec<_>> = expr
+            .values
+            .iter()
+            .map(|(expr, ty)| Some((self.expr(expr)?, &**ty)))
+            .collect();
+        let values = values?;
         match expr.intrinsic {
             Intrinsic::Discriminant => {
-                if *expr.value_ty == MirType::Bool {
+                let (value, ty) = values[0];
+                if *ty == MirType::Bool {
                     Some(self.builder.ins().sextend(types::I64, value))
-                } else if matches!(
-                    *expr.value_ty,
-                    MirType::UserDefined(UserDefinedType::Sum(_))
-                ) {
+                } else if matches!(ty, MirType::UserDefined(UserDefinedType::Sum(_))) {
                     let endianness = self.cranelift_endianness();
                     Some(
                         self.builder.ins().load(
@@ -777,7 +780,7 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
                 }
             }
             Intrinsic::Terminate => {
-                self.builder.ins().return_(&[value]);
+                self.builder.ins().return_(&[values[0].0]);
                 None
             }
             Intrinsic::Unreachable => {

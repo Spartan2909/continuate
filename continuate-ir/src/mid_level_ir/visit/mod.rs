@@ -237,10 +237,11 @@ const fn default_expr_closure<V: Visit + ?Sized>(_v: &V, expr: &mut ExprClosure)
 fn default_expr_intrinsic<V: Visit + ?Sized>(v: &V, expr: &mut ExprIntrinsic) {
     let ExprIntrinsic {
         intrinsic: _,
-        value,
-        value_ty: _,
+        values,
     } = expr;
-    v.expr(value);
+    for (expr, _) in values {
+        v.expr(expr);
+    }
 }
 
 fn default_expr<V: Visit + ?Sized>(v: &V, expr: &mut Expr) {

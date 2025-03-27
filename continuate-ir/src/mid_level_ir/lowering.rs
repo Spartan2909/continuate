@@ -497,7 +497,6 @@ impl<'a> Lowerer<'a> {
                         object_variant: variant_index,
                         field,
                     });
-                    let get = Box::new(get);
                     let field_ty_ref = scrutinee_ty.field(variant_index, field).unwrap();
                     let mut new_block = Block::new();
                     let new_block_id = function.block();
@@ -518,8 +517,7 @@ impl<'a> Lowerer<'a> {
                         }) => {
                             let discriminant = Expr::Intrinsic(ExprIntrinsic {
                                 intrinsic: Intrinsic::Discriminant,
-                                value: get,
-                                value_ty: field_ty_ref,
+                                values: vec![(get, field_ty_ref)],
                             });
                             let arms = iter::once((variant as i64, switch_arm_id));
                             let switch = Expr::Switch(ExprSwitch {
@@ -603,16 +601,16 @@ impl<'a> Lowerer<'a> {
         } else {
             Expr::Intrinsic(ExprIntrinsic {
                 intrinsic: Intrinsic::Discriminant,
-                value: Box::new(scrutinee.clone()),
-                value_ty: self.lower_ty(&expr.scrutinee_ty),
+                values: vec![(scrutinee.clone(), self.lower_ty(&expr.scrutinee_ty))],
             })
         };
 
         if let Entry::Vacant(entry) = function.blocks.entry(otherwise) {
             let mut otherwise_block = Block::new();
-            otherwise_block
-                .exprs
-                .push(Expr::unreachable(&mut self.program));
+            otherwise_block.exprs.push(Expr::Intrinsic(ExprIntrinsic {
+                intrinsic: Intrinsic::Unreachable,
+                values: vec![],
+            }));
             entry.insert(otherwise_block);
         }
         Expr::Switch(ExprSwitch {
@@ -664,8 +662,7 @@ impl<'a> Lowerer<'a> {
         let value = self.expr(&expr.value, block, function);
         Expr::Intrinsic(ExprIntrinsic {
             intrinsic: expr.intrinsic,
-            value: Box::new(value),
-            value_ty: self.lower_ty(&expr.value_ty),
+            values: vec![(value, self.lower_ty(&expr.value_ty))],
         })
     }
 
