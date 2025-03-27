@@ -6,8 +6,15 @@ use crate::common::Literal;
 use crate::mid_level_ir::Expr;
 use crate::mid_level_ir::ExprCall;
 use crate::mid_level_ir::ExprContApplication;
+use crate::mid_level_ir::ExprLiteral;
 
 use std::mem;
+
+const fn empty_expr() -> Expr {
+    Expr::Literal(ExprLiteral {
+        literal: Literal::Int(0),
+    })
+}
 
 pub(super) struct CombineCallApplication;
 
@@ -27,7 +34,7 @@ impl Visit for CombineCallApplication {
                 .collect();
             args.extend(mem::take(&mut expr.args));
             expr.args = args;
-            let callee = mem::replace(&mut *callee.callee, Expr::Literal(Literal::Int(0)));
+            let callee = mem::replace(&mut *callee.callee, empty_expr());
             expr.callee = Box::new(callee);
         }
     }
@@ -39,7 +46,7 @@ impl Visit for CombineCallApplication {
             let mut continuations = mem::take(&mut callee.continuations);
             continuations.extend(mem::take(&mut expr.continuations));
             expr.continuations = continuations;
-            let callee = mem::replace(&mut *callee.callee, Expr::Literal(Literal::Int(0)));
+            let callee = mem::replace(&mut *callee.callee, empty_expr());
             expr.callee = Box::new(callee);
         }
     }

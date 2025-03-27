@@ -37,8 +37,12 @@ use crate::mid_level_ir::ExprCall;
 use crate::mid_level_ir::ExprClosure;
 use crate::mid_level_ir::ExprConstructor;
 use crate::mid_level_ir::ExprContApplication;
+use crate::mid_level_ir::ExprFunction;
 use crate::mid_level_ir::ExprGet;
+use crate::mid_level_ir::ExprGoto;
+use crate::mid_level_ir::ExprIdent;
 use crate::mid_level_ir::ExprIntrinsic;
+use crate::mid_level_ir::ExprLiteral;
 use crate::mid_level_ir::ExprSet;
 use crate::mid_level_ir::ExprSwitch;
 use crate::mid_level_ir::ExprTuple;
@@ -582,7 +586,7 @@ impl<'a> Lowerer<'a> {
 
             let arm = self.expr(arm, &mut arm_block, function);
             arm_block.exprs.push(arm);
-            let goto = Expr::Goto(next_id);
+            let goto = Expr::Goto(ExprGoto { block: next_id });
             arm_block.exprs.push(goto);
 
             function.blocks.insert(arm_block_id, arm_block);
@@ -668,9 +672,13 @@ impl<'a> Lowerer<'a> {
 
     fn expr(&mut self, expr: &'a HirExpr, block: &mut Block, function: &mut Function) -> Expr {
         match expr {
-            HirExpr::Literal(lit) => Expr::Literal(lit.clone()),
-            HirExpr::Ident(ident) => Expr::Ident(*ident),
-            HirExpr::Function(func_ref) => Expr::Function(*func_ref),
+            HirExpr::Literal(lit) => Expr::Literal(ExprLiteral {
+                literal: lit.clone(),
+            }),
+            HirExpr::Ident(ident) => Expr::Ident(ExprIdent { ident: *ident }),
+            HirExpr::Function(func_ref) => Expr::Function(ExprFunction {
+                function: *func_ref,
+            }),
             HirExpr::Block(expr) => self.expr_block(expr, block, function),
             HirExpr::Tuple(expr) => self.expr_tuple(expr, block, function),
             HirExpr::Constructor(expr) => self.expr_constructor(expr, block, function),

@@ -23,9 +23,9 @@ use itertools::Itertools as _;
 
 #[derive(Debug, Clone)]
 pub enum Expr {
-    Literal(Literal),
-    Ident(Ident),
-    Function(FuncRef),
+    Literal(ExprLiteral),
+    Ident(ExprIdent),
+    Function(ExprFunction),
     Tuple(ExprTuple),
     Constructor(ExprConstructor),
     Array(ExprArray),
@@ -37,9 +37,24 @@ pub enum Expr {
     Binary(ExprBinary),
     Assign(ExprAssign),
     Switch(ExprSwitch),
-    Goto(BlockId),
+    Goto(ExprGoto),
     Closure(ExprClosure),
     Intrinsic(ExprIntrinsic),
+}
+
+#[derive(Debug, Clone)]
+pub struct ExprLiteral {
+    pub literal: Literal,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExprIdent {
+    pub ident: Ident,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExprFunction {
+    pub function: FuncRef,
 }
 
 #[derive(Debug, Clone)]
@@ -122,6 +137,11 @@ pub struct ExprSwitch {
     pub scrutinee: Box<Expr>,
     pub arms: HashMap<i64, BlockId>,
     pub otherwise: BlockId,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExprGoto {
+    pub block: BlockId,
 }
 
 #[derive(Debug, Clone)]

@@ -32,8 +32,12 @@ use continuate_ir::mid_level_ir::ExprCall;
 use continuate_ir::mid_level_ir::ExprClosure;
 use continuate_ir::mid_level_ir::ExprConstructor;
 use continuate_ir::mid_level_ir::ExprContApplication;
+use continuate_ir::mid_level_ir::ExprFunction;
 use continuate_ir::mid_level_ir::ExprGet;
+use continuate_ir::mid_level_ir::ExprGoto;
+use continuate_ir::mid_level_ir::ExprIdent;
 use continuate_ir::mid_level_ir::ExprIntrinsic;
+use continuate_ir::mid_level_ir::ExprLiteral;
 use continuate_ir::mid_level_ir::ExprSet;
 use continuate_ir::mid_level_ir::ExprSwitch;
 use continuate_ir::mid_level_ir::ExprTuple;
@@ -241,12 +245,16 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         Some(fat_ptr(function_ptr, storage, self.triple, self.builder))
     }
 
-    fn expr_literal(&mut self, literal: &Literal) -> Value {
+    fn literal(&mut self, literal: &Literal) -> Value {
         match *literal {
             Literal::Int(n) => self.builder.ins().iconst(types::I64, n),
             Literal::Float(n) => self.builder.ins().f64const(n),
             Literal::String(ref string) => self.expr_literal_string(string),
         }
+    }
+
+    fn expr_literal(&mut self, expr: &ExprLiteral) -> Value {
+        self.literal(&expr.literal)
     }
 
     fn expr_literal_string(&mut self, string: &str) -> Value {
@@ -300,8 +308,8 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         self.fat_ptr(dest_ptr, size)
     }
 
-    fn expr_function(&mut self, func_ref: FuncRef) -> Value {
-        let func_id = self.functions[&func_ref].0;
+    fn expr_function(&mut self, expr: &ExprFunction) -> Value {
+        let func_id = self.functions[&expr.function].0;
         let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
         let function_ptr = self.builder.ins().func_addr(ptr_ty(self.triple), func_ref);
         let metadata = self.builder.ins().iconst(ptr_ty(self.triple), 0);
@@ -360,7 +368,10 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
             self.compound_ty(
                 &expr.ty,
                 layout,
-                iter::once(&Expr::Literal(Literal::Int(index as i64))).chain(&expr.fields),
+                iter::once(&Expr::Literal(ExprLiteral {
+                    literal: Literal::Int(index as i64),
+                }))
+                .chain(&expr.fields),
             )
         } else {
             let layout = layout.as_single().unwrap();
@@ -457,8 +468,8 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
     }
 
     fn callable(&mut self, callee: &Expr) -> Option<Callable> {
-        match *callee {
-            Expr::Function(func_ref) => Some(Callable::Static(func_ref)),
+        match callee {
+            Expr::Function(expr) => Some(Callable::Static(expr.function)),
             _ => Some(Callable::Dynamic(self.expr(callee)?)),
         }
     }
@@ -731,8 +742,8 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         None
     }
 
-    fn expr_goto(&mut self, block_id: BlockId) -> Option<Value> {
-        self.builder.switch_to_block(self.block_map[&block_id]);
+    fn expr_goto(&mut self, expr: &ExprGoto) -> Option<Value> {
+        self.builder.switch_to_block(self.block_map[&expr.block]);
         None
     }
 
@@ -742,7 +753,7 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
             .iter()
             .copied()
             .sorted_unstable()
-            .map(Expr::Ident)
+            .map(|ident| Expr::Ident(ExprIdent { ident }))
             .collect();
         let func_id = self.functions[&expr.func_ref].0;
         let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
@@ -792,12 +803,12 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
 
     fn expr(&mut self, expr: &Expr) -> Option<Value> {
         match expr {
-            Expr::Literal(literal) => Some(self.expr_literal(literal)),
-            Expr::Ident(ident) => {
-                let var = self.variable(*ident);
+            Expr::Literal(expr) => Some(self.expr_literal(expr)),
+            Expr::Ident(expr) => {
+                let var = self.variable(expr.ident);
                 Some(self.builder.use_var(var))
             }
-            Expr::Function(func_ref) => Some(self.expr_function(*func_ref)),
+            Expr::Function(expr) => Some(self.expr_function(expr)),
             Expr::Tuple(expr) => self.expr_tuple(expr),
             Expr::Constructor(expr) => self.expr_constructor(expr),
             Expr::Array(expr) => self.expr_array(expr),
@@ -809,7 +820,7 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
             Expr::Binary(expr) => self.expr_binary(expr),
             Expr::Assign(expr) => self.expr_assign(expr),
             Expr::Switch(expr) => self.expr_switch(expr),
-            Expr::Goto(block_id) => self.expr_goto(*block_id),
+            Expr::Goto(expr) => self.expr_goto(expr),
             Expr::Closure(expr) => self.expr_closure(expr),
             Expr::Intrinsic(expr) => self.expr_intrinsic(expr),
         }
@@ -838,7 +849,7 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
             self.builder.declare_var(var, ty_for(var_ty, self.triple));
 
             if let Some(initialiser) = initialiser {
-                let value = self.expr_literal(initialiser);
+                let value = self.literal(initialiser);
 
                 self.builder.def_var(var, value);
             }

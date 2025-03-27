@@ -1,11 +1,8 @@
+#![allow(clippy::needless_pass_by_ref_mut, reason = "forwards compatibility")]
+
 mod combine_call_application;
 
-use crate::common::FuncRef;
-use crate::common::Ident;
-use crate::common::Literal;
-
 use super::Block;
-use super::BlockId;
 use super::Expr;
 use super::ExprArray;
 use super::ExprAssign;
@@ -14,8 +11,12 @@ use super::ExprCall;
 use super::ExprClosure;
 use super::ExprConstructor;
 use super::ExprContApplication;
+use super::ExprFunction;
 use super::ExprGet;
+use super::ExprGoto;
+use super::ExprIdent;
 use super::ExprIntrinsic;
+use super::ExprLiteral;
 use super::ExprSet;
 use super::ExprSwitch;
 use super::ExprTuple;
@@ -28,16 +29,16 @@ trait Visit {
         false
     }
 
-    fn expr_literal(&self, literal: &Literal) {
-        let _ = literal;
+    fn expr_literal(&self, expr: &mut ExprLiteral) {
+        default_expr_literal(self, expr);
     }
 
-    fn expr_ident(&self, ident: Ident) {
-        let _ = ident;
+    fn expr_ident(&self, expr: &mut ExprIdent) {
+        default_expr_ident(self, expr);
     }
 
-    fn expr_function(&self, function: FuncRef) {
-        let _ = function;
+    fn expr_function(&self, expr: &mut ExprFunction) {
+        default_expr_function(self, expr);
     }
 
     fn expr_tuple(&self, expr: &mut ExprTuple) {
@@ -84,8 +85,8 @@ trait Visit {
         default_expr_switch(self, expr);
     }
 
-    fn expr_goto(&self, block: BlockId) {
-        let _ = block;
+    fn expr_goto(&self, expr: &mut ExprGoto) {
+        default_expr_goto(self, expr);
     }
 
     fn expr_closure(&self, expr: &mut ExprClosure) {
@@ -111,6 +112,18 @@ trait Visit {
     fn visit(&self, program: &mut Program) {
         default_visit(self, program);
     }
+}
+
+fn default_expr_literal<V: Visit + ?Sized>(_: &V, expr: &mut ExprLiteral) {
+    let ExprLiteral { literal: _ } = expr;
+}
+
+fn default_expr_ident<V: Visit + ?Sized>(_: &V, expr: &mut ExprIdent) {
+    let ExprIdent { ident: _ } = expr;
+}
+
+fn default_expr_function<V: Visit + ?Sized>(_: &V, expr: &mut ExprFunction) {
+    let ExprFunction { function: _ } = expr;
 }
 
 fn default_expr_tuple<V: Visit + ?Sized>(v: &V, expr: &mut ExprTuple) {
@@ -225,7 +238,10 @@ fn default_expr_switch<V: Visit + ?Sized>(v: &V, expr: &mut ExprSwitch) {
     v.expr(scrutinee);
 }
 
-#[allow(clippy::needless_pass_by_ref_mut, reason = "forwards compatibility")]
+fn default_expr_goto<V: Visit + ?Sized>(_: &V, expr: &mut ExprGoto) {
+    let ExprGoto { block: _ } = expr;
+}
+
 const fn default_expr_closure<V: Visit + ?Sized>(_v: &V, expr: &mut ExprClosure) {
     let ExprClosure {
         func_ref: _,
@@ -246,9 +262,9 @@ fn default_expr_intrinsic<V: Visit + ?Sized>(v: &V, expr: &mut ExprIntrinsic) {
 
 fn default_expr<V: Visit + ?Sized>(v: &V, expr: &mut Expr) {
     match expr {
-        Expr::Literal(literal) => v.expr_literal(literal),
-        Expr::Ident(ident) => v.expr_ident(*ident),
-        Expr::Function(function) => v.expr_function(*function),
+        Expr::Literal(expr) => v.expr_literal(expr),
+        Expr::Ident(expr) => v.expr_ident(expr),
+        Expr::Function(expr) => v.expr_function(expr),
         Expr::Tuple(expr) => v.expr_tuple(expr),
         Expr::Constructor(expr) => v.expr_constructor(expr),
         Expr::Array(expr) => v.expr_array(expr),
@@ -260,7 +276,7 @@ fn default_expr<V: Visit + ?Sized>(v: &V, expr: &mut Expr) {
         Expr::Binary(expr) => v.expr_binary(expr),
         Expr::Assign(expr) => v.expr_assign(expr),
         Expr::Switch(expr) => v.expr_switch(expr),
-        Expr::Goto(block) => v.expr_goto(*block),
+        Expr::Goto(expr) => v.expr_goto(expr),
         Expr::Closure(expr) => v.expr_closure(expr),
         Expr::Intrinsic(expr) => v.expr_intrinsic(expr),
     }
