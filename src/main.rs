@@ -89,9 +89,9 @@ fn main() {
 
     let name_map = continuate_frontend::resolve_names(&ast);
 
-    let mut program = continuate_ir::high_level_ir::lower(&ast, name_map, program_name);
+    let program = continuate_ir::high_level_ir::lower(&ast, name_map, program_name);
 
-    typeck(&mut program).unwrap();
+    let program = typeck(&program).unwrap();
 
     let mut mir_program = mid_level_ir::lower(&program);
 

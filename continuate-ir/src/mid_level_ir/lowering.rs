@@ -2,28 +2,29 @@ use crate::common::Ident;
 use crate::common::Intrinsic;
 use crate::common::UserDefinedTyRef;
 use crate::high_level_ir::DestructureFields;
-use crate::high_level_ir::Expr as HirExpr;
-use crate::high_level_ir::ExprArray as HirExprArray;
-use crate::high_level_ir::ExprAssign as HirExprAssign;
-use crate::high_level_ir::ExprBinary as HirExprBinary;
-use crate::high_level_ir::ExprBlock as HirExprBlock;
-use crate::high_level_ir::ExprCall as HirExprCall;
-use crate::high_level_ir::ExprClosure as HirExprClosure;
-use crate::high_level_ir::ExprConstructor as HirExprConstructor;
-use crate::high_level_ir::ExprConstructorFields;
-use crate::high_level_ir::ExprContApplication as HirExprContApplication;
-use crate::high_level_ir::ExprDeclare as HirExprDeclare;
-use crate::high_level_ir::ExprGet as HirExprGet;
-use crate::high_level_ir::ExprIntrinsic as HirExprIntrinsic;
-use crate::high_level_ir::ExprMatch as HirExprMatch;
-use crate::high_level_ir::ExprSet as HirExprSet;
-use crate::high_level_ir::ExprTuple as HirExprTuple;
-use crate::high_level_ir::ExprUnary as HirExprUnary;
 use crate::high_level_ir::Function as HirFunction;
 use crate::high_level_ir::FunctionTy as HirFunctionTy;
 use crate::high_level_ir::Pattern;
 use crate::high_level_ir::Program as HirProgram;
 use crate::high_level_ir::Type as HirType;
+use crate::high_level_ir::Typed;
+use crate::high_level_ir::TypedExpr as HirExpr;
+use crate::high_level_ir::TypedExprArray as HirExprArray;
+use crate::high_level_ir::TypedExprAssign as HirExprAssign;
+use crate::high_level_ir::TypedExprBinary as HirExprBinary;
+use crate::high_level_ir::TypedExprBlock as HirExprBlock;
+use crate::high_level_ir::TypedExprCall as HirExprCall;
+use crate::high_level_ir::TypedExprClosure as HirExprClosure;
+use crate::high_level_ir::TypedExprConstructor as HirExprConstructor;
+use crate::high_level_ir::TypedExprConstructorFields;
+use crate::high_level_ir::TypedExprContApplication as HirExprContApplication;
+use crate::high_level_ir::TypedExprDeclare as HirExprDeclare;
+use crate::high_level_ir::TypedExprGet as HirExprGet;
+use crate::high_level_ir::TypedExprIntrinsic as HirExprIntrinsic;
+use crate::high_level_ir::TypedExprMatch as HirExprMatch;
+use crate::high_level_ir::TypedExprSet as HirExprSet;
+use crate::high_level_ir::TypedExprTuple as HirExprTuple;
+use crate::high_level_ir::TypedExprUnary as HirExprUnary;
 use crate::high_level_ir::UserDefinedType as HirUserDefinedType;
 use crate::high_level_ir::UserDefinedTypeFields;
 use crate::mid_level_ir::Block;
@@ -85,7 +86,7 @@ struct Lowerer<'a> {
     program: Program,
     environment: HashMap<Ident, Rc<Type>>,
     current_block: BlockId,
-    hir_program: &'a HirProgram,
+    hir_program: &'a HirProgram<HirExpr>,
     types: HashMap<&'a HirType, Rc<Type>>,
 }
 
@@ -181,11 +182,11 @@ impl<'a> Lowerer<'a> {
 
     fn expr_tuple(
         &mut self,
-        expr: &'a HirExprTuple,
+        expr: &'a Typed<HirExprTuple>,
         block: &mut Block,
         function: &mut Function,
     ) -> Expr {
-        let values = self.expr_list(&expr.exprs, block, function);
+        let values = self.expr_list(&expr.value.exprs, block, function);
 
         Expr::Tuple(ExprTuple {
             ty: self.lower_ty(&expr.ty),
@@ -201,7 +202,7 @@ impl<'a> Lowerer<'a> {
     ) -> Expr {
         let ty = &self.hir_program.user_defined_types[&expr.ty.as_user_defined().unwrap()];
         let fields = match &expr.fields {
-            ExprConstructorFields::Named(fields) => self.expr_list(
+            TypedExprConstructorFields::Named(fields) => self.expr_list(
                 fields
                     .iter()
                     .sorted_unstable_by(|(name_1, _), (name_2, _)| {
@@ -214,8 +215,10 @@ impl<'a> Lowerer<'a> {
                 block,
                 function,
             ),
-            ExprConstructorFields::Anonymous(fields) => self.expr_list(fields, block, function),
-            ExprConstructorFields::Unit => Vec::new(),
+            TypedExprConstructorFields::Anonymous(fields) => {
+                self.expr_list(fields, block, function)
+            }
+            TypedExprConstructorFields::Unit => Vec::new(),
         };
 
         Expr::Constructor(ExprConstructor {
@@ -239,10 +242,14 @@ impl<'a> Lowerer<'a> {
         let array = self.expr_list(&expr.exprs, block, function);
         let mut values = Vec::with_capacity(array.len());
         values.extend(array);
+        let value_ty = self.lower_ty(&expr.element_ty);
+        let ty = self
+            .program
+            .insert_type(Type::Array(Rc::clone(&value_ty), expr.exprs.len() as u64));
         Expr::Array(ExprArray {
-            ty: self.lower_ty(&expr.ty),
+            ty,
             values,
-            value_ty: self.lower_ty(&expr.element_ty),
+            value_ty,
         })
     }
 
@@ -252,11 +259,11 @@ impl<'a> Lowerer<'a> {
         block: &mut Block,
         function: &mut Function,
     ) -> Expr {
-        let object = self.expr(&expr.object, block, function);
-        let user_defined = expr.object_ty.as_user_defined().unwrap();
+        let object = self.expr(&expr.object.value, block, function);
+        let user_defined = expr.object.ty.as_user_defined().unwrap();
         Expr::Get(ExprGet {
             object: Box::new(object),
-            object_ty: self.lower_ty(&expr.object_ty),
+            object_ty: self.lower_ty(&expr.object.ty),
             object_variant: None,
             field: field_index(
                 &self.hir_program.user_defined_types[&user_defined],
@@ -272,14 +279,14 @@ impl<'a> Lowerer<'a> {
         block: &mut Block,
         function: &mut Function,
     ) -> Expr {
-        let object = self.expr(&expr.object, block, function);
-        let user_defined = expr.object_ty.as_user_defined().unwrap();
+        let object = self.expr(&expr.object.value, block, function);
+        let user_defined = expr.object.ty.as_user_defined().unwrap();
 
-        let value = self.expr(&expr.value, block, function);
+        let value = self.expr(&expr.value.value, block, function);
 
         Expr::Set(ExprSet {
             object: Box::new(object),
-            object_ty: self.lower_ty(&expr.object_ty),
+            object_ty: self.lower_ty(&expr.object.ty),
             object_variant: None,
             field: field_index(
                 &self.hir_program.user_defined_types[&user_defined],
@@ -296,12 +303,12 @@ impl<'a> Lowerer<'a> {
         block: &mut Block,
         function: &mut Function,
     ) -> Expr {
-        let callee = self.expr(&expr.callee, block, function);
+        let callee = self.expr(&expr.callee.value, block, function);
         let params = self.expr_list(&expr.args, block, function);
 
         let mut new_params = Vec::with_capacity(params.len());
         new_params.extend(params.into_iter().map(|expr| (None, expr)));
-        let callee_ty = self.lower_ty(&expr.callee_ty);
+        let callee_ty = self.lower_ty(&expr.callee.ty);
         Expr::Call(ExprCall {
             callee: Box::new(callee),
             callee_ty,
@@ -311,24 +318,25 @@ impl<'a> Lowerer<'a> {
 
     fn expr_cont_application(
         &mut self,
-        expr: &'a HirExprContApplication,
+        expr: &'a Typed<HirExprContApplication>,
         block: &mut Block,
         function: &mut Function,
     ) -> Expr {
-        let callee = self.expr(&expr.callee, block, function);
+        let callee = self.expr(&expr.value.callee.value, block, function);
 
-        let mut new_continuations = Vec::with_capacity(expr.continuations.len());
-        for (ident, expr) in &expr.continuations {
+        let mut new_continuations = Vec::with_capacity(expr.value.continuations.len());
+        for (ident, expr) in &expr.value.continuations {
             let expr = self.expr(expr, block, function);
             new_continuations.push((*ident, expr));
         }
 
-        let callee_ty = self.lower_ty(&expr.callee_ty);
+        let callee_ty = self.lower_ty(&expr.value.callee.ty);
         let callee_ty = callee_ty.as_function().unwrap();
         let storage_ty = UserDefinedType::Product(
-            iter::once(self.lower_ty(&expr.callee_ty))
+            iter::once(self.lower_ty(&expr.value.callee.ty))
                 .chain(
-                    expr.continuations
+                    expr.value
+                        .continuations
                         .iter()
                         .sorted_unstable_by_key(|(ident, _)| *ident)
                         .map(|(ident, _)| Rc::clone(&callee_ty.continuations[ident])),
@@ -338,9 +346,9 @@ impl<'a> Lowerer<'a> {
 
         Expr::ContApplication(ExprContApplication {
             callee: Box::new(callee),
-            callee_ty: self.lower_ty(&expr.callee_ty),
+            callee_ty: self.lower_ty(&expr.value.callee.ty),
             continuations: new_continuations,
-            result_ty: self.lower_ty(&expr.result_ty),
+            result_ty: self.lower_ty(&expr.ty),
             storage_ty: self.program.insert_type(Type::UserDefined(storage_ty)),
         })
     }
@@ -351,11 +359,11 @@ impl<'a> Lowerer<'a> {
         block: &mut Block,
         function: &mut Function,
     ) -> Expr {
-        let operand = self.expr(&expr.right, block, function);
+        let operand = self.expr(&expr.right.value, block, function);
         Expr::Unary(ExprUnary {
             operator: expr.op,
             operand: Box::new(operand),
-            operand_ty: self.lower_ty(&expr.right_ty),
+            operand_ty: self.lower_ty(&expr.right.ty),
         })
     }
 
@@ -365,15 +373,15 @@ impl<'a> Lowerer<'a> {
         block: &mut Block,
         function: &mut Function,
     ) -> Expr {
-        let left = self.expr(&expr.left, block, function);
-        let right = self.expr(&expr.right, block, function);
+        let left = self.expr(&expr.left.value, block, function);
+        let right = self.expr(&expr.right.value, block, function);
 
         Expr::Binary(ExprBinary {
             left: Box::new(left),
-            left_ty: self.lower_ty(&expr.left_ty),
+            left_ty: self.lower_ty(&expr.left.ty),
             operator: expr.op,
             right: Box::new(right),
-            right_ty: self.lower_ty(&expr.right_ty),
+            right_ty: self.lower_ty(&expr.right.ty),
         })
     }
 
@@ -552,7 +560,7 @@ impl<'a> Lowerer<'a> {
         block: &mut Block,
         function: &mut Function,
     ) -> Expr {
-        let scrutinee = self.expr(&expr.scrutinee, block, function);
+        let scrutinee = self.expr(&expr.scrutinee.value, block, function);
 
         let mut discriminants = vec![];
         let otherwise = function.block();
@@ -562,7 +570,7 @@ impl<'a> Lowerer<'a> {
             let mut arm_block = Block::new();
             let mut arm_block_id = function.block();
 
-            let scrutinee_ty = self.lower_ty(&expr.scrutinee_ty);
+            let scrutinee_ty = self.lower_ty(&expr.scrutinee.ty);
             let arm_data = self.pattern(
                 (&scrutinee, scrutinee_ty),
                 arm_pat,
@@ -605,7 +613,7 @@ impl<'a> Lowerer<'a> {
         } else {
             Expr::Intrinsic(ExprIntrinsic {
                 intrinsic: Intrinsic::Discriminant,
-                values: vec![(scrutinee.clone(), self.lower_ty(&expr.scrutinee_ty))],
+                values: vec![(scrutinee.clone(), self.lower_ty(&expr.scrutinee.ty))],
             })
         };
 
@@ -663,10 +671,18 @@ impl<'a> Lowerer<'a> {
         block: &mut Block,
         function: &mut Function,
     ) -> Expr {
-        let value = self.expr(&expr.value, block, function);
         Expr::Intrinsic(ExprIntrinsic {
             intrinsic: expr.intrinsic,
-            values: vec![(value, self.lower_ty(&expr.value_ty))],
+            values: expr
+                .values
+                .iter()
+                .map(|expr| {
+                    (
+                        self.expr(&expr.value, block, function),
+                        self.lower_ty(&expr.ty),
+                    )
+                })
+                .collect(),
         })
     }
 
@@ -679,7 +695,7 @@ impl<'a> Lowerer<'a> {
             HirExpr::Function(func_ref) => Expr::Function(ExprFunction {
                 function: *func_ref,
             }),
-            HirExpr::Block(expr) => self.expr_block(expr, block, function),
+            HirExpr::Block(expr) => self.expr_block(&expr.value, block, function),
             HirExpr::Tuple(expr) => self.expr_tuple(expr, block, function),
             HirExpr::Constructor(expr) => self.expr_constructor(expr, block, function),
             HirExpr::Array(expr) => self.expr_array(expr, block, function),
@@ -691,7 +707,7 @@ impl<'a> Lowerer<'a> {
             HirExpr::Binary(expr) => self.expr_binary(expr, block, function),
             HirExpr::Declare(expr) => self.expr_declare(expr, block, function),
             HirExpr::Assign(expr) => self.expr_assign(expr, block, function),
-            HirExpr::Match(expr) => self.expr_match(expr, block, function),
+            HirExpr::Match(expr) => self.expr_match(&expr.value, block, function),
             HirExpr::Closure(expr) => self.expr_closure(expr),
             HirExpr::Intrinsic(expr) => self.expr_intrinsic(expr, block, function),
         }
@@ -718,7 +734,7 @@ impl<'a> Lowerer<'a> {
 
     fn function(
         &mut self,
-        function: &'a HirFunction,
+        function: &'a HirFunction<HirExpr>,
         captures: Option<&[(Ident, Rc<Type>)]>,
     ) -> Function {
         let mut mir_function = Function::new(function.name.clone());
@@ -765,7 +781,7 @@ impl<'a> Lowerer<'a> {
         mir_function
     }
 
-    fn lower(program: &'a HirProgram) -> Program {
+    fn lower(program: &'a HirProgram<HirExpr>) -> Program {
         let mut lowerer = Lowerer {
             program: Program::new(program),
             environment: HashMap::new(),
@@ -791,6 +807,6 @@ impl<'a> Lowerer<'a> {
     }
 }
 
-pub fn lower(program: &HirProgram) -> Program {
+pub fn lower(program: &HirProgram<HirExpr>) -> Program {
     Lowerer::lower(program)
 }

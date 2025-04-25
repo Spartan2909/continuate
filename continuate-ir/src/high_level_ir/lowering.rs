@@ -50,7 +50,7 @@ use continuate_frontend::UserDefinedTy as AstUserDefinedTy;
 use continuate_frontend::UserDefinedTyFields as AstUserDefinedTyFields;
 
 struct Lowerer<'a> {
-    program: Program,
+    program: Program<Expr>,
     ast: &'a AstProgram<'a>,
     user_defined_types: HashMap<Span, UserDefinedTyRef>,
     names: NameMap,
@@ -234,18 +234,12 @@ impl<'a> Lowerer<'a> {
             .chain(tail)
             .map(|expr| self.expr(expr))
             .collect();
-        Expr::Block(ExprBlock {
-            exprs,
-            ty: self.program.insert_type(Type::Unknown),
-        })
+        Expr::Block(ExprBlock { exprs })
     }
 
     fn expr_tuple(&mut self, exprs: &[AstExpr]) -> Expr {
         let exprs = exprs.iter().map(|expr| self.expr(expr)).collect();
-        Expr::Tuple(ExprTuple {
-            exprs,
-            ty: self.program.insert_type(Type::Unknown),
-        })
+        Expr::Tuple(ExprTuple { exprs })
     }
 
     #[allow(
@@ -278,12 +272,7 @@ impl<'a> Lowerer<'a> {
 
     fn expr_array(&mut self, exprs: &[AstExpr]) -> Expr {
         let exprs = exprs.iter().map(|expr| self.expr(expr)).collect();
-        let ty_unknown = self.program.insert_type(Type::Unknown);
-        Expr::Array(ExprArray {
-            exprs,
-            ty: Rc::clone(&ty_unknown),
-            element_ty: ty_unknown,
-        })
+        Expr::Array(ExprArray { exprs })
     }
 
     #[allow(
@@ -338,11 +327,8 @@ impl<'a> Lowerer<'a> {
             .iter()
             .map(|(pat, expr)| (self.pattern(pat), self.expr(expr)))
             .collect();
-        let ty_unknown = self.program.insert_type(Type::Unknown);
         Expr::Match(ExprMatch {
             scrutinee: Box::new(scrutinee),
-            scrutinee_ty: Rc::clone(&ty_unknown),
-            ty: ty_unknown,
             arms,
         })
     }
@@ -350,19 +336,15 @@ impl<'a> Lowerer<'a> {
     fn expr_get(&mut self, object: &AstExpr, field: &AstIdent) -> Expr {
         Expr::Get(ExprGet {
             object: Box::new(self.expr(object)),
-            object_ty: self.program.insert_type(Type::Unknown),
             field: field.string.to_string(),
         })
     }
 
     fn expr_set(&mut self, object: &AstExpr, field: &AstIdent, value: &AstExpr) -> Expr {
-        let ty_unknown = self.program.insert_type(Type::Unknown);
         Expr::Set(ExprSet {
             object: Box::new(self.expr(object)),
-            object_ty: Rc::clone(&ty_unknown),
             field: field.string.to_string(),
             value: Box::new(self.expr(value)),
-            value_ty: ty_unknown,
         })
     }
 
@@ -370,7 +352,6 @@ impl<'a> Lowerer<'a> {
         let args = arguments.iter().map(|expr| self.expr(expr)).collect();
         Expr::Call(ExprCall {
             callee: Box::new(self.expr(callee)),
-            callee_ty: self.program.insert_type(Type::Unknown),
             args,
         })
     }
@@ -397,9 +378,7 @@ impl<'a> Lowerer<'a> {
             .collect();
         Expr::ContApplication(ExprContApplication {
             callee: Box::new(self.expr(callee)),
-            callee_ty: self.program.insert_type(Type::Unknown),
             continuations,
-            result_ty: self.program.insert_type(Type::Unknown),
         })
     }
 
@@ -411,7 +390,6 @@ impl<'a> Lowerer<'a> {
         Expr::Unary(ExprUnary {
             op,
             right: Box::new(self.expr(operand)),
-            right_ty: self.program.insert_type(Type::Unknown),
         })
     }
 
@@ -429,21 +407,17 @@ impl<'a> Lowerer<'a> {
             AstBinaryOp::Gt(_) => BinaryOp::Gt,
             AstBinaryOp::Ge(_) => BinaryOp::Ge,
         };
-        let ty_unknown = self.program.insert_type(Type::Unknown);
         Expr::Binary(ExprBinary {
             left: Box::new(self.expr(left)),
-            left_ty: Rc::clone(&ty_unknown),
             op,
             right: Box::new(self.expr(right)),
-            right_ty: ty_unknown,
         })
     }
 
     fn expr_declare(&mut self, name: &AstIdent, ty: Option<&AstType>, value: &AstExpr) -> Expr {
-        let ty_unknown = self.program.insert_type(Type::Unknown);
         Expr::Declare(ExprDeclare {
             ident: self.ident(name).unwrap(),
-            ty: ty.map_or(ty_unknown, |ty| self.ty(ty)),
+            ty: ty.map(|ty| self.ty(ty)),
             expr: Box::new(self.expr(value)),
         })
     }
@@ -533,7 +507,7 @@ impl<'a> Lowerer<'a> {
             .insert(self.functions[&fun.name.span], ir_fun);
     }
 
-    fn lower(mut self) -> Program {
+    fn lower(mut self) -> Program<Expr> {
         for ty in self.ast.items.iter().filter_map(Item::as_user_defined_ty) {
             self.declare_ty(ty);
         }
@@ -554,6 +528,6 @@ impl<'a> Lowerer<'a> {
     }
 }
 
-pub fn lower(ast: &AstProgram, names: NameMap, program_name: String) -> Program {
+pub fn lower(ast: &AstProgram, names: NameMap, program_name: String) -> Program<Expr> {
     Lowerer::new(program_name, ast, names).lower()
 }

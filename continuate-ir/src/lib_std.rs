@@ -20,20 +20,17 @@ pub struct StdLib {
     pub fn_termination: FuncRef,
 }
 
-pub(crate) fn standard_library(program: &mut Program) -> StdLib {
+pub(crate) fn standard_library(program: &mut Program<Expr>) -> StdLib {
     let ty_bool = program.insert_type(Type::Bool);
 
     let ty_int = program.insert_type(Type::Int);
-
-    let ty_unknown = program.insert_type(Type::Unknown);
 
     let mut fn_termination = Function::new("termination".to_string());
     let param = Ident::new(Span::dummy());
     fn_termination.params.push((param, Rc::clone(&ty_int)));
     fn_termination.body.push(Expr::Intrinsic(ExprIntrinsic {
         intrinsic: Intrinsic::Terminate,
-        value: Box::new(Expr::Ident(param)),
-        value_ty: Rc::clone(&ty_unknown),
+        values: vec![Expr::Ident(param)],
     }));
 
     let fn_termination_ref = FuncRef::new();
@@ -57,19 +54,17 @@ pub(crate) fn standard_library(program: &mut Program) -> StdLib {
         .insert(cont, Rc::clone(&int_fn));
     let intrinsic = Expr::Intrinsic(ExprIntrinsic {
         intrinsic: Intrinsic::Discriminant,
-        value: Box::new(Expr::Ident(param)),
-        value_ty: Rc::clone(&ty_unknown),
+        values: vec![Expr::Ident(param)],
     });
     let discriminant = Ident::new(Span::dummy());
     let declare = Expr::Declare(ExprDeclare {
         ident: discriminant,
-        ty: ty_int,
+        ty: Some(ty_int),
         expr: Box::new(intrinsic),
     });
     fn_discriminant.body.push(declare);
     let cont_call = Expr::Call(ExprCall {
         callee: Box::new(Expr::Ident(cont)),
-        callee_ty: ty_unknown,
         args: vec![Expr::Ident(discriminant)],
     });
     fn_discriminant.body.push(cont_call);

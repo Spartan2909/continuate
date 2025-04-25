@@ -26,14 +26,14 @@ use continuate_error::Span;
 
 use itertools::Itertools as _;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DestructureFields {
     Named(Vec<(String, Pattern)>),
     Anonymous(Vec<Pattern>),
     Unit,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Pattern {
     Wildcard,
     Ident(Ident),
@@ -79,13 +79,11 @@ pub enum Expr {
 #[derive(Debug)]
 pub struct ExprBlock {
     pub exprs: Vec<Expr>,
-    pub ty: Rc<Type>,
 }
 
 #[derive(Debug)]
 pub struct ExprTuple {
     pub exprs: Vec<Expr>,
-    pub ty: Rc<Type>,
 }
 
 #[derive(Debug)]
@@ -105,61 +103,50 @@ pub struct ExprConstructor {
 #[derive(Debug)]
 pub struct ExprArray {
     pub exprs: Vec<Expr>,
-    pub ty: Rc<Type>,
-    pub element_ty: Rc<Type>,
 }
 
 #[derive(Debug)]
 pub struct ExprGet {
     pub object: Box<Expr>,
-    pub object_ty: Rc<Type>,
     pub field: String,
 }
 
 #[derive(Debug)]
 pub struct ExprSet {
     pub object: Box<Expr>,
-    pub object_ty: Rc<Type>,
     pub field: String,
     pub value: Box<Expr>,
-    pub value_ty: Rc<Type>,
 }
 
 #[derive(Debug)]
 pub struct ExprCall {
     pub callee: Box<Expr>,
-    pub callee_ty: Rc<Type>,
     pub args: Vec<Expr>,
 }
 
 #[derive(Debug)]
 pub struct ExprContApplication {
     pub callee: Box<Expr>,
-    pub callee_ty: Rc<Type>,
     pub continuations: Vec<(Ident, Expr)>,
-    pub result_ty: Rc<Type>,
 }
 
 #[derive(Debug)]
 pub struct ExprUnary {
     pub op: UnaryOp,
     pub right: Box<Expr>,
-    pub right_ty: Rc<Type>,
 }
 
 #[derive(Debug)]
 pub struct ExprBinary {
     pub left: Box<Expr>,
-    pub left_ty: Rc<Type>,
     pub op: BinaryOp,
     pub right: Box<Expr>,
-    pub right_ty: Rc<Type>,
 }
 
 #[derive(Debug)]
 pub struct ExprDeclare {
     pub ident: Ident,
-    pub ty: Rc<Type>,
+    pub ty: Option<Rc<Type>>,
     pub expr: Box<Expr>,
 }
 
@@ -172,8 +159,6 @@ pub struct ExprAssign {
 #[derive(Debug)]
 pub struct ExprMatch {
     pub scrutinee: Box<Expr>,
-    pub scrutinee_ty: Rc<Type>,
-    pub ty: Rc<Type>,
     pub arms: Vec<(Pattern, Expr)>,
 }
 
@@ -186,8 +171,152 @@ pub struct ExprClosure {
 #[derive(Debug)]
 pub struct ExprIntrinsic {
     pub intrinsic: Intrinsic,
-    pub value: Box<Expr>,
-    pub value_ty: Rc<Type>,
+    pub values: Vec<Expr>,
+}
+
+#[derive(Debug)]
+pub enum TypedExpr {
+    Literal(Literal),
+    Ident(Ident),
+    Function(FuncRef),
+    Block(Typed<TypedExprBlock>),
+    Tuple(Typed<TypedExprTuple>),
+    Constructor(TypedExprConstructor),
+    Array(TypedExprArray),
+    Get(TypedExprGet),
+    Set(TypedExprSet),
+    Call(TypedExprCall),
+    ContApplication(Typed<TypedExprContApplication>),
+    Unary(TypedExprUnary),
+    Binary(TypedExprBinary),
+    Declare(TypedExprDeclare),
+    Assign(TypedExprAssign),
+    Match(Typed<TypedExprMatch>),
+    Closure(TypedExprClosure),
+    Intrinsic(TypedExprIntrinsic),
+}
+
+#[derive(Debug)]
+pub struct Typed<T> {
+    pub value: T,
+    pub ty: Rc<Type>,
+}
+
+impl<T> Typed<T> {
+    pub const fn new(value: T, ty: Rc<Type>) -> Typed<T> {
+        Typed { value, ty }
+    }
+
+    pub fn boxed(self) -> Typed<Box<T>> {
+        Typed {
+            value: Box::new(self.value),
+            ty: self.ty,
+        }
+    }
+
+    pub fn into_value_ty(self) -> (T, Rc<Type>) {
+        let Typed { value, ty } = self;
+        (value, ty)
+    }
+}
+
+#[derive(Debug)]
+pub struct TypedExprBlock {
+    pub exprs: Vec<TypedExpr>,
+}
+
+#[derive(Debug)]
+pub struct TypedExprTuple {
+    pub exprs: Vec<TypedExpr>,
+}
+
+#[derive(Debug)]
+pub enum TypedExprConstructorFields {
+    Named(Vec<(String, TypedExpr)>),
+    Anonymous(Vec<TypedExpr>),
+    Unit,
+}
+
+#[derive(Debug)]
+pub struct TypedExprConstructor {
+    pub ty: Rc<Type>,
+    pub variant: Option<String>,
+    pub fields: TypedExprConstructorFields,
+}
+
+#[derive(Debug)]
+pub struct TypedExprArray {
+    pub exprs: Vec<TypedExpr>,
+    pub element_ty: Rc<Type>,
+}
+
+#[derive(Debug)]
+pub struct TypedExprGet {
+    pub object: Typed<Box<TypedExpr>>,
+    pub field: String,
+}
+
+#[derive(Debug)]
+pub struct TypedExprSet {
+    pub object: Typed<Box<TypedExpr>>,
+    pub field: String,
+    pub value: Typed<Box<TypedExpr>>,
+}
+
+#[derive(Debug)]
+pub struct TypedExprCall {
+    pub callee: Typed<Box<TypedExpr>>,
+    pub args: Vec<TypedExpr>,
+}
+
+#[derive(Debug)]
+pub struct TypedExprContApplication {
+    pub callee: Typed<Box<TypedExpr>>,
+    pub continuations: Vec<(Ident, TypedExpr)>,
+}
+
+#[derive(Debug)]
+pub struct TypedExprUnary {
+    pub op: UnaryOp,
+    pub right: Typed<Box<TypedExpr>>,
+}
+
+#[derive(Debug)]
+pub struct TypedExprBinary {
+    pub left: Typed<Box<TypedExpr>>,
+    pub op: BinaryOp,
+    pub right: Typed<Box<TypedExpr>>,
+}
+
+#[derive(Debug)]
+pub struct TypedExprDeclare {
+    pub ident: Ident,
+    pub ty: Rc<Type>,
+    pub expr: Box<TypedExpr>,
+}
+
+#[derive(Debug)]
+pub struct TypedExprAssign {
+    pub ident: Ident,
+    pub expr: Box<TypedExpr>,
+}
+
+#[derive(Debug)]
+pub struct TypedExprMatch {
+    pub scrutinee: Typed<Box<TypedExpr>>,
+    pub arms: Vec<(Pattern, TypedExpr)>,
+}
+
+#[derive(Debug)]
+pub struct TypedExprClosure {
+    pub func: FuncRef,
+    pub captures: HashMap<Ident, Rc<Type>>,
+}
+
+#[derive(Debug)]
+pub struct TypedExprIntrinsic {
+    pub intrinsic: Intrinsic,
+    pub values: Vec<Typed<TypedExpr>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -243,7 +372,7 @@ impl Type {
     pub(crate) fn unify(
         self: &Rc<Type>,
         other: &Rc<Type>,
-        program: &mut Program,
+        program: &mut Program<TypedExpr>,
     ) -> Result<Rc<Type>> {
         if self == other {
             return Ok(Rc::clone(self));
@@ -444,16 +573,16 @@ impl UserDefinedTypeFields {
 }
 
 #[derive(Debug)]
-pub struct Function {
+pub struct Function<E> {
     pub params: Vec<(Ident, Rc<Type>)>,
     pub continuations: HashMap<Ident, Rc<Type>>,
-    pub body: Vec<Expr>,
+    pub body: Vec<E>,
     pub captures: Vec<Ident>,
     pub name: String,
 }
 
-impl Function {
-    pub fn new(name: String) -> Function {
+impl<E> Function<E> {
+    pub fn new(name: String) -> Function<E> {
         Function {
             params: Vec::new(),
             continuations: HashMap::new(),
@@ -462,11 +591,21 @@ impl Function {
             name,
         }
     }
+
+    pub fn clone_metadata<E2>(function: &Function<E2>, body: Vec<E>) -> Function<E> {
+        Function {
+            params: function.params.clone(),
+            continuations: function.continuations.clone(),
+            body,
+            captures: function.captures.clone(),
+            name: function.name.clone(),
+        }
+    }
 }
 
 #[derive(Debug)]
-pub struct Program {
-    pub functions: HashMap<FuncRef, Function>,
+pub struct Program<E> {
+    pub functions: HashMap<FuncRef, Function<E>>,
     pub signatures: HashMap<FuncRef, Rc<Type>>,
     pub types: HashSet<Rc<Type>>,
     lib_std: Option<StdLib>,
@@ -475,8 +614,8 @@ pub struct Program {
     pub user_defined_types: HashMap<UserDefinedTyRef, Rc<UserDefinedType>>,
 }
 
-impl Program {
-    pub fn new(name: String) -> Program {
+impl Program<Expr> {
+    pub fn new(name: String) -> Program<Expr> {
         let mut program = Program {
             functions: HashMap::new(),
             signatures: HashMap::new(),
@@ -488,6 +627,20 @@ impl Program {
         };
         program.lib_std = Some(lib_std::standard_library(&mut program));
         program
+    }
+}
+
+impl<E> Program<E> {
+    pub fn clone_metadata<E2>(program: &Program<E2>) -> Program<E> {
+        Program {
+            functions: HashMap::new(),
+            signatures: program.signatures.clone(),
+            types: program.types.clone(),
+            lib_std: program.lib_std,
+            name: program.name.clone(),
+            continuation_idents: program.continuation_idents.clone(),
+            user_defined_types: program.user_defined_types.clone(),
+        }
     }
 
     #[allow(clippy::missing_panics_doc)] // Will not panic.

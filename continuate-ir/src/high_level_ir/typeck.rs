@@ -29,6 +29,24 @@ use crate::high_level_ir::FunctionTy;
 use crate::high_level_ir::Pattern;
 use crate::high_level_ir::Program;
 use crate::high_level_ir::Type;
+use crate::high_level_ir::Typed;
+use crate::high_level_ir::TypedExpr;
+use crate::high_level_ir::TypedExprArray;
+use crate::high_level_ir::TypedExprAssign;
+use crate::high_level_ir::TypedExprBinary;
+use crate::high_level_ir::TypedExprBlock;
+use crate::high_level_ir::TypedExprCall;
+use crate::high_level_ir::TypedExprClosure;
+use crate::high_level_ir::TypedExprConstructor;
+use crate::high_level_ir::TypedExprConstructorFields;
+use crate::high_level_ir::TypedExprContApplication;
+use crate::high_level_ir::TypedExprDeclare;
+use crate::high_level_ir::TypedExprGet;
+use crate::high_level_ir::TypedExprIntrinsic;
+use crate::high_level_ir::TypedExprMatch;
+use crate::high_level_ir::TypedExprSet;
+use crate::high_level_ir::TypedExprTuple;
+use crate::high_level_ir::TypedExprUnary;
 use crate::high_level_ir::UserDefinedType;
 use crate::high_level_ir::UserDefinedTypeFields;
 
@@ -47,11 +65,15 @@ enum Exhaustive {
 }
 
 impl Exhaustive {
-    fn finalise(self) -> Exhaustive {
-        if matches!(self, Exhaustive::Exhaustive) {
-            Exhaustive::Exhaustive
-        } else {
-            Exhaustive::NonExhaustive
+    fn finalise(self, num_variants: Option<usize>) -> Exhaustive {
+        match (self, num_variants) {
+            (Exhaustive::Exhaustive, _) => Exhaustive::Exhaustive,
+            (Exhaustive::ExhaustiveVariants(variants), Some(num_variants))
+                if variants.len() == num_variants =>
+            {
+                Exhaustive::Exhaustive
+            }
+            _ => Exhaustive::NonExhaustive,
         }
     }
 
@@ -94,60 +116,89 @@ impl Exhaustive {
 }
 
 struct TypeCk<'a> {
-    program: &'a mut Program,
+    program: &'a Program<Expr>,
+    typed_program: Program<TypedExpr>,
     environment: HashMap<Ident, Rc<Type>>,
     closures: Vec<(FuncRef, HashMap<Ident, Rc<Type>>)>,
 }
 
 impl<'a> TypeCk<'a> {
-    fn exprs<'b, I: IntoIterator<Item = &'b mut Expr>>(
+    fn exprs<'b, I: IntoIterator<Item = &'b Expr>>(
         &mut self,
         exprs: I,
-    ) -> Result<Vec<Rc<Type>>> {
+    ) -> Result<Vec<Typed<TypedExpr>>> {
         exprs.into_iter().map(|expr| self.expr(expr)).collect()
     }
 
-    fn expr_literal(&mut self, literal: &Literal) -> Rc<Type> {
-        match *literal {
-            Literal::Int(_) => self.program.insert_type(Type::Int),
-            Literal::Float(_) => self.program.insert_type(Type::Float),
-            Literal::String(_) => self.program.insert_type(Type::String),
-        }
+    fn expr_literal(&mut self, literal: Literal) -> Typed<TypedExpr> {
+        let ty = match literal {
+            Literal::Int(_) => self.typed_program.insert_type(Type::Int),
+            Literal::Float(_) => self.typed_program.insert_type(Type::Float),
+            Literal::String(_) => self.typed_program.insert_type(Type::String),
+        };
+        Typed::new(TypedExpr::Literal(literal), ty)
     }
 
-    fn expr_ident(&self, ident: Ident) -> Result<Rc<Type>> {
-        self.environment
+    fn expr_ident(&self, ident: Ident) -> Result<Typed<TypedExpr>> {
+        let ty = self
+            .environment
             .get(&ident)
             .cloned()
-            .ok_or_else(|| format!("cannot find {ident:?}").into())
+            .ok_or_else(|| format!("cannot find {ident:?}"))?;
+        Ok(Typed::new(TypedExpr::Ident(ident), ty))
     }
 
-    fn block(&mut self, exprs: &mut [Expr], ty: &Rc<Type>) -> Result<Rc<Type>> {
-        let Some((tail, block)) = exprs.split_last_mut() else {
-            return Ok(self.program.insert_type(Type::Tuple(Vec::new())));
+    fn expr_function(&self, func_ref: FuncRef) -> Typed<TypedExpr> {
+        let ty = Rc::clone(&self.typed_program.signatures[&func_ref]);
+        Typed::new(TypedExpr::Function(func_ref), ty)
+    }
+
+    fn block(&mut self, exprs: &[Expr]) -> Result<Typed<Vec<TypedExpr>>> {
+        let Some((tail, block)) = exprs.split_last() else {
+            let ty = self.typed_program.insert_type(Type::Tuple(Vec::new()));
+            return Ok(Typed::new(vec![], Rc::clone(&ty)));
         };
 
-        for expr in block {
-            self.expr(expr)?;
-        }
+        let block: Result<Vec<_>> = block
+            .iter()
+            .map(|expr| Ok(self.expr(expr)?.value))
+            .collect();
+        let mut block = block?;
 
-        let block_ty = self.expr(tail)?;
-        block_ty.unify(ty, self.program)
+        let tail = self.expr(tail)?;
+        block.push(tail.value);
+        Ok(Typed::new(block, tail.ty))
     }
 
-    fn expr_block(&mut self, expr: &mut ExprBlock) -> Result<Rc<Type>> {
-        expr.ty = self.block(&mut expr.exprs, &expr.ty)?;
-        Ok(Rc::clone(&expr.ty))
+    fn expr_block(&mut self, expr: &ExprBlock) -> Result<Typed<TypedExpr>> {
+        self.block(&expr.exprs).map(|exprs| {
+            Typed::new(
+                TypedExpr::Block(Typed::new(
+                    TypedExprBlock { exprs: exprs.value },
+                    Rc::clone(&exprs.ty),
+                )),
+                exprs.ty,
+            )
+        })
     }
 
-    fn expr_tuple(&mut self, expr: &mut ExprTuple) -> Result<Rc<Type>> {
-        let types = self.exprs(&mut expr.exprs)?;
-        let result_ty = self.program.insert_type(Type::Tuple(types));
-        expr.ty = result_ty.unify(&expr.ty, self.program)?;
-        Ok(Rc::clone(&expr.ty))
+    fn expr_tuple(&mut self, expr: &ExprTuple) -> Result<Typed<TypedExpr>> {
+        let exprs = self.exprs(&expr.exprs)?;
+        let ty = self.typed_program.insert_type(Type::Tuple(
+            exprs.iter().map(|expr| Rc::clone(&expr.ty)).collect(),
+        ));
+        Ok(Typed::new(
+            TypedExpr::Tuple(Typed::new(
+                TypedExprTuple {
+                    exprs: exprs.into_iter().map(|expr| expr.value).collect(),
+                },
+                Rc::clone(&ty),
+            )),
+            ty,
+        ))
     }
 
-    fn expr_constructor(&mut self, expr: &mut ExprConstructor) -> Result<Rc<Type>> {
+    fn expr_constructor(&mut self, expr: &ExprConstructor) -> Result<Typed<TypedExpr>> {
         let ty = Rc::clone(&expr.ty);
         let user_defined = ty
             .as_user_defined()
@@ -165,14 +216,14 @@ impl<'a> TypeCk<'a> {
             _ => unreachable!(),
         };
 
-        match (&mut expr.fields, ty_fields) {
+        let fields = match (&expr.fields, ty_fields) {
             (
                 ExprConstructorFields::Named(expr_fields),
                 UserDefinedTypeFields::Named(ty_fields),
             ) => {
-                let mut used_fields = HashSet::new();
+                let mut fields = Vec::new();
                 for (field, expr) in expr_fields {
-                    if used_fields.contains(field) {
+                    if fields.iter().any(|(f, _)| f == field) {
                         Err(format!("field {field} specified twice"))?;
                     }
 
@@ -181,46 +232,66 @@ impl<'a> TypeCk<'a> {
                         .find(|(name, _)| name == field)
                         .ok_or_else(|| format!("type {ty:?} has no field '{field}"))?;
                     let ty_field = Rc::clone(ty_field);
-                    self.expr(expr)?.unify(&ty_field, self.program)?;
-                    used_fields.insert(field);
+                    let expr = self.expr(expr)?;
+                    expr.ty.unify(&ty_field, &mut self.typed_program)?;
+                    fields.push((field.clone(), expr.value));
                 }
                 for (field, _) in &ty_fields {
-                    if !used_fields.contains(field) {
+                    if !fields.iter().any(|(f, _)| f == field) {
                         Err(format!("missing field '{field}'"))?;
                     }
                 }
+                TypedExprConstructorFields::Named(fields)
             }
             (
                 ExprConstructorFields::Anonymous(expr_fields),
                 UserDefinedTypeFields::Anonymous(ty_fields),
             ) => {
-                let expr_field_tys = self.exprs(expr_fields)?;
-                for (expr_ty, field_ty) in expr_field_tys.iter().zip(ty_fields) {
-                    expr_ty.unify(&field_ty, self.program)?;
+                let expr_fields = self.exprs(expr_fields)?;
+                if expr_fields.len() != ty_fields.len() {
+                    Err("incorrect number of fields")?;
                 }
+                for (expr, field_ty) in expr_fields.iter().zip(ty_fields) {
+                    expr.ty.unify(&field_ty, &mut self.typed_program)?;
+                }
+                TypedExprConstructorFields::Anonymous(
+                    expr_fields.into_iter().map(|expr| expr.value).collect(),
+                )
             }
-            (ExprConstructorFields::Unit, UserDefinedTypeFields::Unit) => {}
+            (ExprConstructorFields::Unit, UserDefinedTypeFields::Unit) => {
+                TypedExprConstructorFields::Unit
+            }
             _ => Err("incompatible field styles")?,
-        }
+        };
 
-        Ok(Rc::clone(&expr.ty))
+        let expr = TypedExprConstructor {
+            ty: Rc::clone(&ty),
+            variant: expr.variant.clone(),
+            fields,
+        };
+
+        Ok(Typed::new(TypedExpr::Constructor(expr), ty))
     }
 
-    fn expr_array(&mut self, expr: &mut ExprArray) -> Result<Rc<Type>> {
-        let elem_ty = self
-            .exprs(&mut expr.exprs)?
-            .into_iter()
-            .try_fold(Rc::clone(&expr.ty), |acc, ty| ty.unify(&acc, self.program))?;
-        expr.element_ty = Rc::clone(&elem_ty);
-        expr.ty = self
-            .program
-            .insert_type(Type::Array(elem_ty, expr.exprs.len() as u64));
-        Ok(Rc::clone(&expr.ty))
+    fn expr_array(&mut self, expr: &ExprArray) -> Result<Typed<TypedExpr>> {
+        let exprs = self.exprs(&expr.exprs)?;
+        let element_ty = exprs
+            .iter()
+            .try_fold(self.typed_program.insert_type(Type::Unknown), |acc, val| {
+                val.ty.unify(&acc, &mut self.typed_program)
+            })?;
+        let ty = self
+            .typed_program
+            .insert_type(Type::Array(Rc::clone(&element_ty), exprs.len() as u64));
+        let expr = TypedExpr::Array(TypedExprArray {
+            exprs: exprs.into_iter().map(|expr| expr.value).collect(),
+            element_ty,
+        });
+        Ok(Typed::new(expr, ty))
     }
 
-    fn expr_get(&mut self, expr: &mut ExprGet) -> Result<Rc<Type>> {
-        let found_ty = self.expr(&mut expr.object)?;
-        let object_ty = found_ty.unify(&expr.object_ty, self.program)?;
+    fn expr_get(&mut self, expr: &ExprGet) -> Result<Typed<TypedExpr>> {
+        let (object, object_ty) = self.expr(&expr.object)?.into_value_ty();
         let Type::UserDefined(ty) = *object_ty else {
             Err(format!("cannot take field of {object_ty:?}"))?
         };
@@ -228,21 +299,25 @@ impl<'a> TypeCk<'a> {
             Err(format!("cannot take field of {object_ty:?}"))?
         };
 
-        Ok(fields
+        let field_ty = fields
             .get(&expr.field)
             .cloned()
-            .ok_or_else(|| format!("{object_ty:?} has no field '{}'", expr.field))?)
+            .ok_or_else(|| format!("{object_ty:?} has no field '{}'", &expr.field))?;
+        let expr = TypedExpr::Get(TypedExprGet {
+            object: Typed::new(Box::new(object), object_ty),
+            field: expr.field.clone(),
+        });
+
+        Ok(Typed::new(expr, field_ty))
     }
 
-    fn expr_set(&mut self, expr: &mut ExprSet) -> Result<Rc<Type>> {
-        let found_ty = self.expr(&mut expr.object)?;
-        let ty = found_ty.unify(&expr.object_ty, self.program)?;
-        expr.object_ty = Rc::clone(&ty);
+    fn expr_set(&mut self, expr: &ExprSet) -> Result<Typed<TypedExpr>> {
+        let (object, object_ty) = self.expr(&expr.object)?.into_value_ty();
 
-        let Type::UserDefined(object_ty) = &*ty else {
-            Err(format!("cannot take field of {ty:?}"))?
+        let Type::UserDefined(ty) = &*object_ty else {
+            Err(format!("cannot take field of {object_ty:?}"))?
         };
-        let UserDefinedType::Product(fields) = &*self.program.user_defined_types[object_ty] else {
+        let UserDefinedType::Product(fields) = &*self.program.user_defined_types[ty] else {
             Err(format!("cannot take field of {ty:?}"))?
         };
 
@@ -251,20 +326,24 @@ impl<'a> TypeCk<'a> {
             .cloned()
             .ok_or_else(|| format!("{object_ty:?} has no field '{}'", expr.field))?;
 
-        let ty = self.expr(&mut expr.value)?;
-        let ty = ty.unify(&field_ty, self.program)?;
-        expr.value_ty = Rc::clone(&ty);
-        Ok(ty)
+        let (value, value_ty) = self.expr(&expr.value)?.into_value_ty();
+
+        value_ty.unify(&field_ty, &mut self.typed_program)?;
+
+        let expr = TypedExpr::Set(TypedExprSet {
+            object: Typed::new(Box::new(object), object_ty),
+            field: expr.field.clone(),
+            value: Typed::new(Box::new(value), Rc::clone(&value_ty)),
+        });
+        Ok(Typed::new(expr, value_ty))
     }
 
-    fn expr_call(&mut self, expr: &mut ExprCall) -> Result<Rc<Type>> {
-        let ty = self.expr(&mut expr.callee)?;
-        let ty = ty.unify(&expr.callee_ty, self.program)?;
-        expr.callee_ty = Rc::clone(&ty);
+    fn expr_call(&mut self, expr: &ExprCall) -> Result<Typed<TypedExpr>> {
+        let callee = self.expr(&expr.callee)?;
         let Type::Function(FunctionTy {
             params,
             continuations,
-        }) = &*ty
+        }) = &*callee.ty
         else {
             Err("{ty:?} is not a function")?
         };
@@ -281,60 +360,81 @@ impl<'a> TypeCk<'a> {
             ))?;
         }
 
-        for (param, arg) in params.iter().zip(&mut expr.args) {
-            let arg = self.expr(arg)?;
-            arg.unify(param, self.program)?;
-        }
+        let args: Result<Vec<_>> = params
+            .iter()
+            .zip(&expr.args)
+            .map(|(param, arg)| {
+                let arg = self.expr(arg)?;
+                arg.ty.unify(param, &mut self.typed_program)?;
+                Ok(arg.value)
+            })
+            .collect();
 
-        Ok(self.program.insert_type(Type::None))
+        let expr = TypedExprCall {
+            callee: Typed::boxed(callee),
+            args: args?,
+        };
+
+        Ok(Typed::new(
+            TypedExpr::Call(expr),
+            self.typed_program.insert_type(Type::None),
+        ))
     }
 
-    fn expr_cont_application(&mut self, expr: &mut ExprContApplication) -> Result<Rc<Type>> {
-        let ty = self.expr(&mut expr.callee)?;
-        let ty = ty.unify(&expr.callee_ty, self.program)?;
-        expr.callee_ty = Rc::clone(&ty);
+    fn expr_cont_application(&mut self, expr: &ExprContApplication) -> Result<Typed<TypedExpr>> {
+        let callee = self.expr(&expr.callee)?;
         let Type::Function(FunctionTy {
             params,
             continuations: ty_continuations,
-        }) = &*ty
+        }) = &*callee.ty
         else {
             Err("{ty:?} is not a function")?
         };
 
         let mut ty_continuations = ty_continuations.clone();
-        for (ident, cont) in &mut expr.continuations {
+        let mut continuations = Vec::with_capacity(expr.continuations.len());
+        for (ident, cont) in &expr.continuations {
             let cont = self.expr(cont)?;
             let expected = ty_continuations
                 .remove(ident)
                 .ok_or_else(|| format!("no such continuation {ident:?}"))?;
-            cont.unify(&expected, self.program)?;
+            cont.ty.unify(&expected, &mut self.typed_program)?;
+            continuations.push((*ident, cont.value));
         }
 
         let ty = Type::function(params.clone(), ty_continuations);
-        expr.result_ty = self.program.insert_type(ty);
-        Ok(Rc::clone(&expr.result_ty))
+        let ty = self.typed_program.insert_type(ty);
+        let expr = Typed::new(
+            TypedExprContApplication {
+                callee: Typed::boxed(callee),
+                continuations,
+            },
+            Rc::clone(&ty),
+        );
+        Ok(Typed::new(TypedExpr::ContApplication(expr), ty))
     }
 
-    fn expr_unary(&mut self, expr: &mut ExprUnary) -> Result<Rc<Type>> {
-        let right = self.expr(&mut expr.right)?;
-        let right = right.unify(&expr.right_ty, self.program)?;
-        expr.right_ty = Rc::clone(&right);
-        match (expr.op, &*right) {
-            (UnaryOp::Neg, Type::Int | Type::Float) | (UnaryOp::Not, Type::Bool) => Ok(right),
+    fn expr_unary(&mut self, expr: &ExprUnary) -> Result<Typed<TypedExpr>> {
+        let right = self.expr(&expr.right)?;
+        let ty = match (expr.op, &*right.ty) {
+            (UnaryOp::Neg, Type::Int | Type::Float) | (UnaryOp::Not, Type::Bool) => {
+                Result::Ok(Rc::clone(&right.ty))
+            }
             _ => Err(format!("invalid use of {:?}", expr.op))?,
-        }
+        }?;
+        let expr = TypedExprUnary {
+            op: expr.op,
+            right: Typed::boxed(right),
+        };
+        Ok(Typed::new(TypedExpr::Unary(expr), ty))
     }
 
-    fn expr_binary(&mut self, expr: &mut ExprBinary) -> Result<Rc<Type>> {
-        let left = self.expr(&mut expr.left)?;
-        let left = left.unify(&expr.left_ty, self.program)?;
-        expr.left_ty = Rc::clone(&left);
+    fn expr_binary(&mut self, expr: &ExprBinary) -> Result<Typed<TypedExpr>> {
+        let left = self.expr(&expr.left)?;
 
-        let right = self.expr(&mut expr.right)?;
-        let right = right.unify(&expr.right_ty, self.program)?;
-        expr.right_ty = Rc::clone(&right);
+        let right = self.expr(&expr.right)?;
 
-        match (&*left, expr.op, &*right) {
+        let ty = match (&*left.ty, expr.op, &*right.ty) {
             (
                 l @ (Type::Int | Type::Float | Type::String),
                 BinaryOp::Add,
@@ -344,35 +444,54 @@ impl<'a> TypeCk<'a> {
                 l @ (Type::Int | Type::Float),
                 BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem,
                 r @ (Type::Int | Type::Float),
-            ) if l == r => Ok(Rc::clone(&expr.left_ty)),
+            ) if l == r => Ok(Rc::clone(&left.ty)),
             (
                 l @ (Type::Int | Type::Float | Type::String),
                 BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge,
                 r @ (Type::Int | Type::Float | Type::String),
-            ) if l == r => Ok(self.program.insert_type(Type::Bool)),
+            ) if l == r => Ok(self.typed_program.insert_type(Type::Bool)),
             (l, BinaryOp::Eq | BinaryOp::Ne, r) if l == r => {
-                Ok(self.program.insert_type(Type::Bool))
+                Ok(self.typed_program.insert_type(Type::Bool))
             }
             _ => Err(format!(
                 "cannot apply {:?} to {:?} and {:?}",
-                expr.op, expr.left_ty, expr.right_ty
-            )
-            .into()),
-        }
+                expr.op, left.ty, right.ty
+            )),
+        }?;
+
+        let expr = TypedExprBinary {
+            left: Typed::boxed(left),
+            op: expr.op,
+            right: Typed::boxed(right),
+        };
+        Ok(Typed::new(TypedExpr::Binary(expr), ty))
     }
 
-    fn expr_declare(&mut self, expr: &mut ExprDeclare) -> Result<Rc<Type>> {
-        let expr_ty = self.expr(&mut expr.expr)?;
-        let expr_ty = expr_ty.unify(&expr.ty, self.program)?;
-        expr.ty = expr_ty;
-        self.environment.insert(expr.ident, Rc::clone(&expr.ty));
-        Ok(Rc::clone(&expr.ty))
+    fn expr_declare(&mut self, expr: &ExprDeclare) -> Result<Typed<TypedExpr>> {
+        let typed_expr = self.expr(&expr.expr)?;
+        let ty = if let Some(ty) = &expr.ty {
+            typed_expr.ty.unify(ty, &mut self.typed_program)?
+        } else {
+            Rc::clone(&typed_expr.ty)
+        };
+        self.environment.insert(expr.ident, Rc::clone(&ty));
+        let expr = TypedExprDeclare {
+            ident: expr.ident,
+            ty: Rc::clone(&ty),
+            expr: Box::new(typed_expr.value),
+        };
+        Ok(Typed::new(TypedExpr::Declare(expr), ty))
     }
 
-    fn expr_assign(&mut self, expr: &mut ExprAssign) -> Result<Rc<Type>> {
-        let ty = self.expr(&mut expr.expr)?;
+    fn expr_assign(&mut self, expr: &ExprAssign) -> Result<Typed<TypedExpr>> {
+        let typed_expr = self.expr(&expr.expr)?;
         let expected = self.environment.get(&expr.ident).unwrap();
-        ty.unify(expected, self.program)
+        let ty = typed_expr.ty.unify(expected, &mut self.typed_program)?;
+        let expr = TypedExprAssign {
+            ident: expr.ident,
+            expr: Box::new(typed_expr.value),
+        };
+        Ok(Typed::new(TypedExpr::Assign(expr), ty))
     }
 
     fn pattern(&mut self, expr_ty: Rc<Type>, pattern: &Pattern) -> Result<Exhaustive> {
@@ -387,7 +506,7 @@ impl<'a> TypeCk<'a> {
                 ref variant,
                 ref fields,
             } => {
-                let ty = expr_ty.unify(ty, self.program)?;
+                let ty = expr_ty.unify(ty, &mut self.typed_program)?;
                 let user_defined =
                     Rc::clone(&self.program.user_defined_types[&ty.as_user_defined().unwrap()]);
                 let field_tys = match (&*user_defined, variant) {
@@ -414,7 +533,7 @@ impl<'a> TypeCk<'a> {
                                 .ok_or_else(|| format!("type {ty:?} has no field '{field}'"))?;
                             exhaustive = self
                                 .pattern(Rc::clone(field_ty), pat)?
-                                .finalise()
+                                .finalise(None)
                                 .intersect(exhaustive);
                             used_fields.insert(field);
                         }
@@ -433,7 +552,7 @@ impl<'a> TypeCk<'a> {
                         |acc, (pat, field_ty)| {
                             Result::Ok(
                                 self.pattern(Rc::clone(field_ty), pat)?
-                                    .finalise()
+                                    .finalise(None)
                                     .intersect(acc),
                             )
                         },
@@ -465,61 +584,73 @@ impl<'a> TypeCk<'a> {
         }
     }
 
-    fn expr_match(&mut self, expr: &mut ExprMatch) -> Result<Rc<Type>> {
-        let expr_ty = self.expr(&mut expr.scrutinee)?;
-        expr.scrutinee_ty = Rc::clone(&expr_ty);
-        let mut exhaustive = Exhaustive::Exhaustive;
-        let mut output_ty = self.program.insert_type(Type::Unknown);
-        for (pat, expr) in &mut expr.arms {
-            exhaustive = exhaustive.union(self.pattern(Rc::clone(&expr_ty), pat)?);
-            let expr_ty = self.expr(expr)?;
-            output_ty = expr_ty.unify(&output_ty, self.program)?;
+    fn expr_match(&mut self, expr: &ExprMatch) -> Result<Typed<TypedExpr>> {
+        let scrutinee = self.expr(&expr.scrutinee)?;
+        let (exhaustive, output_ty, arms) = expr.arms.iter().try_fold(
+            (
+                Exhaustive::Exhaustive,
+                self.typed_program.insert_type(Type::Unknown),
+                vec![],
+            ),
+            |(exhaustive, output_ty, mut arms), (pat, expr)| {
+                let expr = self.expr(expr)?;
+                let output_ty = expr.ty.unify(&output_ty, &mut self.typed_program)?;
+                let arm_exhaustive = self.pattern(expr.ty, pat)?;
+                arms.push((pat.clone(), expr.value));
+                Result::Ok((exhaustive.union(arm_exhaustive), output_ty, arms))
+            },
+        )?;
+        if exhaustive.finalise(None) != Exhaustive::Exhaustive {
+            Err("non-exhaustive match")?;
         }
-        expr.ty = output_ty;
-        Ok(Rc::clone(&expr.ty))
+        let expr = Typed::new(
+            TypedExprMatch {
+                scrutinee: Typed::boxed(scrutinee),
+                arms,
+            },
+            Rc::clone(&output_ty),
+        );
+        Ok(Typed::new(TypedExpr::Match(expr), output_ty))
     }
 
-    fn expr_closure(&mut self, expr: &mut ExprClosure) -> Rc<Type> {
+    fn expr_closure(&mut self, expr: &ExprClosure) -> Typed<TypedExpr> {
         let actual_func = self.program.functions.get(&expr.func).unwrap();
-        let new_captures: HashMap<_, _> = actual_func
+        let captures: HashMap<_, _> = actual_func
             .captures
             .iter()
             .map(|&ident| (ident, Rc::clone(&self.environment[&ident])))
             .collect();
-        {
-            self.closures.push((expr.func, new_captures.clone()));
-        }
-        expr.captures = Some(new_captures);
-        Rc::clone(&self.program.signatures[&expr.func])
+        self.closures.push((expr.func, captures.clone()));
+        let ty = Rc::clone(&self.program.signatures[&expr.func]);
+        let expr = TypedExprClosure {
+            func: expr.func,
+            captures,
+        };
+        Typed::new(TypedExpr::Closure(expr), ty)
     }
 
-    fn expr_intrinsic(&mut self, expr: &mut ExprIntrinsic) -> Result<Rc<Type>> {
-        let ty = self.expr(&mut expr.value)?;
-        let ty = ty.unify(&expr.value_ty, self.program)?;
-        expr.value_ty = ty;
-        match expr.intrinsic {
-            Intrinsic::Discriminant => Ok(self.program.insert_type(Type::Int)),
+    fn expr_intrinsic(&mut self, expr: &ExprIntrinsic) -> Result<Typed<TypedExpr>> {
+        let values = self.exprs(&expr.values)?;
+        let ty = match expr.intrinsic {
+            Intrinsic::Discriminant => self.typed_program.insert_type(Type::Int),
             Intrinsic::Terminate | Intrinsic::Unreachable => {
-                Ok(self.program.insert_type(Type::None))
+                self.typed_program.insert_type(Type::None)
             }
-        }
+        };
+        let expr = TypedExprIntrinsic {
+            intrinsic: expr.intrinsic,
+            values,
+        };
+        Ok(Typed::new(TypedExpr::Intrinsic(expr), ty))
     }
 
-    fn expr(&mut self, expr: &mut Expr) -> Result<Rc<Type>> {
+    fn expr(&mut self, expr: &Expr) -> Result<Typed<TypedExpr>> {
         match expr {
-            Expr::Literal(literal) => Ok(self.expr_literal(literal)),
+            Expr::Literal(literal) => Ok(self.expr_literal(literal.clone())),
             Expr::Ident(ident) => self.expr_ident(*ident),
-            Expr::Function(func_ref) => Ok(Rc::clone(&self.program.signatures[func_ref])),
-            Expr::Block(expr) => {
-                let checked_ty = self.expr_block(expr)?;
-                expr.ty = Rc::clone(&checked_ty);
-                Ok(checked_ty)
-            }
-            Expr::Tuple(expr) => {
-                let checked_ty = self.expr_tuple(expr)?;
-                expr.ty = Rc::clone(&checked_ty);
-                Ok(checked_ty)
-            }
+            Expr::Function(func_ref) => Ok(self.expr_function(*func_ref)),
+            Expr::Block(expr) => self.expr_block(expr),
+            Expr::Tuple(expr) => self.expr_tuple(expr),
             Expr::Constructor(expr) => self.expr_constructor(expr),
             Expr::Array(expr) => self.expr_array(expr),
             Expr::Get(expr) => self.expr_get(expr),
@@ -538,9 +669,9 @@ impl<'a> TypeCk<'a> {
 
     fn function(
         &mut self,
-        function: &mut Function,
+        function: &Function<Expr>,
         captures: HashMap<Ident, Rc<Type>>,
-    ) -> Result<()> {
+    ) -> Result<Function<TypedExpr>> {
         self.environment = captures;
 
         for (&param, ty) in function
@@ -552,17 +683,15 @@ impl<'a> TypeCk<'a> {
             self.environment.insert(param, Rc::clone(ty));
         }
 
-        let ty_none = self.program.insert_type(Type::None);
-        self.block(&mut function.body, &ty_none)?;
+        let ty_none = self.typed_program.insert_type(Type::None);
+        let (body, body_ty) = self.block(&function.body)?.into_value_ty();
+        body_ty.unify(&ty_none, &mut self.typed_program)?;
 
-        Ok(())
+        Ok(Function::clone_metadata(function, body))
     }
 
-    fn typeck(mut self) -> Result<()> {
-        let functions: Vec<_> = self.program.functions.keys().copied().collect();
-
-        for &func_ref in &functions {
-            let function = &self.program.functions[&func_ref];
+    fn typeck(mut self) -> Result<Program<TypedExpr>> {
+        for (&func_ref, function) in &self.program.functions {
             let params = function
                 .params
                 .iter()
@@ -574,35 +703,34 @@ impl<'a> TypeCk<'a> {
                 .map(|(&name, ty)| (name, Rc::clone(ty)))
                 .collect();
             let ty = self
-                .program
+                .typed_program
                 .insert_type(Type::function(params, continuations));
-            self.program.signatures.insert(func_ref, ty);
+            self.typed_program.signatures.insert(func_ref, ty);
         }
 
-        for func_ref in functions {
-            let mut function = self.program.functions.remove(&func_ref).unwrap();
+        for (&func_ref, function) in &self.program.functions {
             if !function.captures.is_empty() {
-                self.program.functions.insert(func_ref, function);
                 continue;
             }
 
-            self.function(&mut function, HashMap::new())?;
+            let function = self.function(function, HashMap::new())?;
 
-            self.program.functions.insert(func_ref, function);
+            self.typed_program.functions.insert(func_ref, function);
         }
 
         for (func_ref, captures) in mem::take(&mut self.closures) {
-            let mut function = self.program.functions.remove(&func_ref).unwrap();
-            self.function(&mut function, captures)?;
-            self.program.functions.insert(func_ref, function);
+            let function = self.program.functions.get(&func_ref).unwrap();
+            let function = self.function(function, captures)?;
+            self.typed_program.functions.insert(func_ref, function);
         }
 
-        Ok(())
+        Ok(self.typed_program)
     }
 
-    fn new(program: &'a mut Program) -> TypeCk<'a> {
+    fn new(program: &'a Program<Expr>) -> TypeCk<'a> {
         TypeCk {
             program,
+            typed_program: Program::clone_metadata(program),
             environment: HashMap::new(),
             closures: Vec::new(),
         }
@@ -612,6 +740,6 @@ impl<'a> TypeCk<'a> {
 /// ## Errors
 ///
 /// Returns an error if `program` contains a type error.
-pub fn typeck(program: &mut Program) -> Result<()> {
+pub fn typeck(program: &Program<Expr>) -> Result<Program<TypedExpr>> {
     TypeCk::new(program).typeck()
 }

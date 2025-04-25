@@ -11,6 +11,7 @@ use crate::common::Intrinsic;
 use crate::common::Literal;
 use crate::common::UnaryOp;
 use crate::high_level_ir::Program as HirProgram;
+use crate::high_level_ir::TypedExpr as HirExpr;
 use crate::lib_std::StdLib;
 
 use std::collections::HashMap;
@@ -339,7 +340,7 @@ pub struct Program {
 }
 
 impl Program {
-    pub fn new(program: &HirProgram) -> Program {
+    pub fn new(program: &HirProgram<HirExpr>) -> Program {
         Program {
             functions: HashMap::new(),
             signatures: HashMap::new(),
