@@ -106,7 +106,7 @@ macro_rules! match_ty {
     };
 }
 
-pub(super) struct FunctionCompiler<'function, 'builder, M: ?Sized> {
+pub(super) struct FunctionCompilerBuilder<'function, 'builder, M: ?Sized> {
     pub(super) module: &'function mut M,
     pub(super) data_description: &'function mut DataDescription,
     pub(super) triple: &'function Triple,
@@ -119,9 +119,46 @@ pub(super) struct FunctionCompiler<'function, 'builder, M: ?Sized> {
     pub(super) function_runtime: FunctionRuntime,
     pub(super) contexts: &'function LinkedList<Context>,
     pub(super) builder_contexts: &'function LinkedList<FunctionBuilderContext>,
-    pub(super) vars: HashMap<Ident, (&'function MirType, bool)>,
-    pub(super) temp_roots: Vec<Value>,
-    pub(super) variables: HashMap<Ident, Variable>,
+}
+
+impl<'function, 'builder, M: ?Sized> FunctionCompilerBuilder<'function, 'builder, M> {
+    pub(super) fn build(self) -> FunctionCompiler<'function, 'builder, M> {
+        FunctionCompiler {
+            module: self.module,
+            data_description: self.data_description,
+            triple: self.triple,
+            functions: self.functions,
+            ty_layouts: self.ty_layouts,
+            builder: self.builder,
+            block_map: self.block_map,
+            mir_function: self.mir_function,
+            params: self.params,
+            function_runtime: self.function_runtime,
+            contexts: self.contexts,
+            builder_contexts: self.builder_contexts,
+            vars: HashMap::new(),
+            temp_roots: Vec::new(),
+            variables: HashMap::new(),
+        }
+    }
+}
+
+pub(super) struct FunctionCompiler<'function, 'builder, M: ?Sized> {
+    module: &'function mut M,
+    data_description: &'function mut DataDescription,
+    triple: &'function Triple,
+    functions: &'function HashMap<FuncRef, (FuncId, Signature)>,
+    ty_layouts: &'function HashMap<Rc<MirType>, (TyLayout<'function>, DataId)>,
+    builder: &'function mut FunctionBuilder<'builder>,
+    block_map: &'function HashMap<BlockId, Block>,
+    mir_function: &'function MirFunction,
+    params: &'function [(Ident, Rc<MirType>)],
+    function_runtime: FunctionRuntime,
+    contexts: &'function LinkedList<Context>,
+    builder_contexts: &'function LinkedList<FunctionBuilderContext>,
+    vars: HashMap<Ident, (&'function MirType, bool)>,
+    temp_roots: Vec<Value>,
+    variables: HashMap<Ident, Variable>,
 }
 
 fn fat_ptr_addr(fat_ptr: Value, builder: &mut FunctionBuilder, triple: &Triple) -> Value {

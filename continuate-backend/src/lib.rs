@@ -1,6 +1,6 @@
 mod function;
 use cranelift::prelude::FunctionBuilderContext;
-use function::FunctionCompiler;
+use function::FunctionCompilerBuilder;
 use function::FunctionRuntime;
 
 mod linked_list;
@@ -364,7 +364,7 @@ impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
                 .declare_func_in_func(self.runtime.unmark_root, builder.func),
         };
 
-        let function_compiler = FunctionCompiler {
+        let function_compiler = FunctionCompilerBuilder {
             module: &mut self.module,
             data_description: &mut self.data_description,
             triple: &self.triple,
@@ -377,10 +377,8 @@ impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
             function_runtime,
             contexts: &self.contexts,
             builder_contexts: &self.builder_contexts,
-            vars: HashMap::new(),
-            temp_roots: Vec::new(),
-            variables: HashMap::new(),
-        };
+        }
+        .build();
 
         function_compiler.compile();
 
