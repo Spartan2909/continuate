@@ -7,8 +7,8 @@ rust-version.workspace = true
 
 [dependencies]
 bumpalo = "3.17.0"
-continuate-common.workspace = true
 continuate-ir.workspace = true
+continuate-rt.workspace = true
 cranelift = "0.118.0"
 cranelift-module = "0.118.0"
 cranelift-object = "0.118.0"

@@ -218,10 +218,10 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "continuate-backend",
- "continuate-common",
  "continuate-error",
  "continuate-frontend",
  "continuate-ir",
+ "continuate-rt",
  "tracing",
  "tracing-subscriber",
 ]
@@ -231,22 +231,14 @@ name = "continuate-backend"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "continuate-common",
  "continuate-ir",
+ "continuate-rt",
  "cranelift",
  "cranelift-module",
  "cranelift-object",
  "itertools",
  "target-lexicon",
  "tracing",
-]
-
-[[package]]
-name = "continuate-common"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -280,7 +272,7 @@ dependencies = [
 name = "continuate-rt"
 version = "0.1.0"
 dependencies = [
- "continuate-common",
+ "bytemuck",
  "nohash-hasher",
  "tracing",
  "tracing-subscriber",

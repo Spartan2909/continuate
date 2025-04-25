@@ -8,10 +8,10 @@ rust-version.workspace = true
 [dependencies]
 clap = { version = "4.5.31", features = ["derive"] }
 continuate-backend.workspace = true 
-continuate-common.workspace = true
 continuate-error.workspace = true
 continuate-frontend.workspace = true
 continuate-ir.workspace = true
+continuate-rt.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
@@ -21,7 +21,6 @@ workspace = true
 [workspace]
 members = [
     "continuate-backend",
-    "continuate-common",
     "continuate-error",
     "continuate-frontend",
     "continuate-ir",
@@ -37,10 +36,10 @@ rust-version = "1.85"
 [workspace.dependencies]
 chumsky = { version = "1.0.0-alpha.8" }
 continuate-backend = { version = "0.1.0", path = "./continuate-backend" }
-continuate-common = { version = "0.1.0", path = "./continuate-common" }
 continuate-error = { version = "0.1.0", path = "./continuate-error" }
 continuate-frontend = { version = "0.1.0", path = "./continuate-frontend" }
 continuate-ir = { version = "0.1.0", path = "./continuate-ir" }
+continuate-rt = { version = "0.1.0", path = "./continuate-rt" }
 itertools = "0.14.0"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"

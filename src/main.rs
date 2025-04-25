@@ -57,7 +57,7 @@ fn fold_errors(errors: impl IntoIterator<Item = Error>) -> Option<Error> {
 }
 
 fn main() {
-    continuate_common::init_tracing(LevelFilter::DEBUG).expect("failed to instantiate logger");
+    continuate_rt::init_tracing(LevelFilter::DEBUG).expect("failed to instantiate logger");
 
     let args = Args::parse();
 

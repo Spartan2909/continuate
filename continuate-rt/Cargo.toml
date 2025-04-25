@@ -6,10 +6,10 @@ license.workspace = true
 rust-version.workspace = true
 
 [lib]
-crate-type = ["staticlib"]
+crate-type = ["lib", "staticlib"]
 
 [dependencies]
-continuate-common.workspace = true
+bytemuck = "1.21.0"
 nohash-hasher = "0.2.0"
 tracing.workspace = true
 tracing-subscriber.workspace = true

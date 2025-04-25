@@ -1,3 +1,6 @@
+use crate::layout::SingleLayout;
+use crate::layout::TyLayout;
+
 use std::alloc;
 use std::alloc::handle_alloc_error;
 use std::alloc::Layout;
@@ -10,9 +13,6 @@ use std::hash::BuildHasherDefault;
 use std::mem;
 use std::ptr::NonNull;
 use std::sync::Mutex;
-
-use continuate_common::SingleLayout;
-use continuate_common::TyLayout;
 
 use nohash_hasher::IntSet;
 

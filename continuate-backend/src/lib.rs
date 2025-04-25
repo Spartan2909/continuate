@@ -20,9 +20,9 @@ use continuate_ir::mid_level_ir::Program;
 use continuate_ir::mid_level_ir::Type as MirType;
 use continuate_ir::mid_level_ir::UserDefinedType;
 
-use continuate_common::SingleLayout;
-use continuate_common::Slice;
-use continuate_common::TyLayout;
+use continuate_rt::layout::SingleLayout;
+use continuate_rt::layout::TyLayout;
+use continuate_rt::slice::Slice;
 
 use cranelift::codegen::ir::entities::Value;
 use cranelift::codegen::ir::types;

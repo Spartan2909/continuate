@@ -114,15 +114,15 @@ trait Visit {
     }
 }
 
-fn default_expr_literal<V: Visit + ?Sized>(_: &V, expr: &mut ExprLiteral) {
+const fn default_expr_literal<V: Visit + ?Sized>(_: &V, expr: &mut ExprLiteral) {
     let ExprLiteral { literal: _ } = expr;
 }
 
-fn default_expr_ident<V: Visit + ?Sized>(_: &V, expr: &mut ExprIdent) {
+const fn default_expr_ident<V: Visit + ?Sized>(_: &V, expr: &mut ExprIdent) {
     let ExprIdent { ident: _ } = expr;
 }
 
-fn default_expr_function<V: Visit + ?Sized>(_: &V, expr: &mut ExprFunction) {
+const fn default_expr_function<V: Visit + ?Sized>(_: &V, expr: &mut ExprFunction) {
     let ExprFunction { function: _ } = expr;
 }
 
@@ -238,7 +238,7 @@ fn default_expr_switch<V: Visit + ?Sized>(v: &V, expr: &mut ExprSwitch) {
     v.expr(scrutinee);
 }
 
-fn default_expr_goto<V: Visit + ?Sized>(_: &V, expr: &mut ExprGoto) {
+const fn default_expr_goto<V: Visit + ?Sized>(_: &V, expr: &mut ExprGoto) {
     let ExprGoto { block: _ } = expr;
 }
 
