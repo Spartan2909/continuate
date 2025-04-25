@@ -79,7 +79,6 @@ use cranelift_module::Module;
 
 use itertools::Itertools as _;
 
-use target_lexicon::Endianness;
 use target_lexicon::Triple;
 
 pub(super) struct FunctionRuntime {
@@ -136,7 +135,6 @@ fn fat_ptr_meta(fat_ptr: Value, builder: &mut FunctionBuilder, triple: &Triple) 
 }
 
 fn get(
-    endianness: cranelift::codegen::ir::Endianness,
     builder: &mut FunctionBuilder,
     triple: &Triple,
     object: Value,
@@ -148,7 +146,6 @@ fn get(
     builder.ins().load(
         field_ty,
         MemFlags::new()
-            .with_endianness(endianness)
             .with_aligned()
             .with_alias_region(Some(AliasRegion::Heap))
             .with_notrap(),
@@ -169,14 +166,6 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
                 entry.insert(Variable::from_u32(variable));
                 Variable::from_u32(variable)
             }
-        }
-    }
-
-    fn cranelift_endianness(&self) -> ir::Endianness {
-        use ir::Endianness as E;
-        match self.triple.endianness().unwrap() {
-            Endianness::Big => E::Big,
-            Endianness::Little => E::Little,
         }
     }
 
@@ -436,7 +425,6 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         let (layout, field_ty) =
             self.field_information(&expr.object_ty, expr.object_variant, expr.field);
         Some(get(
-            self.cranelift_endianness(),
             self.builder,
             self.triple,
             object,
@@ -452,10 +440,8 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
             .field_information(&expr.object_ty, expr.object_variant, expr.field)
             .0;
         let value = self.expr(&expr.value)?;
-        let endianness = self.cranelift_endianness();
         self.builder.ins().store(
             MemFlags::new()
-                .with_endianness(endianness)
                 .with_aligned()
                 .with_alias_region(Some(AliasRegion::Heap))
                 .with_notrap(),
@@ -557,15 +543,7 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         let storage = builder.block_params(block)[0];
 
         let (layout, field_ty) = self.field_information(storage_ty, None, 0);
-        let callee = get(
-            self.cranelift_endianness(),
-            &mut builder,
-            self.triple,
-            storage,
-            0,
-            &layout,
-            field_ty,
-        );
+        let callee = get(&mut builder, self.triple, storage, 0, &layout, field_ty);
 
         let params = ty
             .params
@@ -585,7 +563,6 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
             let (layout, field_ty) = self.field_information(storage_ty, None, field + 1);
             (
                 get(
-                    self.cranelift_endianness(),
                     &mut builder,
                     self.triple,
                     storage,
@@ -773,12 +750,10 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
                 if *ty == MirType::Bool {
                     Some(self.builder.ins().sextend(types::I64, value))
                 } else if matches!(ty, MirType::UserDefined(UserDefinedType::Sum(_))) {
-                    let endianness = self.cranelift_endianness();
                     Some(
                         self.builder.ins().load(
                             ptr_ty(self.triple),
                             MemFlags::new()
-                                .with_endianness(endianness)
                                 .with_aligned()
                                 .with_alias_region(Some(AliasRegion::Heap))
                                 .with_notrap(),
@@ -861,15 +836,7 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
             let storage = self.builder.block_params(entry_point)[0];
             for (i, &ident) in captures.captures.iter().enumerate() {
                 let (layout, field_ty) = self.field_information(&captures.storage_ty, None, i);
-                let value = get(
-                    self.cranelift_endianness(),
-                    self.builder,
-                    self.triple,
-                    storage,
-                    i,
-                    &layout,
-                    field_ty,
-                );
+                let value = get(self.builder, self.triple, storage, i, &layout, field_ty);
                 let var = self.variable(ident);
                 self.builder.def_var(var, value);
             }
