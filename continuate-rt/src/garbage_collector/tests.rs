@@ -1,6 +1,6 @@
 use super::*;
 
-use continuate_common::Slice;
+use crate::slice::Slice;
 
 static I64_LAYOUT: TyLayout = TyLayout::Single(SingleLayout {
     size: 8,
