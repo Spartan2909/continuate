@@ -1,6 +1,7 @@
 use std::cmp;
 use std::fmt;
 use std::hash;
+use std::num::NonZero;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -9,19 +10,18 @@ use continuate_error::SourceCache;
 use continuate_error::Span;
 
 #[derive(Clone, Copy)]
-pub struct Ident(u64, Span);
+pub struct Ident(NonZero<u64>, Span);
 
 impl Ident {
     /// ## Panics
     ///
-    /// Panics if the total number of identifiers exceeds `u64::MAX - 1`.
+    /// Panics if the total number of identifiers exceeds [`u64::MAX`].
     #[allow(clippy::new_without_default)]
     pub fn new(span: Span) -> Ident {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
+        static NEXT: AtomicU64 = AtomicU64::new(1);
 
         let value = NEXT.fetch_add(1, Ordering::Relaxed);
-        assert_ne!(value, u64::MAX, "ident overflow");
-        Ident(value, span)
+        Ident(NonZero::new(value).expect("ident overflow"), span)
     }
 
     /// ## Panics
@@ -72,29 +72,33 @@ impl fmt::Debug for Ident {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct FuncRef(u32);
+pub struct FuncRef(NonZero<u32>);
 
 impl FuncRef {
-    pub const ENTRY_POINT: FuncRef = FuncRef(0);
+    pub const ENTRY_POINT: FuncRef = match NonZero::new(1) {
+        Some(one) => FuncRef(one),
+        None => unreachable!(),
+    };
 
     /// Get a new unique `FuncRef`.
     ///
     /// ## Panics
     ///
-    /// Panics if the total number of `FuncRef`s exceeds `u32::MAX - 2`.
+    /// Panics if the total number of `FuncRef`s (including [`ENTRY_POINT`]) exceeds [`u32::MAX`].
+    ///
+    /// [`ENTRY_POINT`]: FuncRef::ENTRY_POINT
     #[allow(clippy::new_without_default)]
     pub fn new() -> FuncRef {
-        static NEXT: AtomicU32 = AtomicU32::new(1);
+        static NEXT: AtomicU32 = AtomicU32::new(2);
 
         let next = NEXT.fetch_add(1, Ordering::Relaxed);
-        assert_ne!(next, u32::MAX, "function overflow");
-        FuncRef(next)
+        FuncRef(NonZero::new(next).expect("funcref overflow"))
     }
 }
 
 impl From<FuncRef> for u32 {
     fn from(value: FuncRef) -> Self {
-        value.0
+        value.0.get()
     }
 }
 
@@ -106,19 +110,18 @@ impl fmt::Debug for FuncRef {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct UserDefinedTyRef(u64);
+pub struct UserDefinedTyRef(NonZero<u64>);
 
 impl UserDefinedTyRef {
     /// ## Panics
     ///
-    /// Panics if the total number of identifiers exceeds `u64::MAX - 1`.
+    /// Panics if the total number of identifiers exceeds [`u64::MAX`].
     #[allow(clippy::new_without_default)]
     pub fn new() -> UserDefinedTyRef {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
+        static NEXT: AtomicU64 = AtomicU64::new(1);
 
         let value = NEXT.fetch_add(1, Ordering::Relaxed);
-        assert_ne!(value, u64::MAX, "ty ref overflow");
-        UserDefinedTyRef(value)
+        UserDefinedTyRef(NonZero::new(value).expect("userdefinedtyref overflow"))
     }
 }
 
