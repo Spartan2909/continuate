@@ -1,5 +1,4 @@
 mod function;
-use cranelift::prelude::FunctionBuilderContext;
 use function::FunctionCompilerBuilder;
 use function::FunctionRuntime;
 
@@ -42,17 +41,16 @@ use cranelift::codegen::settings::FlagsOrIsa;
 use cranelift::codegen::verify_function;
 use cranelift::codegen::Context;
 use cranelift::frontend::FunctionBuilder;
-
-use cranelift_module::default_libcall_names;
-use cranelift_module::DataDescription;
-use cranelift_module::DataId;
-use cranelift_module::FuncId;
-use cranelift_module::Linkage;
-use cranelift_module::Module;
-
-use cranelift_object::ObjectBuilder;
-use cranelift_object::ObjectModule;
-use cranelift_object::ObjectProduct;
+use cranelift::frontend::FunctionBuilderContext;
+use cranelift::module::default_libcall_names;
+use cranelift::module::DataDescription;
+use cranelift::module::DataId;
+use cranelift::module::FuncId;
+use cranelift::module::Linkage;
+use cranelift::module::Module;
+use cranelift::object::ObjectBuilder;
+use cranelift::object::ObjectModule;
+use cranelift::object::ObjectProduct;
 
 use itertools::Itertools as _;
 

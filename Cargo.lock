@@ -234,8 +234,6 @@ dependencies = [
  "continuate-ir",
  "continuate-rt",
  "cranelift",
- "cranelift-module",
- "cranelift-object",
  "itertools",
  "target-lexicon",
  "tracing",
@@ -287,6 +285,7 @@ dependencies = [
  "cranelift-codegen",
  "cranelift-frontend",
  "cranelift-module",
+ "cranelift-object",
 ]
 
 [[package]]

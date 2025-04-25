@@ -68,14 +68,13 @@ use cranelift::codegen::ir::UserExternalName;
 use cranelift::codegen::packed_option::ReservedValue;
 use cranelift::codegen::Context;
 use cranelift::frontend::FunctionBuilder;
+use cranelift::frontend::FunctionBuilderContext;
 use cranelift::frontend::Switch;
 use cranelift::frontend::Variable;
-
-use cranelift::prelude::FunctionBuilderContext;
-use cranelift_module::DataDescription;
-use cranelift_module::DataId;
-use cranelift_module::FuncId;
-use cranelift_module::Module;
+use cranelift::module::DataDescription;
+use cranelift::module::DataId;
+use cranelift::module::FuncId;
+use cranelift::module::Module;
 
 use itertools::Itertools as _;
 
