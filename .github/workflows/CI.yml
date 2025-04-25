@@ -23,10 +23,8 @@ jobs:
       run: |
         rustup toolchain add stable --component clippy
         rustup override set stable
-    - name: Build runtime
-      run: cargo build --verbose -p continuate-rt
     - name: Build
-      run: cargo build --verbose --profile ci
+      run: cargo build --verbose --workspace --profile ci
     - name: Run tests
       run: cargo test --verbose --workspace --profile ci
     - name: Run Clippy
