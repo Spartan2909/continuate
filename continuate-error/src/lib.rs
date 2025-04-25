@@ -113,12 +113,9 @@ impl SourceCache {
         self.sources.get(&id)
     }
 
-    fn fetch(
-        &self,
-        id: SourceId,
-    ) -> result::Result<&ariadne::Source<Arc<str>>, Box<dyn fmt::Debug + '_>> {
+    fn fetch(&self, id: SourceId) -> result::Result<&ariadne::Source<Arc<str>>, impl fmt::Debug> {
         self.sources.get(&id).map_or_else(
-            || Err(Box::new(format!("source for {id:?} not found")) as _),
+            || Err(format!("source for {id:?} not found")),
             |source| Ok(&source.source),
         )
     }
@@ -143,15 +140,13 @@ impl ariadne::Cache<SourceId> for SourceCache {
     fn fetch(
         &mut self,
         id: &SourceId,
-    ) -> result::Result<&ariadne::Source<Self::Storage>, Box<dyn fmt::Debug + '_>> {
+    ) -> result::Result<&ariadne::Source<Self::Storage>, impl fmt::Debug> {
         (*self).fetch(*id)
     }
 
     #[inline]
-    fn display<'a>(&self, id: &'a SourceId) -> Option<Box<dyn fmt::Display + 'a>> {
-        Some(Box::new(
-            self.sources.get(id)?.path.to_string_lossy().into_owned(),
-        ))
+    fn display<'a>(&self, id: &'a SourceId) -> Option<impl fmt::Display + 'a> {
+        Some(self.sources.get(id)?.path.to_string_lossy().into_owned())
     }
 }
 
@@ -162,12 +157,12 @@ impl ariadne::Cache<SourceId> for &SourceCache {
     fn fetch(
         &mut self,
         id: &SourceId,
-    ) -> result::Result<&ariadne::Source<Self::Storage>, Box<dyn fmt::Debug + '_>> {
+    ) -> result::Result<&ariadne::Source<Self::Storage>, impl fmt::Debug> {
         (**self).fetch(*id)
     }
 
     #[inline]
-    fn display<'a>(&self, id: &'a SourceId) -> Option<Box<dyn fmt::Display + 'a>> {
+    fn display<'a>(&self, id: &'a SourceId) -> Option<impl fmt::Display + 'a> {
         (**self).display(id)
     }
 }

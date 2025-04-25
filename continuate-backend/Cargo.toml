@@ -9,10 +9,10 @@ rust-version.workspace = true
 bumpalo = "3.17.0"
 continuate-ir.workspace = true
 continuate-rt.workspace = true
-cranelift = { version = "0.118.0", features = ["module", "object"] }
+cranelift = { version = "0.119.0", features = ["module", "object"] }
 itertools.workspace = true
 tracing.workspace = true
-target-lexicon = "0.13.1" # Must be matched to cranelift-codegen/dep:target-lexicon
+target-lexicon = "0.13.2" # Must be matched to cranelift-codegen/dep:target-lexicon
 
 [lints]
 workspace = true
