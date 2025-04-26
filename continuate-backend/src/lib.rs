@@ -78,6 +78,9 @@ struct Runtime {
     /// `fn(ptr: *const ())`
     unmark_root: FuncId,
 
+    /// `fn(ptr: *const ())`
+    unmark_temp_root: FuncId,
+
     /// `fn()`
     init: FuncId,
 
@@ -119,6 +122,11 @@ impl Runtime {
             Linkage::Import,
             &mark_unmark_root_sig,
         ));
+        let unmark_temp_root = pretty_unwrap(module.declare_function(
+            "cont_rt_unmark_temp_root",
+            Linkage::Import,
+            &mark_unmark_root_sig,
+        ));
 
         let init = pretty_unwrap(module.declare_function(
             "cont_rt_init",
@@ -137,6 +145,7 @@ impl Runtime {
             alloc_string,
             mark_root,
             unmark_root,
+            unmark_temp_root,
             init,
             cleanup,
         }
@@ -364,6 +373,9 @@ impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
             unmark_root: self
                 .module
                 .declare_func_in_func(self.runtime.unmark_root, builder.func),
+            unmark_temp_root: self
+                .module
+                .declare_func_in_func(self.runtime.unmark_temp_root, builder.func),
         };
 
         let function_compiler = FunctionCompilerBuilder {

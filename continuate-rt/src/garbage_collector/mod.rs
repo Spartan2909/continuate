@@ -397,7 +397,7 @@ pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull
 
 /// ## Safety
 ///
-/// - `ptr` must point to memory allocated with [`cont_rt_alloc_gc`], and must not have
+/// - `ptr` must point to memory allocated with [`alloc_gc`], and must not have
 ///   previously been passed to this function.
 ///
 /// - `ptr` must be valid for writes.
@@ -423,10 +423,8 @@ pub unsafe extern "C" fn mark_root(ptr: NonNull<()>) {
 
 /// ## Safety
 ///
-/// - `ptr` must point to memory allocated with [`cont_rt_alloc_gc`] and marked by
-///   [`cont_rt_mark_root`], and must not have previously been passed to this function.
-///
-/// - The garbage collector must be initialised.
+/// - `ptr` must point to memory allocated with [`alloc_gc`] and marked by [`mark_root`], and must
+///   not have previously been passed to this function.
 ///
 /// ## Panics
 ///
@@ -442,13 +440,36 @@ pub unsafe extern "C" fn unmark_root(ptr: NonNull<()>) {
     };
     // SAFETY: `value` is derived from a non-null pointer.
     let value = unsafe { NonNull::new_unchecked(value) };
-    // SAFETY: Must be ensured by caller.
     GARBAGE_COLLECTOR.lock().unwrap().roots.remove(&value);
 }
 
+/// ## Safety
+///
+/// - `ptr` must point to memory allocated with [`alloc_gc`], and must not have previously been
+///   passed to this function.
+///
+/// ## Panics
+///
+/// Panics if a garbage collection operation has previously panicked.
+#[export_name = "cont_rt_unmark_temp_root"]
+#[allow(clippy::missing_inline_in_public_items)]
+pub unsafe extern "C" fn unmark_temp_root(ptr: NonNull<()>) {
+    // SAFETY: Must be ensured by caller.
+    let value: *mut GcValue<()> = unsafe {
+        ptr.as_ptr()
+            .byte_sub(mem::offset_of!(GcValue<()>, value))
+            .cast()
+    };
+    // SAFETY: `value` is derived from a non-null pointer.
+    let value = unsafe { NonNull::new_unchecked(value) };
+    GARBAGE_COLLECTOR.lock().unwrap().temp_roots.remove(&value);
+}
+
+/// ## Panics
+///
+/// Panics if a garbage collection operation has previously panicked.
 #[export_name = "cont_rt_alloc_string"]
 #[allow(clippy::missing_inline_in_public_items)]
-#[allow(clippy::missing_panics_doc)]
 pub extern "C" fn alloc_string(len: usize) -> NonNull<()> {
     #[cfg(debug_assertions)]
     debug!("allocating string with length {len}");

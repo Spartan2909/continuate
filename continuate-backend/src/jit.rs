@@ -116,6 +116,7 @@ pub fn jit_compile(program: Program) -> JitResult {
         ("cont_rt_alloc_gc", rt::alloc_gc as _),
         ("cont_rt_mark_root", rt::mark_root as _),
         ("cont_rt_unmark_root", rt::unmark_root as _),
+        ("cont_rt_unmark_temp_root", rt::unmark_temp_root as _),
     ]);
     let module = JITModule::new(builder);
 

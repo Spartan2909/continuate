@@ -91,6 +91,9 @@ pub(super) struct FunctionRuntime {
     pub(super) mark_root: ir::FuncRef,
 
     /// `fn(ptr: *const ())`
+    pub(super) unmark_temp_root: ir::FuncRef,
+
+    /// `fn(ptr: *const ())`
     pub(super) unmark_root: ir::FuncRef,
 }
 
@@ -224,7 +227,7 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         for &temp_root in &self.temp_roots {
             self.builder
                 .ins()
-                .call(self.function_runtime.unmark_root, &[temp_root]);
+                .call(self.function_runtime.unmark_temp_root, &[temp_root]);
         }
 
         self.temp_roots.clear();
