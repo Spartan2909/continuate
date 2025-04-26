@@ -1,7 +1,7 @@
 #![allow(unsafe_code)]
 #![warn(clippy::missing_inline_in_public_items)]
 
-mod garbage_collector;
+pub mod garbage_collector;
 
 pub mod layout;
 
@@ -17,7 +17,7 @@ use tracing_subscriber::filter::LevelFilter;
 
 #[export_name = "cont_rt_init"]
 #[allow(clippy::missing_panics_doc)]
-#[inline]
+#[allow(clippy::missing_inline_in_public_items)]
 pub extern "C" fn enable_log() {
     #[cfg(debug_assertions)]
     init_tracing(LevelFilter::DEBUG).expect("failed to instantiate logger");
@@ -31,8 +31,8 @@ pub extern "C" fn enable_log() {
 /// - All garbage-collected values must be valid.
 ///
 /// - No garbage-collected values may be accessed again.
-#[inline]
 #[export_name = "cont_rt_cleanup"]
+#[allow(clippy::missing_inline_in_public_items)]
 pub unsafe extern "C" fn cleanup() {
     #[cfg(debug_assertions)]
     debug!("runtime cleaning up");

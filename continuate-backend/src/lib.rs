@@ -2,6 +2,10 @@ mod function;
 use function::FunctionCompilerBuilder;
 use function::FunctionRuntime;
 
+mod jit;
+pub use jit::jit_compile;
+pub use jit::JitResult;
+
 mod linked_list;
 use linked_list::LinkedList;
 
@@ -640,6 +644,27 @@ impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
     }
 }
 
+fn call_entry_point<M: Module + ?Sized>(
+    entry_point: FuncId,
+    termination: FuncId,
+    triple: &Triple,
+    builder: &mut FunctionBuilder,
+    module: &mut M,
+) -> Value {
+    let entry_point = module.declare_func_in_func(entry_point, builder.func);
+
+    let termination = module.declare_func_in_func(termination, builder.func);
+    let termination_addr = builder.ins().func_addr(ptr_ty(triple), termination);
+    let metadata = builder.ins().iconst(ptr_ty(triple), 0);
+    let termination = fat_ptr(termination_addr, metadata, triple, builder);
+    let zero = builder.ins().iconst(ptr_ty(triple), 0);
+
+    let result = builder.ins().call(entry_point, &[zero, termination]);
+    let rvals = builder.inst_results(result);
+    debug_assert_eq!(rvals.len(), 1);
+    rvals[0]
+}
+
 impl Compiler<'_, ObjectModule> {
     fn compile_library(mut self) -> ObjectProduct {
         self.compile_module();
@@ -674,21 +699,14 @@ impl Compiler<'_, ObjectModule> {
         let results = builder.ins().call(init, &[]);
         debug_assert_eq!(builder.inst_results(results).len(), 0);
 
-        let entry_point = self.functions[&FuncRef::ENTRY_POINT].0;
-        let entry_point = self.module.declare_func_in_func(entry_point, builder.func);
-
         let termination_ref = self.program.lib_std.fn_termination;
-        let termination = self.functions[&termination_ref].0;
-        let termination = self.module.declare_func_in_func(termination, builder.func);
-        let termination_addr = builder.ins().func_addr(ptr_ty(&self.triple), termination);
-        let metadata = builder.ins().iconst(ptr_ty(&self.triple), 0);
-        let termination = fat_ptr(termination_addr, metadata, &self.triple, &mut builder);
-        let zero = builder.ins().iconst(ptr_ty(&self.triple), 0);
-
-        let result = builder.ins().call(entry_point, &[zero, termination]);
-        let rvals = builder.inst_results(result);
-        debug_assert_eq!(rvals.len(), 1);
-        let rval = rvals[0];
+        let rval = call_entry_point(
+            self.functions[&FuncRef::ENTRY_POINT].0,
+            self.functions[&termination_ref].0,
+            &self.triple,
+            &mut builder,
+            &mut self.module,
+        );
 
         let cleanup = self
             .module
@@ -711,7 +729,7 @@ impl Compiler<'_, ObjectModule> {
 }
 
 #[allow(clippy::missing_panics_doc)]
-pub fn compile(program: Program, binary: bool) -> ObjectProduct {
+pub fn static_compile(program: Program, binary: bool) -> ObjectProduct {
     let mut flags = settings::builder();
     flags.enable("preserve_frame_pointers").unwrap();
     flags.enable("is_pic").unwrap();

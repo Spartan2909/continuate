@@ -1,7 +1,4 @@
-use std::fs;
 use std::path::PathBuf;
-use std::process;
-use std::process::Stdio;
 
 use clap::Parser;
 
@@ -10,35 +7,6 @@ use continuate_ir::high_level_ir::typeck;
 use continuate_ir::mid_level_ir;
 
 use tracing_subscriber::filter::LevelFilter;
-
-#[cfg(target_family = "unix")]
-fn link_command() -> process::Command {
-    let mut command = process::Command::new("cc");
-    command.args([
-        "./out/object.o",
-        option_env!("CONTINUATE_RT_PATH").unwrap_or("./target/debug/libcontinuate_rt.a"),
-        "-o",
-        "./out/result",
-    ]);
-    command
-}
-
-#[cfg(target_family = "windows")]
-fn link_command() -> process::Command {
-    let mut command = process::Command::new("lld-link");
-    command.args([
-        "./target/debug/continuate_rt.lib",
-        "./out/object.o",
-        "libcmt.lib",
-        "Ws2_32.lib",
-        "Synchronization.lib",
-        "Userenv.lib",
-        "ntdll.lib",
-        "Advapi32.lib",
-        "/out:./out/result.exe",
-    ]);
-    command
-}
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -99,21 +67,5 @@ fn main() {
 
     continuate_ir::mid_level_ir::run_passes(&mut mir_program, true);
 
-    let object = continuate_backend::compile(mir_program, true);
-
-    let object = object.emit().unwrap();
-    fs::create_dir_all("./out").unwrap();
-    fs::write("./out/object.o", object).unwrap();
-
-    link_command()
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .output()
-        .unwrap();
-
-    process::Command::new("./out/result")
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .output()
-        .unwrap();
+    continuate_backend::jit_compile(mir_program).run();
 }

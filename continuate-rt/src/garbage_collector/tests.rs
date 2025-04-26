@@ -39,18 +39,8 @@ fn simple() {
     // SAFETY: `I64_LAYOUT` is valid.
     let x = unsafe { alloc_value(&I64_LAYOUT, 5i64) };
 
-    // SAFETY: `x` has just been allocated, and is the only unmarked pointer.
-    unsafe {
-        mark_root(x.cast());
-    }
-
     // SAFETY: `I64_LAYOUT` is valid.
     let y = unsafe { alloc_value(&I64_LAYOUT, 7i64) };
-
-    // SAFETY: `y` has just been allocated, and is the only unmarked pointer.
-    unsafe {
-        mark_root(y.cast());
-    }
 
     // SAFETY: `x` must be valid.
     unsafe {
@@ -67,22 +57,12 @@ fn link() {
     // SAFETY: `I64_LAYOUT` is valid.
     let x = unsafe { alloc_value(&I64_LAYOUT, 3i64) };
 
-    // SAFETY: `x` is a valid garbage-collected pointer.
-    unsafe {
-        mark_root(x.cast());
-    }
-
     // SAFETY: `I64_BOX_LAYOUT` is valid.
     let x_box = unsafe { alloc_value(&I64_BOX_LAYOUT, I64Box(x)) };
 
     // SAFETY: `x` is a valid marked, garbage-collected pointer.
     unsafe {
         unmark_root(x.cast());
-    }
-
-    // SAFETY: `x_box` has just been allocated.
-    unsafe {
-        mark_root(x_box.cast());
     }
 
     // SAFETY: `x` must be valid.

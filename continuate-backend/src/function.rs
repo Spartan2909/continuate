@@ -734,13 +734,13 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         let var = self.variable(expr.ident);
         self.builder.def_var(var, value);
 
-        self.clear_temp_roots();
-
         if let Some(ptr) = self.value_ptr(value, var_ty) {
             self.builder
                 .ins()
                 .call(self.function_runtime.mark_root, &[ptr]);
         }
+
+        self.clear_temp_roots();
 
         Some(value)
     }
