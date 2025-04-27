@@ -25,10 +25,24 @@ use crate::mid_level_ir::Program;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::fmt;
 use std::iter;
 use std::mem;
 use std::ops;
 use std::rc::Rc;
+
+macro_rules! ub {
+    () => { panic!("encoutered undefined behaviour") };
+    ($format_str:literal $(,$expr:expr)* $(,)?) => {
+        panic!(concat!("encountered undefined behaviour: ", $format_str), $($expr),*)
+    };
+}
+
+macro_rules! ub_fn {
+    ($($tt:tt)*) => {
+        || ub!($($tt)*)
+    };
+}
 
 #[derive(Debug, PartialEq)]
 pub struct UserDefinedValue {
@@ -84,9 +98,25 @@ impl Value {
                 discriminant: _,
                 fields: values,
             }) => {
-                *values.borrow_mut().get_mut(index).unwrap() = value;
+                if let Some(slot) = values.borrow_mut().get_mut(index) {
+                    *slot = value;
+                } else {
+                    ub!(
+                        "attempted to take out-of-range field {} of {:?}",
+                        index,
+                        value
+                    );
+                }
             }
-            _ => unreachable!(),
+            _ => ub!("attempted to set field of {:?}", value),
+        }
+    }
+
+    pub const fn as_bool(&self) -> Option<bool> {
+        if let Value::Bool(b) = self {
+            Some(*b)
+        } else {
+            None
         }
     }
 
@@ -149,7 +179,7 @@ impl Value {
                     program,
                 )
             }
-            _ => unreachable!(),
+            _ => ub!("attempted to call value {:?}", self),
         }
     }
 
@@ -167,7 +197,7 @@ impl Value {
                 new_continuations.extend(continuations);
                 Value::ContinuedFunction(Rc::clone(callee), new_continuations)
             }
-            _ => unreachable!(),
+            _ => ub!("attempted to apply continuations to {:?}", self),
         }
     }
 
@@ -308,11 +338,16 @@ macro_rules! value {
     };
 }
 
-impl<T> ControlFlow<T> {
+impl<T: fmt::Debug> ControlFlow<T> {
     fn unwrap_termination(self) -> i64 {
         match self {
+            ControlFlow::Goto(block) => {
+                ub!("attempted to terminate program with jump to {:?}", block)
+            }
             ControlFlow::Terminate(n) => n,
-            _ => unreachable!(),
+            ControlFlow::Value(value) => {
+                ub!("attempted to terminate program with value {:?}", value)
+            }
         }
     }
 
@@ -324,14 +359,6 @@ impl<T> ControlFlow<T> {
             ControlFlow::Goto(id) => ControlFlow::Goto(id),
             ControlFlow::Terminate(n) => ControlFlow::Terminate(n),
             ControlFlow::Value(value) => ControlFlow::Value(value.into()),
-        }
-    }
-
-    fn try_cast<U>(self) -> Option<ControlFlow<U>> {
-        match self {
-            ControlFlow::Goto(id) => Some(ControlFlow::Goto(id)),
-            ControlFlow::Terminate(n) => Some(ControlFlow::Terminate(n)),
-            ControlFlow::Value(_) => None,
         }
     }
 }
@@ -363,7 +390,7 @@ impl Environment {
         } else if let Some(enclosing) = &self.enclosing {
             enclosing.borrow_mut().set(ident, value);
         } else {
-            panic!("set unassigned value")
+            ub!("attempted to set an undefined value")
         }
     }
 
@@ -397,7 +424,7 @@ fn interpret_intrinsic(intrinsic: Intrinsic, values: &[Rc<Value>]) -> ControlFlo
             let exit_code = values[0].as_int().unwrap();
             ControlFlow::Terminate(exit_code)
         }
-        Intrinsic::Unreachable => unreachable!(),
+        Intrinsic::Unreachable => ub!("entered unreachable code"),
     }
 }
 
@@ -419,6 +446,15 @@ impl Executor {
             values.push(value!(self.expr(expr, program)));
         }
         ControlFlow::Value(values)
+    }
+
+    fn get(&mut self, object: &Expr, field: usize, program: &Program) -> ControlFlow<Rc<Value>> {
+        let object = value!(self.expr(object, program));
+        ControlFlow::Value(object.get(field).unwrap_or_else(ub_fn!(
+            "attempted to get field '{}' of {:?}",
+            field,
+            object,
+        )))
     }
 
     fn call(
@@ -463,16 +499,16 @@ impl Executor {
     ) -> ControlFlow<Rc<Value>> {
         let value = value!(self.expr(operand, program));
         match operator {
-            UnaryOp::Neg => ControlFlow::Value(Rc::new(Value::Int(-value.as_int().unwrap()))),
-            UnaryOp::Not => {
-                let UserDefinedValue {
-                    discriminant,
-                    fields,
-                } = value.as_user_defined().unwrap();
-                let value =
-                    Value::user_defined(Some(discriminant.unwrap() ^ 1), fields.borrow().clone());
-                ControlFlow::Value(Rc::new(value))
-            }
+            UnaryOp::Neg => ControlFlow::Value(Rc::new(Value::Int(
+                -value
+                    .as_int()
+                    .unwrap_or_else(ub_fn!("attempted to negate {:?}", value)),
+            ))),
+            UnaryOp::Not => ControlFlow::Value(Rc::new(Value::Bool(
+                !value
+                    .as_bool()
+                    .unwrap_or_else(ub_fn!("attempted to take logical not of {:?}", value)),
+            ))),
         }
     }
 
@@ -494,9 +530,18 @@ impl Executor {
                 BinaryOp::Rem => &*left % &*right,
                 _ => unreachable!(),
             };
-            result.unwrap()
+            result.unwrap_or_else(ub_fn!(
+                "attempted to apply operation '{}' to {:?} and {:?}",
+                op,
+                left,
+                right,
+            ))
         } else {
-            let ord = left.partial_cmp(&right);
+            let ord = left.partial_cmp(&right).unwrap_or_else(ub_fn!(
+                "attmpted to compare {:?} and {:?}",
+                left,
+                right,
+            ));
             let cmp = match op {
                 BinaryOp::Eq => Ordering::is_eq,
                 BinaryOp::Ne => Ordering::is_ne,
@@ -506,9 +551,7 @@ impl Executor {
                 BinaryOp::Ge => Ordering::is_ge,
                 _ => unreachable!(),
             };
-            let result = ord.is_some_and(cmp);
-
-            Value::Bool(result)
+            Value::Bool(cmp(ord))
         };
         ControlFlow::Value(Rc::new(result))
     }
@@ -527,7 +570,9 @@ impl Executor {
         match *expr {
             Expr::Literal(ref expr) => ControlFlow::Value(Rc::new(expr.literal.clone().into())),
             Expr::Ident(ref expr) => {
-                ControlFlow::Value(self.environment.borrow().get(expr.ident).unwrap())
+                ControlFlow::Value(self.environment.borrow().get(expr.ident).unwrap_or_else(
+                    ub_fn!("attempted to read undefined variable {:?}", expr.ident),
+                ))
             }
             Expr::Function(ref expr) => ControlFlow::Value(Rc::new(Value::Function(expr.function))),
             Expr::Tuple(ExprTuple { ty: _, ref values }) => ControlFlow::Value(Rc::new(
@@ -553,10 +598,7 @@ impl Executor {
                 object_ty: _,
                 object_variant: _,
                 field,
-            }) => {
-                let object = value!(self.expr(object, program));
-                ControlFlow::Value(object.get(field).unwrap())
-            }
+            }) => self.get(object, field, program),
             Expr::Set(ExprSet {
                 ref object,
                 object_ty: _,
@@ -641,12 +683,19 @@ impl Executor {
             env.values.insert(declaration, Rc::new(value));
         }
         drop(env);
-        let mut block = function.blocks.get(&Function::entry_point()).unwrap();
+        let mut block_id = Function::entry_point();
+        let mut block = &function.blocks[&block_id];
         loop {
             for expr in &block.exprs {
                 match self.expr(expr, program) {
-                    ControlFlow::Goto(block_id) => block = function.blocks.get(&block_id).unwrap(),
-                    ctrl => return ctrl.try_cast().unwrap(),
+                    ControlFlow::Goto(new_block) => {
+                        block_id = new_block;
+                        block = &function.blocks[&block_id];
+                    }
+                    ControlFlow::Terminate(n) => return ControlFlow::Terminate(n),
+                    ControlFlow::Value(val) => {
+                        ub!("attempted to end block {:?} with value {:?}", block_id, val)
+                    }
                 }
             }
         }
