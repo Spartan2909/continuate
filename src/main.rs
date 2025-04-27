@@ -15,13 +15,7 @@ struct Args {
 }
 
 fn fold_errors(errors: impl IntoIterator<Item = Error>) -> Option<Error> {
-    errors.into_iter().fold(None, |acc, err| {
-        if let Some(acc) = acc {
-            Some(acc.combine(err))
-        } else {
-            Some(err)
-        }
-    })
+    errors.into_iter().reduce(|acc, err| acc.combine(err))
 }
 
 fn main() {
