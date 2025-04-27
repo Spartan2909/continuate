@@ -1,3 +1,6 @@
+mod interpreter;
+pub use interpreter::run as interpret;
+
 mod lowering;
 pub use lowering::lower;
 
