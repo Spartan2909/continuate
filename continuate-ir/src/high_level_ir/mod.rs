@@ -4,25 +4,20 @@ pub use lowering::lower;
 mod typeck;
 pub use typeck::typeck;
 
-use crate::common::BinaryOp;
-use crate::common::FuncRef;
-use crate::common::Ident;
-use crate::common::Intrinsic;
-use crate::common::Literal;
-use crate::common::UnaryOp;
-use crate::common::UserDefinedTyRef;
-use crate::lib_std;
-use crate::lib_std::StdLib;
+use crate::{
+    common::{BinaryOp, FuncRef, Ident, Intrinsic, Literal, UnaryOp, UserDefinedTyRef},
+    lib_std::{self, StdLib},
+};
 
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::hash;
-use std::ops::Range;
-use std::rc::Rc;
-use std::slice;
+use std::{
+    collections::{HashMap, HashSet},
+    fmt, hash,
+    ops::{self, Range},
+    slice,
+    sync::Arc,
+};
 
-use continuate_error::Result;
-use continuate_error::Span;
+use continuate_error::{Result, Span};
 
 use itertools::Itertools as _;
 
@@ -38,13 +33,14 @@ pub enum Pattern {
     Wildcard,
     Ident(Ident),
     Destructure {
-        ty: Rc<Type>,
+        ty: Arc<Type>,
         variant: Option<String>,
         fields: DestructureFields,
     },
 }
 
 impl Pattern {
+    #[inline]
     pub const fn as_ident(&self) -> Option<Ident> {
         if let Pattern::Ident(ident) = self {
             Some(*ident)
@@ -54,284 +50,228 @@ impl Pattern {
     }
 }
 
-#[derive(Debug)]
-pub enum Expr {
-    Literal(Literal),
-    Ident(Ident),
-    Function(FuncRef),
-    Block(ExprBlock),
-    Tuple(ExprTuple),
-    Constructor(ExprConstructor),
-    Array(ExprArray),
-    Get(ExprGet),
-    Set(ExprSet),
-    Call(ExprCall),
-    ContApplication(ExprContApplication),
-    Unary(ExprUnary),
-    Binary(ExprBinary),
-    Declare(ExprDeclare),
-    Assign(ExprAssign),
-    Match(ExprMatch),
-    Closure(ExprClosure),
-    Intrinsic(ExprIntrinsic),
+pub trait Tag: fmt::Debug {
+    type Tagged<T: fmt::Debug>: fmt::Debug;
 }
 
-#[derive(Debug)]
-pub struct ExprBlock {
-    pub exprs: Vec<Expr>,
-}
-
-#[derive(Debug)]
-pub struct ExprTuple {
-    pub exprs: Vec<Expr>,
-}
-
-#[derive(Debug)]
-pub enum ExprConstructorFields {
-    Named(Vec<(String, Expr)>),
-    Anonymous(Vec<Expr>),
-    Unit,
-}
-
-#[derive(Debug)]
-pub struct ExprConstructor {
-    pub ty: Rc<Type>,
-    pub variant: Option<String>,
-    pub fields: ExprConstructorFields,
-}
-
-#[derive(Debug)]
-pub struct ExprArray {
-    pub exprs: Vec<Expr>,
-}
-
-#[derive(Debug)]
-pub struct ExprGet {
-    pub object: Box<Expr>,
-    pub field: String,
-}
-
-#[derive(Debug)]
-pub struct ExprSet {
-    pub object: Box<Expr>,
-    pub field: String,
-    pub value: Box<Expr>,
-}
-
-#[derive(Debug)]
-pub struct ExprCall {
-    pub callee: Box<Expr>,
-    pub args: Vec<Expr>,
-}
-
-#[derive(Debug)]
-pub struct ExprContApplication {
-    pub callee: Box<Expr>,
-    pub continuations: Vec<(Ident, Expr)>,
-}
-
-#[derive(Debug)]
-pub struct ExprUnary {
-    pub op: UnaryOp,
-    pub right: Box<Expr>,
-}
-
-#[derive(Debug)]
-pub struct ExprBinary {
-    pub left: Box<Expr>,
-    pub op: BinaryOp,
-    pub right: Box<Expr>,
-}
-
-#[derive(Debug)]
-pub struct ExprDeclare {
-    pub ident: Ident,
-    pub ty: Option<Rc<Type>>,
-    pub expr: Box<Expr>,
-}
-
-#[derive(Debug)]
-pub struct ExprAssign {
-    pub ident: Ident,
-    pub expr: Box<Expr>,
-}
-
-#[derive(Debug)]
-pub struct ExprMatch {
-    pub scrutinee: Box<Expr>,
-    pub arms: Vec<(Pattern, Expr)>,
-}
-
-#[derive(Debug)]
-pub struct ExprClosure {
-    pub func: FuncRef,
-    pub captures: Option<HashMap<Ident, Rc<Type>>>,
-}
-
-#[derive(Debug)]
-pub struct ExprIntrinsic {
-    pub intrinsic: Intrinsic,
-    pub values: Vec<Expr>,
-}
-
-#[derive(Debug)]
-pub enum TypedExpr {
-    Literal(Literal),
-    Ident(Ident),
-    Function(FuncRef),
-    Block(Typed<TypedExprBlock>),
-    Tuple(Typed<TypedExprTuple>),
-    Constructor(TypedExprConstructor),
-    Array(TypedExprArray),
-    Get(TypedExprGet),
-    Set(TypedExprSet),
-    Call(TypedExprCall),
-    ContApplication(Typed<TypedExprContApplication>),
-    Unary(TypedExprUnary),
-    Binary(TypedExprBinary),
-    Declare(TypedExprDeclare),
-    Assign(TypedExprAssign),
-    Match(Typed<TypedExprMatch>),
-    Closure(TypedExprClosure),
-    Intrinsic(TypedExprIntrinsic),
+impl Tag for () {
+    type Tagged<T: fmt::Debug> = T;
 }
 
 #[derive(Debug)]
 pub struct Typed<T> {
     pub value: T,
-    pub ty: Rc<Type>,
+    pub ty: Arc<Type>,
 }
 
 impl<T> Typed<T> {
-    pub const fn new(value: T, ty: Rc<Type>) -> Typed<T> {
+    #[inline]
+    pub const fn new(value: T, ty: Arc<Type>) -> Typed<T> {
         Typed { value, ty }
     }
 
-    pub fn boxed(self) -> Typed<Box<T>> {
-        Typed {
-            value: Box::new(self.value),
-            ty: self.ty,
-        }
-    }
-
-    pub fn into_value_ty(self) -> (T, Rc<Type>) {
+    #[inline]
+    pub fn into_pair(self) -> (T, Arc<Type>) {
         let Typed { value, ty } = self;
         (value, ty)
     }
+
+    #[inline]
+    pub fn boxed(self) -> Typed<Box<T>> {
+        let Typed { value, ty } = self;
+        Typed {
+            value: Box::new(value),
+            ty,
+        }
+    }
+}
+
+impl<T> ops::Deref for Typed<T> {
+    type Target = T;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<T> ops::DerefMut for Typed<T> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
+    }
+}
+
+impl Tag for Arc<Type> {
+    type Tagged<T: fmt::Debug> = Typed<T>;
+}
+
+pub enum Expr<T: Tag> {
+    Literal(Literal),
+    Ident(ExprIdent<T>),
+    Function(FuncRef),
+    Block(T::Tagged<ExprBlock<T>>),
+    Tuple(T::Tagged<ExprTuple<T>>),
+    Constructor(ExprConstructor<T>),
+    Array(T::Tagged<ExprArray<T>>),
+    Get(ExprGet<T>),
+    Set(ExprSet<T>),
+    Call(ExprCall<T>),
+    Application(T::Tagged<ExprApplication<T>>),
+    Unary(ExprUnary<T>),
+    Binary(ExprBinary<T>),
+    Declare(ExprDeclare<T>),
+    Assign(ExprAssign<T>),
+    Match(ExprMatch<T>),
+    Closure(ExprClosure),
+    Intrinsic(ExprIntrinsic<T>),
+}
+
+impl<T: Tag> fmt::Debug for Expr<T> {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Expr::Literal(l) => f.debug_tuple("Literal").field(l).finish(),
+            Expr::Ident(i) => f.debug_tuple("Ident").field(i).finish(),
+            Expr::Function(fun) => f.debug_tuple("Function").field(fun).finish(),
+            Expr::Block(x) => f.debug_tuple("Block").field(x).finish(),
+            Expr::Tuple(x) => f.debug_tuple("Tuple").field(x).finish(),
+            Expr::Constructor(x) => f.debug_tuple("Constructor").field(x).finish(),
+            Expr::Array(x) => f.debug_tuple("Array").field(x).finish(),
+            Expr::Get(x) => f.debug_tuple("Get").field(x).finish(),
+            Expr::Set(x) => f.debug_tuple("Set").field(x).finish(),
+            Expr::Call(x) => f.debug_tuple("Call").field(x).finish(),
+            Expr::Application(x) => f.debug_tuple("Application").field(x).finish(),
+            Expr::Unary(x) => f.debug_tuple("Unary").field(x).finish(),
+            Expr::Binary(x) => f.debug_tuple("Binary").field(x).finish(),
+            Expr::Declare(x) => f.debug_tuple("Declare").field(x).finish(),
+            Expr::Assign(x) => f.debug_tuple("Assign").field(x).finish(),
+            Expr::Match(x) => f.debug_tuple("Match").field(x).finish(),
+            Expr::Closure(x) => f.debug_tuple("Closure").field(x).finish(),
+            Expr::Intrinsic(x) => f.debug_tuple("Intrinsic").field(x).finish(),
+        }
+    }
 }
 
 #[derive(Debug)]
-pub struct TypedExprBlock {
-    pub exprs: Vec<TypedExpr>,
+pub struct ExprIdent<T: Tag> {
+    pub ident: T::Tagged<Ident>,
 }
 
 #[derive(Debug)]
-pub struct TypedExprTuple {
-    pub exprs: Vec<TypedExpr>,
+pub struct ExprBlock<T: Tag> {
+    pub exprs: Vec<Expr<T>>,
 }
 
 #[derive(Debug)]
-pub enum TypedExprConstructorFields {
-    Named(Vec<(String, TypedExpr)>),
-    Anonymous(Vec<TypedExpr>),
+pub struct ExprTuple<T: Tag> {
+    pub exprs: Vec<Expr<T>>,
+}
+
+#[derive(Debug)]
+pub enum ExprConstructorFields<T: Tag> {
+    Named(Vec<(String, Expr<T>)>),
+    Anonymous(Vec<Expr<T>>),
     Unit,
 }
 
 #[derive(Debug)]
-pub struct TypedExprConstructor {
-    pub ty: Rc<Type>,
+pub struct ExprConstructor<T: Tag> {
+    pub ty: Arc<Type>,
     pub variant: Option<String>,
-    pub fields: TypedExprConstructorFields,
+    pub fields: ExprConstructorFields<T>,
 }
 
 #[derive(Debug)]
-pub struct TypedExprArray {
-    pub exprs: Vec<TypedExpr>,
-    pub element_ty: Rc<Type>,
+pub struct ExprArray<T: Tag> {
+    pub exprs: Vec<Expr<T>>,
 }
 
 #[derive(Debug)]
-pub struct TypedExprGet {
-    pub object: Typed<Box<TypedExpr>>,
+pub struct ExprGet<T: Tag> {
+    pub object: T::Tagged<Box<Expr<T>>>,
     pub field: String,
 }
 
 #[derive(Debug)]
-pub struct TypedExprSet {
-    pub object: Typed<Box<TypedExpr>>,
+pub struct ExprSet<T: Tag> {
+    pub object: T::Tagged<Box<Expr<T>>>,
     pub field: String,
-    pub value: Typed<Box<TypedExpr>>,
+    pub value: Box<Expr<T>>,
 }
 
 #[derive(Debug)]
-pub struct TypedExprCall {
-    pub callee: Typed<Box<TypedExpr>>,
-    pub args: Vec<TypedExpr>,
+pub struct ExprCall<T: Tag> {
+    pub callee: T::Tagged<Box<Expr<T>>>,
+    pub positional: Vec<Expr<T>>,
+    pub named: Vec<(Ident, Expr<T>)>,
 }
 
 #[derive(Debug)]
-pub struct TypedExprContApplication {
-    pub callee: Typed<Box<TypedExpr>>,
-    pub continuations: Vec<(Ident, TypedExpr)>,
+pub struct ExprApplication<T: Tag> {
+    pub callee: T::Tagged<Box<Expr<T>>>,
+    pub positional: Vec<Expr<T>>,
+    pub named: Vec<(Ident, Expr<T>)>,
 }
 
 #[derive(Debug)]
-pub struct TypedExprUnary {
+pub struct ExprUnary<T: Tag> {
     pub op: UnaryOp,
-    pub right: Typed<Box<TypedExpr>>,
+    pub right: T::Tagged<Box<Expr<T>>>,
 }
 
 #[derive(Debug)]
-pub struct TypedExprBinary {
-    pub left: Typed<Box<TypedExpr>>,
+pub struct ExprBinary<T: Tag> {
+    pub left: T::Tagged<Box<Expr<T>>>,
     pub op: BinaryOp,
-    pub right: Typed<Box<TypedExpr>>,
+    pub right: T::Tagged<Box<Expr<T>>>,
 }
 
 #[derive(Debug)]
-pub struct TypedExprDeclare {
+pub struct ExprDeclare<T: Tag> {
     pub ident: Ident,
-    pub ty: Rc<Type>,
-    pub expr: Box<TypedExpr>,
+    pub ty: Arc<Type>,
+    pub expr: Box<Expr<T>>,
 }
 
 #[derive(Debug)]
-pub struct TypedExprAssign {
+pub struct ExprAssign<T: Tag> {
     pub ident: Ident,
-    pub expr: Box<TypedExpr>,
+    pub expr: Box<Expr<T>>,
 }
 
 #[derive(Debug)]
-pub struct TypedExprMatch {
-    pub scrutinee: Typed<Box<TypedExpr>>,
-    pub arms: Vec<(Pattern, TypedExpr)>,
+pub struct ExprMatch<T: Tag> {
+    pub scrutinee: T::Tagged<Box<Expr<T>>>,
+    pub arms: Vec<(Pattern, Expr<T>)>,
 }
 
 #[derive(Debug)]
-pub struct TypedExprClosure {
+pub struct ExprClosure {
     pub func: FuncRef,
-    pub captures: HashMap<Ident, Rc<Type>>,
+    pub captures: HashMap<Ident, Arc<Type>>,
 }
 
 #[derive(Debug)]
-pub struct TypedExprIntrinsic {
+pub struct ExprIntrinsic<T: Tag> {
     pub intrinsic: Intrinsic,
-    pub values: Vec<Typed<TypedExpr>>,
+    pub values: Vec<T::Tagged<Expr<T>>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct FunctionTy {
-    pub params: Vec<Rc<Type>>,
-    pub continuations: HashMap<Ident, Rc<Type>>,
+    pub positional_params: Vec<Arc<Type>>,
+    pub named_params: HashMap<Ident, Arc<Type>>,
 }
 
 impl hash::Hash for FunctionTy {
+    #[inline]
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        self.params.hash(state);
+        self.positional_params.hash(state);
         for (&name, ty) in self
-            .continuations
+            .named_params
             .iter()
-            .sorted_unstable_by_key(|(&ident, _)| ident)
+            .sorted_unstable_by_key(|&(&ident, _)| ident)
         {
             (name, ty).hash(state);
         }
@@ -344,8 +284,8 @@ pub enum Type {
     Int,
     Float,
     String,
-    Array(Rc<Type>, u64),
-    Tuple(Vec<Rc<Type>>),
+    Array(Arc<Type>, u64),
+    Tuple(Vec<Arc<Type>>),
     Function(FunctionTy),
     UserDefined(UserDefinedTyRef),
     Unknown,
@@ -353,13 +293,27 @@ pub enum Type {
 }
 
 impl Type {
-    pub const fn function(params: Vec<Rc<Type>>, continuations: HashMap<Ident, Rc<Type>>) -> Type {
+    #[inline]
+    pub const fn function(
+        positional_params: Vec<Arc<Type>>,
+        named_params: HashMap<Ident, Arc<Type>>,
+    ) -> Type {
         Type::Function(FunctionTy {
-            params,
-            continuations,
+            positional_params,
+            named_params,
         })
     }
 
+    #[inline]
+    pub const fn as_array(&self) -> Option<(&Arc<Type>, u64)> {
+        if let Type::Array(ty, n) = self {
+            Some((ty, *n))
+        } else {
+            None
+        }
+    }
+
+    #[inline]
     pub const fn as_user_defined(&self) -> Option<UserDefinedTyRef> {
         if let Type::UserDefined(ty) = self {
             Some(*ty)
@@ -370,12 +324,12 @@ impl Type {
 
     /// Ensure that `self` fits in `other`.
     pub(crate) fn unify(
-        self: &Rc<Type>,
-        other: &Rc<Type>,
-        program: &mut Program<TypedExpr>,
-    ) -> Result<Rc<Type>> {
+        self: &Arc<Type>,
+        other: &Arc<Type>,
+        program: &mut Program<Arc<Type>>,
+    ) -> Result<Arc<Type>> {
         if self == other {
-            return Ok(Rc::clone(self));
+            return Ok(Arc::clone(self));
         }
 
         match (&**self, &**other) {
@@ -393,25 +347,25 @@ impl Type {
             }
             (
                 Type::Function(FunctionTy {
-                    params: params_1,
-                    continuations: continuations_1,
+                    positional_params: positional_params_1,
+                    named_params: named_params_1,
                 }),
                 Type::Function(FunctionTy {
-                    params: params_2,
-                    continuations: continuations_2,
+                    positional_params: positional_params_2,
+                    named_params: named_params_2,
                 }),
-            ) if params_1.len() == params_2.len() => {
-                let params: Result<_> = params_1
+            ) if positional_params_1.len() == positional_params_2.len() => {
+                let params: Result<_> = positional_params_1
                     .iter()
-                    .zip(params_2.iter())
+                    .zip(positional_params_2.iter())
                     .map(|(ty_1, ty_2)| ty_1.unify(ty_2, program))
                     .collect();
 
-                let continuations: Result<_> = continuations_1
+                let named_params: Result<_> = named_params_1
                     .iter()
                     .sorted_unstable_by_key(|(ident, _)| **ident)
                     .zip(
-                        continuations_2
+                        named_params_2
                             .iter()
                             .sorted_unstable_by_key(|(ident, _)| **ident),
                     )
@@ -425,11 +379,11 @@ impl Type {
                     })
                     .collect();
 
-                let ty = Type::function(params?, continuations?);
+                let ty = Type::function(params?, named_params?);
                 Ok(program.insert_type(ty))
             }
-            (Type::Unknown | Type::None, _) => Ok(Rc::clone(other)),
-            (_, Type::Unknown) => Ok(Rc::clone(self)),
+            (Type::Unknown | Type::None, _) => Ok(Arc::clone(other)),
+            (_, Type::Unknown) => Ok(Arc::clone(self)),
             _ => Err(format!("expected {other:?}, found {self:?}").into()),
         }
     }
@@ -442,6 +396,7 @@ pub enum UserDefinedType {
 }
 
 impl UserDefinedType {
+    #[inline]
     pub const fn as_product(&self) -> Option<&UserDefinedTypeFields> {
         if let UserDefinedType::Product(ty) = self {
             Some(ty)
@@ -450,6 +405,7 @@ impl UserDefinedType {
         }
     }
 
+    #[inline]
     pub const fn as_sum(&self) -> Option<&Vec<(String, UserDefinedTypeFields)>> {
         if let UserDefinedType::Sum(ty) = self {
             Some(ty)
@@ -458,6 +414,7 @@ impl UserDefinedType {
         }
     }
 
+    #[inline]
     pub fn fields(&self, variant: Option<&str>) -> Option<&UserDefinedTypeFields> {
         match (self, variant) {
             (UserDefinedType::Product(fields), None) => Some(fields),
@@ -472,13 +429,14 @@ impl UserDefinedType {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum UserDefinedTypeFields {
-    Named(Vec<(String, Rc<Type>)>),
-    Anonymous(Vec<Rc<Type>>),
+    Named(Vec<(String, Arc<Type>)>),
+    Anonymous(Vec<Arc<Type>>),
     Unit,
 }
 
 impl UserDefinedTypeFields {
-    pub fn as_named(&self) -> Option<&[(String, Rc<Type>)]> {
+    #[inline]
+    pub fn as_named(&self) -> Option<&[(String, Arc<Type>)]> {
         if let UserDefinedTypeFields::Named(fields) = self {
             Some(fields)
         } else {
@@ -486,7 +444,8 @@ impl UserDefinedTypeFields {
         }
     }
 
-    pub fn get(&self, field: &str) -> Option<&Rc<Type>> {
+    #[inline]
+    pub fn get(&self, field: &str) -> Option<&Arc<Type>> {
         match self {
             UserDefinedTypeFields::Named(fields) => fields
                 .iter()
@@ -497,6 +456,7 @@ impl UserDefinedTypeFields {
         }
     }
 
+    #[inline]
     pub fn index_of(&self, field: &str) -> Option<usize> {
         match self {
             UserDefinedTypeFields::Named(fields) => {
@@ -507,18 +467,15 @@ impl UserDefinedTypeFields {
         }
     }
 
-    #[expect(
-        clippy::iter_on_empty_collections,
-        reason = "must be an empty slice to typecheck"
-    )]
-    pub fn iter(&self) -> impl Iterator<Item = &Rc<Type>> + use<'_> {
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = &Arc<Type>> + use<'_> {
         enum Iter<'a> {
-            Named(slice::Iter<'a, (String, Rc<Type>)>),
-            Anonymous(slice::Iter<'a, Rc<Type>>),
+            Named(slice::Iter<'a, (String, Arc<Type>)>),
+            Anonymous(slice::Iter<'a, Arc<Type>>),
         }
 
         impl<'a> Iterator for Iter<'a> {
-            type Item = &'a Rc<Type>;
+            type Item = &'a Arc<Type>;
 
             fn next(&mut self) -> Option<Self::Item> {
                 match self {
@@ -535,9 +492,10 @@ impl UserDefinedTypeFields {
         }
     }
 
+    #[inline]
     pub fn names(&self) -> impl Iterator<Item = String> + use<'_> {
         enum Iter<'a> {
-            Named(slice::Iter<'a, (String, Rc<Type>)>),
+            Named(slice::Iter<'a, (String, Arc<Type>)>),
             Anonymous(Range<usize>),
         }
 
@@ -559,7 +517,8 @@ impl UserDefinedTypeFields {
         }
     }
 
-    pub fn len(&self) -> usize {
+    #[inline]
+    pub const fn len(&self) -> usize {
         match self {
             UserDefinedTypeFields::Named(fields) => fields.len(),
             UserDefinedTypeFields::Anonymous(fields) => fields.len(),
@@ -567,35 +526,38 @@ impl UserDefinedTypeFields {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
+    #[inline]
+    pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
 
 #[derive(Debug)]
-pub struct Function<E> {
-    pub params: Vec<(Ident, Rc<Type>)>,
-    pub continuations: HashMap<Ident, Rc<Type>>,
-    pub body: Vec<E>,
+pub struct Function<T: Tag> {
+    pub positional: Vec<(Ident, Arc<Type>)>,
+    pub named: HashMap<Ident, Arc<Type>>,
+    pub body: Vec<Expr<T>>,
     pub captures: Vec<Ident>,
     pub name: String,
 }
 
-impl<E> Function<E> {
-    pub fn new(name: String) -> Function<E> {
+impl<T: Tag> Function<T> {
+    #[inline]
+    pub fn new(name: String) -> Function<T> {
         Function {
-            params: Vec::new(),
-            continuations: HashMap::new(),
+            positional: Vec::new(),
+            named: HashMap::new(),
             body: Vec::new(),
             captures: Vec::new(),
             name,
         }
     }
 
-    pub fn clone_metadata<E2>(function: &Function<E2>, body: Vec<E>) -> Function<E> {
+    #[inline]
+    pub fn clone_metadata<U: Tag>(function: &Function<U>, body: Vec<Expr<T>>) -> Function<T> {
         Function {
-            params: function.params.clone(),
-            continuations: function.continuations.clone(),
+            positional: function.positional.clone(),
+            named: function.named.clone(),
             body,
             captures: function.captures.clone(),
             name: function.name.clone(),
@@ -604,18 +566,19 @@ impl<E> Function<E> {
 }
 
 #[derive(Debug)]
-pub struct Program<E> {
-    pub functions: HashMap<FuncRef, Function<E>>,
-    pub signatures: HashMap<FuncRef, Rc<Type>>,
-    pub types: HashSet<Rc<Type>>,
+pub struct Program<T: Tag> {
+    pub functions: HashMap<FuncRef, Function<T>>,
+    pub signatures: HashMap<FuncRef, Arc<Type>>,
+    pub types: HashSet<Arc<Type>>,
     lib_std: Option<StdLib>,
     pub name: String,
     pub continuation_idents: HashMap<String, Ident>,
-    pub user_defined_types: HashMap<UserDefinedTyRef, Rc<UserDefinedType>>,
+    pub user_defined_types: HashMap<UserDefinedTyRef, Arc<UserDefinedType>>,
 }
 
-impl Program<Expr> {
-    pub fn new(name: String) -> Program<Expr> {
+impl Program<()> {
+    #[inline]
+    pub fn new(name: String) -> Program<()> {
         let mut program = Program {
             functions: HashMap::new(),
             signatures: HashMap::new(),
@@ -630,8 +593,9 @@ impl Program<Expr> {
     }
 }
 
-impl<E> Program<E> {
-    pub fn clone_metadata<E2>(program: &Program<E2>) -> Program<E> {
+impl<T: Tag> Program<T> {
+    #[inline]
+    pub fn clone_metadata<U: Tag>(program: &Program<U>) -> Program<T> {
         Program {
             functions: HashMap::new(),
             signatures: program.signatures.clone(),
@@ -643,21 +607,24 @@ impl<E> Program<E> {
         }
     }
 
-    #[allow(clippy::missing_panics_doc)] // Will not panic.
+    #[expect(clippy::missing_panics_doc, reason = "will not panic")]
+    #[inline]
     pub const fn lib_std(&self) -> &StdLib {
         self.lib_std.as_ref().unwrap()
     }
 
-    pub fn insert_type(&mut self, ty: Type) -> Rc<Type> {
+    #[inline]
+    pub fn insert_type(&mut self, ty: Type) -> Arc<Type> {
         if let Some(ty) = self.types.get(&ty) {
-            Rc::clone(ty)
+            Arc::clone(ty)
         } else {
-            let ty = Rc::new(ty);
-            self.types.insert(Rc::clone(&ty));
+            let ty = Arc::new(ty);
+            self.types.insert(Arc::clone(&ty));
             ty
         }
     }
 
+    #[inline]
     pub fn continuation_ident(&mut self, continuation: &str, span: Span) -> Ident {
         if let Some(ident) = self.continuation_idents.get(continuation) {
             ident.with_span(span)

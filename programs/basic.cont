@@ -1,9 +1,9 @@
-fn sum(left: int, right: int)[ret: fn(int)] {
+fn sum(left: int, right: int, @ret: fn(int)) {
+    let world = "hewwo";
     ret(left + right)
 }
 
-fn main()[ret: fn(int)] {
-    let world = "hewwo";
-    let x = sum[ret];
+fn main(@ret: fn(int)) {
+    let x = sum(@ret);
     x(3, 7)
 }

@@ -3,4 +3,16 @@ command = [
   "cargo",
   "clippy",
   "--workspace",
+  "--all-features",
 ]
+
+[jobs.doc-open]
+command = [
+  "cargo",
+  "doc",
+  "--workspace",
+  "--no-deps",
+  "--open",
+  "--all-features",
+]
+on_success = "back"

@@ -1,27 +1,19 @@
 #![allow(unsafe_code)]
 
-use crate::call_entry_point;
-use crate::pretty_unwrap;
-use crate::Compiler;
+use crate::{Compiler, call_entry_point, pretty_unwrap};
 
 use std::mem;
 
 use bumpalo::Bump;
 
-use continuate_ir::common::FuncRef;
-use continuate_ir::mid_level_ir::Program;
+use continuate_ir::{common::FuncRef, mid_level_ir::Program};
 
-use cranelift::codegen::ir::types;
-use cranelift::codegen::ir::AbiParam;
-use cranelift::codegen::ir::Function;
-use cranelift::codegen::ir::InstBuilder;
-use cranelift::codegen::ir::UserExternalName;
-use cranelift::codegen::ir::UserFuncName;
-use cranelift::frontend::FunctionBuilder;
-use cranelift::jit::JITBuilder;
-use cranelift::jit::JITModule;
-use cranelift::module::default_libcall_names;
-use cranelift::module::Module;
+use cranelift::{
+    codegen::ir::{AbiParam, Function, InstBuilder, UserExternalName, UserFuncName, types},
+    frontend::FunctionBuilder,
+    jit::{JITBuilder, JITModule},
+    module::{Module, default_libcall_names},
+};
 
 pub struct JitResult {
     module: Option<JITModule>,
@@ -36,12 +28,14 @@ impl JitResult {
         }
     }
 
+    #[inline]
     pub fn run(&self) -> i64 {
         (self.f)()
     }
 }
 
 impl Drop for JitResult {
+    #[inline]
     fn drop(&mut self) {
         if let Some(module) = self.module.take() {
             // SAFETY: No functions from `self.module` will be used outside of `self`.
@@ -99,8 +93,9 @@ impl Compiler<'_, JITModule> {
     }
 }
 
-#[allow(clippy::missing_panics_doc)]
-pub fn jit_compile(program: Program) -> JitResult {
+#[expect(clippy::missing_panics_doc)]
+#[inline]
+pub fn compile(program: Program) -> JitResult {
     use continuate_rt::garbage_collector as rt;
     let mut builder = JITBuilder::with_flags(
         &[
@@ -110,13 +105,13 @@ pub fn jit_compile(program: Program) -> JitResult {
         ],
         default_libcall_names(),
     )
-    .unwrap();
+    .expect("these are valid flags");
     builder.symbols([
         ("cont_rt_alloc_string", rt::alloc_string as _),
         ("cont_rt_alloc_gc", rt::alloc_gc as _),
         ("cont_rt_mark_root", rt::mark_root as _),
         ("cont_rt_unmark_root", rt::unmark_root as _),
-        ("cont_rt_unmark_temp_root", rt::unmark_temp_root as _),
+        ("cont_rt_clear_temp_roots", rt::clear_temp_roots as _),
     ]);
     let module = JITModule::new(builder);
 

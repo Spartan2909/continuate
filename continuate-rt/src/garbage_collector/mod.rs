@@ -1,20 +1,17 @@
-use crate::layout::SingleLayout;
-use crate::layout::TyLayout;
+use crate::layout::{SingleLayout, TyLayout};
 
-use std::alloc;
-use std::alloc::handle_alloc_error;
-use std::alloc::Layout;
-use std::borrow::Borrow;
-use std::ffi::c_char;
-use std::ffi::CStr;
-use std::fmt;
-use std::hash;
-use std::hash::BuildHasherDefault;
-use std::mem;
-use std::ptr::NonNull;
-use std::sync::Mutex;
+use std::{
+    alloc::{self, Layout, handle_alloc_error},
+    borrow::Borrow,
+    ffi::{CStr, c_char},
+    fmt,
+    hash::{self},
+    mem,
+    ptr::NonNull,
+    sync::Mutex,
+};
 
-use nohash_hasher::IntSet;
+use ahash::{HashSet, RandomState};
 
 #[cfg(debug_assertions)]
 use tracing::debug;
@@ -107,17 +104,15 @@ impl<T> Borrow<NonNull<GcValue<T>>> for HashableGcValue<T> {
 // SAFETY: `HashableGcValue` cannot be used from safe code.
 unsafe impl<T> Send for HashableGcValue<T> {}
 
-impl<T> nohash_hasher::IsEnabled for HashableGcValue<T> {}
-
 struct GarbageCollector {
     values: Option<NonNull<GcValue<()>>>,
-    roots: IntSet<HashableGcValue<()>>,
-    temp_roots: IntSet<HashableGcValue<()>>,
+    roots: HashSet<HashableGcValue<()>>,
+    temp_roots: HashSet<HashableGcValue<()>>,
     bytes_allocated: usize,
     next_gc: usize,
 }
 
-/// ## Safety
+/// # Safety
 ///
 /// `value` must be valid.
 unsafe fn mark_object(value: *mut GcValue<()>) {
@@ -169,7 +164,7 @@ unsafe fn mark_object(value: *mut GcValue<()>) {
 impl GarbageCollector {
     const HEAP_GROW_FACTOR: usize = 2;
 
-    /// ## Safety
+    /// # Safety
     ///
     /// All roots in `self` must be valid.
     unsafe fn mark_roots(&mut self) {
@@ -181,7 +176,7 @@ impl GarbageCollector {
         }
     }
 
-    /// ## Safety
+    /// # Safety
     ///
     /// `object` must be a valid pointer to a `GcValue<()>`.
     unsafe fn free_object(&mut self, object: NonNull<GcValue<()>>) {
@@ -227,11 +222,9 @@ impl GarbageCollector {
         }
     }
 
-    /// ## Safety
+    /// # Safety
     ///
-    /// - Any memory allocated in `self` which is accessed after this method is called must be
-    ///   marked.
-    ///
+    /// - Any memory allocated in `self` which is accessed after this method is called must be marked.
     /// - All values in `self` must be valid.
     unsafe fn sweep(&mut self) {
         let mut previous = None;
@@ -263,11 +256,9 @@ impl GarbageCollector {
         }
     }
 
-    /// ## Safety
+    /// # Safety
     ///
-    /// - Any memory allocated in `self` which is accessed after this method is called must be
-    ///   reachable from an element of `self.roots` or `self.temp_roots`.
-    ///
+    /// - Any memory allocated in `self` which is accessed after this method is called must be  reachable from an element of `self.roots` or `self.temp_roots`.
     /// - All values in `self` must be valid.
     unsafe fn collect(&mut self) {
         // SAFETY: Must be ensured by caller.
@@ -283,7 +274,7 @@ impl GarbageCollector {
         self.next_gc *= Self::HEAP_GROW_FACTOR;
     }
 
-    /// ## Safety
+    /// # Safety
     ///
     /// `ptr` must be a valid pointer to a (possibly uninitialised) `GcValue<()>` allocated in `gc`.
     unsafe fn track_object(&mut self, ptr: NonNull<GcValue<()>>, size: usize) {
@@ -311,10 +302,9 @@ impl GarbageCollector {
         self.temp_roots.insert(ptr.into());
     }
 
-    /// ## Safety
+    /// # Safety
     ///
     /// - All values in `self` must be valid.
-    ///
     /// - No values in `self` may be accessed again.
     unsafe fn clear(&mut self) {
         let mut current = self.values;
@@ -333,26 +323,31 @@ impl GarbageCollector {
 // SAFETY: Every pointer in a `GarbageCollector` is owned by that collector.
 unsafe impl Send for GarbageCollector {}
 
+const fn new_hash_set<T>() -> HashSet<T> {
+    HashSet::with_hasher(RandomState::with_seeds(
+        0x0d15_ea5e_1bad_b002,
+        0xbadc_0ffe_e0dd_f00d,
+        0xdefe_c8ed_dead_beef,
+        0xabad_cafe_d00d_feed,
+    ))
+}
+
 static GARBAGE_COLLECTOR: Mutex<GarbageCollector> = Mutex::new(GarbageCollector {
     values: None,
-    roots: IntSet::with_hasher(BuildHasherDefault::new()),
-    temp_roots: IntSet::with_hasher(BuildHasherDefault::new()),
+    roots: new_hash_set(),
+    temp_roots: new_hash_set(),
     bytes_allocated: 0,
     next_gc: 1024 * 1024,
 });
 
-/// ## Safety
+/// # Safety
 ///
-/// `layout` must be a valid layout. In particular, it must accurately describe the locations of
-///     pointers in the allocated value, and `layout.size()` and `layout.align()` must fit the
-///     preconditions of [`Layout::from_size_align`].
+/// `layout` must be a valid layout. In particular, it must accurately describe the locations of pointers in the allocated value, and `layout.size()` and `layout.align()` must fit the preconditions of [`Layout::from_size_align`].
 ///
-/// ## Panics
+/// # Panics
 ///
-/// Panics if `layout` is a `TyLayout::String` or if another garbage collection operation has
-/// previously panicked.
-#[export_name = "cont_rt_alloc_gc"]
-#[allow(clippy::missing_inline_in_public_items)]
+/// Panics if `layout` is a `TyLayout::String` or if another garbage collection operation has previously panicked.
+#[unsafe(export_name = "cont_rt_alloc_gc")]
 pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull<()> {
     #[cfg(debug_assertions)]
     debug!("allocating object with layout {layout:?}");
@@ -395,18 +390,15 @@ pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull
     unsafe { NonNull::new_unchecked(value_ptr.cast()) }
 }
 
-/// ## Safety
+/// # Safety
 ///
-/// - `ptr` must point to memory allocated with [`alloc_gc`], and must not have
-///   previously been passed to this function.
-///
+/// - `ptr` must point to memory allocated with [`alloc_gc`], and must not have previously been passed to this function.
 /// - `ptr` must be valid for writes.
 ///
-/// ## Panics
+/// # Panics
 ///
 /// Panics if a garbage collection operation has previously panicked.
-#[export_name = "cont_rt_mark_root"]
-#[allow(clippy::missing_inline_in_public_items)]
+#[unsafe(export_name = "cont_rt_mark_root")]
 pub unsafe extern "C" fn mark_root(ptr: NonNull<()>) {
     // SAFETY: Must be ensured by caller.
     let value: *mut GcValue<()> = unsafe {
@@ -421,16 +413,15 @@ pub unsafe extern "C" fn mark_root(ptr: NonNull<()>) {
     gc.roots.insert(value.into());
 }
 
-/// ## Safety
+/// # Safety
 ///
-/// - `ptr` must point to memory allocated with [`alloc_gc`] and marked by [`mark_root`], and must
+/// `ptr` must point to memory allocated with [`alloc_gc`] and marked by [`mark_root`], and must
 ///   not have previously been passed to this function.
 ///
-/// ## Panics
+/// # Panics
 ///
 /// Panics if a garbage collection operation has previously panicked.
-#[export_name = "cont_rt_unmark_root"]
-#[allow(clippy::missing_inline_in_public_items)]
+#[unsafe(export_name = "cont_rt_unmark_root")]
 pub unsafe extern "C" fn unmark_root(ptr: NonNull<()>) {
     // SAFETY: Must be ensured by caller.
     let value: *mut GcValue<()> = unsafe {
@@ -443,33 +434,18 @@ pub unsafe extern "C" fn unmark_root(ptr: NonNull<()>) {
     GARBAGE_COLLECTOR.lock().unwrap().roots.remove(&value);
 }
 
-/// ## Safety
-///
-/// - `ptr` must point to memory allocated with [`alloc_gc`], and must not have previously been
-///   passed to this function.
-///
-/// ## Panics
+/// # Panics
 ///
 /// Panics if a garbage collection operation has previously panicked.
-#[export_name = "cont_rt_unmark_temp_root"]
-#[allow(clippy::missing_inline_in_public_items)]
-pub unsafe extern "C" fn unmark_temp_root(ptr: NonNull<()>) {
-    // SAFETY: Must be ensured by caller.
-    let value: *mut GcValue<()> = unsafe {
-        ptr.as_ptr()
-            .byte_sub(mem::offset_of!(GcValue<()>, value))
-            .cast()
-    };
-    // SAFETY: `value` is derived from a non-null pointer.
-    let value = unsafe { NonNull::new_unchecked(value) };
-    GARBAGE_COLLECTOR.lock().unwrap().temp_roots.remove(&value);
+#[unsafe(export_name = "cont_rt_clear_temp_roots")]
+pub extern "C" fn clear_temp_roots() {
+    GARBAGE_COLLECTOR.lock().unwrap().temp_roots.clear();
 }
 
-/// ## Panics
+/// # Panics
 ///
 /// Panics if a garbage collection operation has previously panicked.
-#[export_name = "cont_rt_alloc_string"]
-#[allow(clippy::missing_inline_in_public_items)]
+#[unsafe(export_name = "cont_rt_alloc_string")]
 pub extern "C" fn alloc_string(len: usize) -> NonNull<()> {
     #[cfg(debug_assertions)]
     debug!("allocating string with length {len}");
@@ -504,13 +480,12 @@ pub extern "C" fn alloc_string(len: usize) -> NonNull<()> {
     unsafe { NonNull::new_unchecked(value_ptr.cast()) }
 }
 
-/// ## Safety
+/// # Safety
 ///
 /// - All garbage-collected value must be valid.
-///
 /// - No garbage-collected values may be accessed again.
 ///
-/// ## Panics
+/// # Panics
 ///
 /// Panics if a garbage collection operation has previously panicked.
 #[inline]

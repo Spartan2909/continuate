@@ -7,21 +7,17 @@ pub use lowering::lower;
 mod visit;
 pub use visit::run_passes;
 
-use crate::common::BinaryOp;
-use crate::common::FuncRef;
-use crate::common::Ident;
-use crate::common::Intrinsic;
-use crate::common::Literal;
-use crate::common::UnaryOp;
-use crate::high_level_ir::Program as HirProgram;
-use crate::high_level_ir::TypedExpr as HirExpr;
-use crate::lib_std::StdLib;
+use crate::{
+    common::{BinaryOp, FuncRef, Ident, Intrinsic, Literal, UnaryOp},
+    high_level_ir as hir,
+    lib_std::StdLib,
+};
 
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::fmt;
-use std::hash;
-use std::rc::Rc;
+use std::{
+    collections::{HashMap, HashSet},
+    fmt, hash,
+    sync::Arc,
+};
 
 use itertools::Itertools as _;
 
@@ -36,7 +32,7 @@ pub enum Expr {
     Get(ExprGet),
     Set(ExprSet),
     Call(ExprCall),
-    ContApplication(ExprContApplication),
+    Application(ExprApplication),
     Unary(ExprUnary),
     Binary(ExprBinary),
     Assign(ExprAssign),
@@ -63,28 +59,28 @@ pub struct ExprFunction {
 
 #[derive(Debug, Clone)]
 pub struct ExprTuple {
-    pub ty: Rc<Type>,
+    pub ty: Arc<Type>,
     pub values: Vec<Expr>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ExprConstructor {
-    pub ty: Rc<Type>,
+    pub ty: Arc<Type>,
     pub index: Option<usize>,
     pub fields: Vec<Expr>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ExprArray {
-    pub ty: Rc<Type>,
+    pub ty: Arc<Type>,
     pub values: Vec<Expr>,
-    pub value_ty: Rc<Type>,
+    pub value_ty: Arc<Type>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ExprGet {
     pub object: Box<Expr>,
-    pub object_ty: Rc<Type>,
+    pub object_ty: Arc<Type>,
     pub object_variant: Option<usize>,
     pub field: usize,
 }
@@ -92,7 +88,7 @@ pub struct ExprGet {
 #[derive(Debug, Clone)]
 pub struct ExprSet {
     pub object: Box<Expr>,
-    pub object_ty: Rc<Type>,
+    pub object_ty: Arc<Type>,
     pub object_variant: Option<usize>,
     pub field: usize,
     pub value: Box<Expr>,
@@ -101,33 +97,35 @@ pub struct ExprSet {
 #[derive(Debug, Clone)]
 pub struct ExprCall {
     pub callee: Box<Expr>,
-    pub callee_ty: Rc<Type>,
-    pub args: Vec<(Option<Ident>, Expr)>,
+    pub callee_ty: Arc<Type>,
+    pub positional: Vec<Expr>,
+    pub named: Vec<(Ident, Expr)>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ExprContApplication {
+pub struct ExprApplication {
     pub callee: Box<Expr>,
-    pub callee_ty: Rc<Type>,
-    pub continuations: Vec<(Ident, Expr)>,
-    pub result_ty: Rc<Type>,
-    pub storage_ty: Rc<Type>,
+    pub callee_ty: Arc<Type>,
+    pub positional: Vec<Expr>,
+    pub named: Vec<(Ident, Expr)>,
+    pub result_ty: Arc<Type>,
+    pub storage_ty: Arc<Type>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ExprUnary {
     pub operator: UnaryOp,
     pub operand: Box<Expr>,
-    pub operand_ty: Rc<Type>,
+    pub operand_ty: Arc<Type>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ExprBinary {
     pub left: Box<Expr>,
-    pub left_ty: Rc<Type>,
+    pub left_ty: Arc<Type>,
     pub operator: BinaryOp,
     pub right: Box<Expr>,
-    pub right_ty: Rc<Type>,
+    pub right_ty: Arc<Type>,
 }
 
 #[derive(Debug, Clone)]
@@ -152,28 +150,29 @@ pub struct ExprGoto {
 pub struct ExprClosure {
     pub func_ref: FuncRef,
     pub captures: Vec<Ident>,
-    pub storage_ty: Rc<Type>,
+    pub storage_ty: Arc<Type>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ExprIntrinsic {
     pub intrinsic: Intrinsic,
-    pub values: Vec<(Expr, Rc<Type>)>,
+    pub values: Vec<(Expr, Arc<Type>)>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct FunctionTy {
-    pub params: Vec<Rc<Type>>,
-    pub continuations: HashMap<Ident, Rc<Type>>,
+    pub positional_params: Vec<Arc<Type>>,
+    pub named_params: HashMap<Ident, Arc<Type>>,
 }
 
 impl hash::Hash for FunctionTy {
+    #[inline]
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        self.params.hash(state);
+        self.positional_params.hash(state);
         for (&name, ty) in self
-            .continuations
+            .named_params
             .iter()
-            .sorted_unstable_by_key(|(&ident, _)| ident)
+            .sorted_unstable_by_key(|&(&ident, _)| ident)
         {
             (name, ty).hash(state);
         }
@@ -186,8 +185,8 @@ pub enum Type {
     Int,
     Float,
     String,
-    Array(Rc<Type>, u64),
-    Tuple(Vec<Rc<Type>>),
+    Array(Arc<Type>, u64),
+    Tuple(Vec<Arc<Type>>),
     Function(FunctionTy),
     UserDefined(UserDefinedType),
     Unknown,
@@ -195,13 +194,18 @@ pub enum Type {
 }
 
 impl Type {
-    pub const fn function(params: Vec<Rc<Type>>, continuations: HashMap<Ident, Rc<Type>>) -> Type {
+    #[inline]
+    pub const fn function(
+        positional_params: Vec<Arc<Type>>,
+        named_params: HashMap<Ident, Arc<Type>>,
+    ) -> Type {
         Type::Function(FunctionTy {
-            params,
-            continuations,
+            positional_params,
+            named_params,
         })
     }
 
+    #[inline]
     pub const fn as_function(&self) -> Option<&FunctionTy> {
         if let Type::Function(func) = self {
             Some(func)
@@ -210,6 +214,7 @@ impl Type {
         }
     }
 
+    #[inline]
     pub const fn as_user_defined(&self) -> Option<&UserDefinedType> {
         if let Type::UserDefined(user_defined) = self {
             Some(user_defined)
@@ -218,7 +223,7 @@ impl Type {
         }
     }
 
-    pub(crate) fn field(&self, variant: Option<usize>, field: usize) -> Option<Rc<Type>> {
+    pub(crate) fn field(&self, variant: Option<usize>, field: usize) -> Option<Arc<Type>> {
         let user_defined = self.as_user_defined()?;
         match (variant, &user_defined) {
             (None, UserDefinedType::Product(fields)) => fields.get(field).cloned(),
@@ -229,6 +234,7 @@ impl Type {
         }
     }
 
+    #[inline]
     pub const fn is_primitive(&self) -> bool {
         matches!(
             self,
@@ -239,12 +245,13 @@ impl Type {
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum UserDefinedType {
-    Product(Vec<Rc<Type>>),
-    Sum(Vec<Vec<Rc<Type>>>),
+    Product(Vec<Arc<Type>>),
+    Sum(Vec<Vec<Arc<Type>>>),
 }
 
 impl UserDefinedType {
-    pub const fn as_sum(&self) -> Option<&Vec<Vec<Rc<Type>>>> {
+    #[inline]
+    pub const fn as_sum(&self) -> Option<&Vec<Vec<Arc<Type>>>> {
         if let UserDefinedType::Sum(variants) = self {
             Some(variants)
         } else {
@@ -257,6 +264,7 @@ impl UserDefinedType {
 pub struct BlockId(pub(crate) u64);
 
 impl fmt::Debug for BlockId {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "BlockId({})", self.0)
     }
@@ -268,6 +276,7 @@ pub struct Block {
 }
 
 impl Block {
+    #[inline]
     pub const fn new() -> Block {
         Block { exprs: Vec::new() }
     }
@@ -276,14 +285,14 @@ impl Block {
 #[derive(Debug)]
 pub struct ClosureCaptures {
     pub captures: Vec<Ident>,
-    pub storage_ty: Rc<Type>,
+    pub storage_ty: Arc<Type>,
 }
 
 #[derive(Debug)]
 pub struct Function {
-    pub params: Vec<(Ident, Rc<Type>)>,
-    pub continuations: HashMap<Ident, Rc<Type>>,
-    pub declarations: HashMap<Ident, (Rc<Type>, Option<Literal>)>,
+    pub positional_params: Vec<(Ident, Arc<Type>)>,
+    pub named_params: HashMap<Ident, Arc<Type>>,
+    pub declarations: HashMap<Ident, (Arc<Type>, Option<Literal>)>,
     pub blocks: HashMap<BlockId, Block>,
     pub captures: Option<ClosureCaptures>,
     next_block: u64,
@@ -291,10 +300,11 @@ pub struct Function {
 }
 
 impl Function {
+    #[inline]
     pub fn new(name: String) -> Function {
         Function {
-            params: Vec::new(),
-            continuations: HashMap::new(),
+            positional_params: Vec::new(),
+            named_params: HashMap::new(),
             declarations: HashMap::new(),
             blocks: HashMap::new(),
             captures: None,
@@ -303,29 +313,37 @@ impl Function {
         }
     }
 
-    pub fn type_of_var(&self, var: Ident) -> Option<&Rc<Type>> {
-        self.continuations
+    #[inline]
+    pub fn type_of_var(&self, var: Ident) -> Option<&Arc<Type>> {
+        self.named_params
             .get(&var)
             .or_else(|| self.declarations.get(&var).map(|(ty, _)| ty))
             .or_else(|| {
-                self.params
+                self.positional_params
                     .iter()
                     .find(|&&(ident, _)| ident == var)
                     .map(|(_, var)| var)
             })
     }
 
+    #[inline]
     pub fn ty(&self) -> FunctionTy {
         FunctionTy {
-            params: self.params.iter().map(|(_, ty)| Rc::clone(ty)).collect(),
-            continuations: self.continuations.clone(),
+            positional_params: self
+                .positional_params
+                .iter()
+                .map(|(_, ty)| Arc::clone(ty))
+                .collect(),
+            named_params: self.named_params.clone(),
         }
     }
 
+    #[inline]
     pub const fn entry_point() -> BlockId {
         BlockId(0)
     }
 
+    #[inline]
     pub const fn block(&mut self) -> BlockId {
         let block = BlockId(self.next_block);
         self.next_block += 1;
@@ -336,14 +354,15 @@ impl Function {
 #[derive(Debug)]
 pub struct Program {
     pub functions: HashMap<FuncRef, Function>,
-    pub signatures: HashMap<FuncRef, Rc<Type>>,
-    pub types: HashSet<Rc<Type>>,
+    pub signatures: HashMap<FuncRef, Arc<Type>>,
+    pub types: HashSet<Arc<Type>>,
     pub lib_std: StdLib,
     pub name: String,
 }
 
 impl Program {
-    pub fn new(program: &HirProgram<HirExpr>) -> Program {
+    #[inline]
+    pub fn new(program: &hir::Program<Arc<hir::Type>>) -> Program {
         Program {
             functions: HashMap::new(),
             signatures: HashMap::new(),
@@ -353,12 +372,13 @@ impl Program {
         }
     }
 
-    pub fn insert_type(&mut self, ty: Type) -> Rc<Type> {
+    #[inline]
+    pub fn insert_type(&mut self, ty: Type) -> Arc<Type> {
         if let Some(ty) = self.types.get(&ty) {
-            Rc::clone(ty)
+            Arc::clone(ty)
         } else {
-            let ty = Rc::new(ty);
-            self.types.insert(Rc::clone(&ty));
+            let ty = Arc::new(ty);
+            self.types.insert(Arc::clone(&ty));
             ty
         }
     }

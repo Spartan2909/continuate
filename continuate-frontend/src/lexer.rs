@@ -1,11 +1,8 @@
 use std::fmt;
 
-use continuate_error::Error;
-use continuate_error::SourceId;
-use continuate_error::Span;
+use continuate_error::{Error, SourceId, Span};
 
-use logos::Lexer;
-use logos::Logos;
+use logos::{Lexer, Logos};
 
 fn string<'src>(lex: &Lexer<'src, Token<'src>>) -> &'src str {
     let slice = lex.slice();
@@ -102,6 +99,8 @@ pub enum Token<'src> {
     Percent(Spacing),
     #[token("!", spacing)]
     Bang(Spacing),
+    #[token("@", spacing)]
+    At(Spacing),
 
     #[token("_", spacing)]
     Underscore(Spacing),
@@ -124,6 +123,7 @@ pub enum Token<'src> {
 }
 
 impl fmt::Display for Token<'_> {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Token::Comment => f.write_str("<comment>\n"),
@@ -160,6 +160,7 @@ impl fmt::Display for Token<'_> {
             Token::Slash(_) => f.write_str("/"),
             Token::Percent(_) => f.write_str("%"),
             Token::Bang(_) => f.write_str("!"),
+            Token::At(_) => f.write_str("@"),
 
             Token::Underscore(_) => f.write_str("_"),
 
@@ -175,11 +176,12 @@ impl fmt::Display for Token<'_> {
     }
 }
 
-#[allow(
+#[expect(
     clippy::missing_panics_doc,
     reason = "spans are monotonically increasing, so this will not panic"
 )]
-pub fn lex(source: &str, source_id: SourceId) -> (Vec<(Token, Span)>, Vec<Error>) {
+#[inline]
+pub fn lex(source: &str, source_id: SourceId) -> (Vec<(Token<'_>, Span)>, Vec<Error>) {
     let mut errors = Vec::new();
     let tokens = Token::lexer(source)
         .spanned()

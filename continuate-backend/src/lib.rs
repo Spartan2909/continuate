@@ -1,69 +1,48 @@
 mod function;
-use function::FunctionCompilerBuilder;
-use function::FunctionRuntime;
+use function::{FunctionCompilerBuilder, FunctionRuntime};
 
-mod jit;
-pub use jit::jit_compile;
-pub use jit::JitResult;
+pub mod jit;
 
-mod linked_list;
-use linked_list::LinkedList;
+mod storage;
+use storage::Storage;
 
-use std::collections::HashMap;
-use std::fmt;
-use std::mem;
-use std::rc::Rc;
+use std::{collections::HashMap, fmt, mem, sync::Arc};
 
 use bumpalo::Bump;
 
-use continuate_ir::common::FuncRef;
-use continuate_ir::mid_level_ir::Function as MirFunction;
-use continuate_ir::mid_level_ir::FunctionTy;
-use continuate_ir::mid_level_ir::Program;
-use continuate_ir::mid_level_ir::Type as MirType;
-use continuate_ir::mid_level_ir::UserDefinedType;
+use continuate_ir::{
+    common::FuncRef,
+    mid_level_ir::{
+        Function as MirFunction, FunctionTy, Program, Type as MirType, UserDefinedType,
+    },
+};
 
-use continuate_rt::layout::SingleLayout;
-use continuate_rt::layout::TyLayout;
-use continuate_rt::slice::Slice;
+use continuate_rt::{
+    layout::{SingleLayout, TyLayout},
+    slice::Slice,
+};
 
-use cranelift::codegen::ir::entities::Value;
-use cranelift::codegen::ir::types;
-use cranelift::codegen::ir::AbiParam;
-use cranelift::codegen::ir::Function;
-use cranelift::codegen::ir::InstBuilder;
-use cranelift::codegen::ir::Signature;
-use cranelift::codegen::ir::Type;
-use cranelift::codegen::ir::UserExternalName;
-use cranelift::codegen::ir::UserFuncName;
-use cranelift::codegen::isa;
-use cranelift::codegen::isa::CallConv;
-use cranelift::codegen::settings;
-use cranelift::codegen::settings::Configurable;
-use cranelift::codegen::settings::Flags;
-use cranelift::codegen::settings::FlagsOrIsa;
-use cranelift::codegen::verify_function;
-use cranelift::codegen::Context;
-use cranelift::frontend::FunctionBuilder;
-use cranelift::frontend::FunctionBuilderContext;
-use cranelift::module::default_libcall_names;
-use cranelift::module::DataDescription;
-use cranelift::module::DataId;
-use cranelift::module::FuncId;
-use cranelift::module::Linkage;
-use cranelift::module::Module;
-use cranelift::object::ObjectBuilder;
-use cranelift::object::ObjectModule;
-use cranelift::object::ObjectProduct;
+use cranelift::{
+    codegen::{
+        Context,
+        ir::{
+            AbiParam, Function, InstBuilder, Signature, Type, UserExternalName, UserFuncName,
+            entities::Value, types,
+        },
+        isa::{self, CallConv},
+        settings::{self, Configurable, Flags, FlagsOrIsa},
+        verify_function,
+    },
+    frontend::{FunctionBuilder, FunctionBuilderContext},
+    module::{DataDescription, DataId, FuncId, Linkage, Module, default_libcall_names},
+    object::{ObjectBuilder, ObjectModule, ObjectProduct},
+};
 
-use itertools::Itertools as _;
+use itertools::Itertools;
 
-use tracing::info;
-use tracing::warn;
+use tracing::{info, warn};
 
-use target_lexicon::Endianness;
-use target_lexicon::PointerWidth;
-use target_lexicon::Triple;
+use target_lexicon::{Endianness, PointerWidth, Triple};
 
 struct Runtime {
     /// `fn(ty_layout: &'static TyLayout<'static>) -> *mut ()`
@@ -78,8 +57,8 @@ struct Runtime {
     /// `fn(ptr: *const ())`
     unmark_root: FuncId,
 
-    /// `fn(ptr: *const ())`
-    unmark_temp_root: FuncId,
+    /// `fn()`
+    clear_temp_roots: FuncId,
 
     /// `fn()`
     init: FuncId,
@@ -122,10 +101,10 @@ impl Runtime {
             Linkage::Import,
             &mark_unmark_root_sig,
         ));
-        let unmark_temp_root = pretty_unwrap(module.declare_function(
-            "cont_rt_unmark_temp_root",
+        let clear_temp_roots = pretty_unwrap(module.declare_function(
+            "cont_rt_clear_temp_roots",
             Linkage::Import,
-            &mark_unmark_root_sig,
+            &module.make_signature(),
         ));
 
         let init = pretty_unwrap(module.declare_function(
@@ -145,7 +124,7 @@ impl Runtime {
             alloc_string,
             mark_root,
             unmark_root,
-            unmark_temp_root,
+            clear_temp_roots,
             init,
             cleanup,
         }
@@ -276,13 +255,13 @@ fn signature_from_function_ty(function_ty: &FunctionTy, triple: &Triple) -> Sign
     signature.params.push(AbiParam::new(ptr_ty(triple)));
     signature.params.extend(
         function_ty
-            .params
+            .positional_params
             .iter()
             .map(|param_ty| AbiParam::new(ty_for(param_ty, triple))),
     );
     signature.params.extend(
         function_ty
-            .continuations
+            .named_params
             .iter()
             .sorted_by_key(|&(&param, _)| param)
             .map(|(_, param_ty)| AbiParam::new(ty_for(param_ty, triple))),
@@ -293,13 +272,13 @@ fn signature_from_function_ty(function_ty: &FunctionTy, triple: &Triple) -> Sign
 
 struct Compiler<'arena, M: ?Sized> {
     program: Program,
-    contexts: LinkedList<Context>,
+    contexts: Storage<Context>,
     data_description: DataDescription,
     triple: Triple,
     runtime: Runtime,
     functions: HashMap<FuncRef, (FuncId, Signature)>,
-    ty_layouts: HashMap<Rc<MirType>, (TyLayout<'arena>, DataId)>,
-    builder_contexts: LinkedList<FunctionBuilderContext>,
+    ty_layouts: HashMap<Arc<MirType>, (TyLayout<'arena>, DataId)>,
+    builder_contexts: Storage<FunctionBuilderContext>,
     arena: &'arena Bump,
     module: M,
 }
@@ -311,14 +290,14 @@ impl<'arena, M: Module> Compiler<'arena, M> {
         Compiler {
             program,
             module,
-            contexts: LinkedList::new(Context::new),
+            contexts: Storage::new(Context::new),
             data_description: DataDescription::new(),
             triple,
             runtime,
             functions: HashMap::new(),
             ty_layouts: HashMap::new(),
             arena,
-            builder_contexts: LinkedList::new(FunctionBuilderContext::new),
+            builder_contexts: Storage::new(FunctionBuilderContext::new),
         }
     }
 }
@@ -335,21 +314,21 @@ impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
         info!("compiling function '{name}'");
 
         let params: Vec<_> = mir_function
-            .params
+            .positional_params
             .iter()
             .cloned()
             .chain(
                 mir_function
-                    .continuations
+                    .named_params
                     .iter()
-                    .map(|(&param, param_ty)| (param, Rc::clone(param_ty)))
+                    .map(|(&param, param_ty)| (param, Arc::clone(param_ty)))
                     .sorted_by_key(|&(param, _)| param),
             )
             .collect();
 
         let (func_id, ref sig) = self.functions[&func_ref];
 
-        let name = UserFuncName::User(UserExternalName::new(2, func_ref.into()));
+        let name = UserFuncName::User(UserExternalName::new(2, func_ref.to_u32()));
         let mut function = Function::with_name_signature(name, sig.clone());
         let mut func_ctx = self.builder_contexts.get();
         let mut builder = FunctionBuilder::new(&mut function, &mut func_ctx);
@@ -373,9 +352,9 @@ impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
             unmark_root: self
                 .module
                 .declare_func_in_func(self.runtime.unmark_root, builder.func),
-            unmark_temp_root: self
+            clear_temp_roots: self
                 .module
-                .declare_func_in_func(self.runtime.unmark_temp_root, builder.func),
+                .declare_func_in_func(self.runtime.clear_temp_roots, builder.func),
         };
 
         let function_compiler = FunctionCompilerBuilder {
@@ -545,7 +524,7 @@ impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
         }
     }
 
-    fn compound_ty_layout(&self, types: &[&[Rc<MirType>]]) -> SingleLayout<'arena> {
+    fn compound_ty_layout(&self, types: &[&[Arc<MirType>]]) -> SingleLayout<'arena> {
         let mut size = 0;
         let mut align = 1;
         let mut field_locations = Vec::with_capacity(types.len());
@@ -571,7 +550,7 @@ impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
         }
     }
 
-    fn calc_ty_layout(&mut self, ty: Rc<MirType>) {
+    fn calc_ty_layout(&mut self, ty: Arc<MirType>) {
         let layout = match *ty {
             MirType::Bool => SingleLayout::primitive(1, 1).into(),
             MirType::Int | MirType::Float | MirType::Function(_) => {
@@ -602,7 +581,7 @@ impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
             MirType::UserDefined(UserDefinedType::Sum(ref variants)) => {
                 let layouts: Vec<_> = variants
                     .iter()
-                    .map(|types| self.compound_ty_layout(&[&[Rc::new(MirType::Int)], types]))
+                    .map(|types| self.compound_ty_layout(&[&[Arc::new(MirType::Int)], types]))
                     .collect();
                 let size = layouts.iter().fold(8, |size, layout| size.max(layout.size));
                 let align = layouts
@@ -740,7 +719,8 @@ impl Compiler<'_, ObjectModule> {
     }
 }
 
-#[allow(clippy::missing_panics_doc)]
+#[expect(clippy::missing_panics_doc)]
+#[inline]
 pub fn static_compile(program: Program, binary: bool) -> ObjectProduct {
     let mut flags = settings::builder();
     flags.enable("preserve_frame_pointers").unwrap();

@@ -1,80 +1,44 @@
-use crate::linked_list::LinkedList;
+use crate::{
+    Callable, dangling_static_ptr, declare_static, fat_ptr, fat_ptr_ty, ptr_ty,
+    signature_from_function_ty, storage::Storage, ty_for, ty_ref_size_align_ptr,
+};
 
-use super::dangling_static_ptr;
-use super::declare_static;
-use super::fat_ptr;
-use super::fat_ptr_ty;
-use super::ptr_ty;
-use super::signature_from_function_ty;
-use super::ty_for;
-use super::ty_ref_size_align_ptr;
-use super::Callable;
+use std::{
+    collections::{HashMap, hash_map::Entry},
+    iter,
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
+};
 
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
-use std::iter;
-use std::rc::Rc;
-use std::sync::atomic::AtomicU32;
-use std::sync::atomic::Ordering;
+use continuate_ir::{
+    common::{BinaryOp, FuncRef, Ident, Intrinsic, Literal, UnaryOp},
+    mid_level_ir::{
+        BlockId, Expr, ExprApplication, ExprArray, ExprAssign, ExprBinary, ExprCall, ExprClosure,
+        ExprConstructor, ExprFunction, ExprGet, ExprGoto, ExprIdent, ExprIntrinsic, ExprLiteral,
+        ExprSet, ExprSwitch, ExprTuple, ExprUnary, Function as MirFunction, FunctionTy,
+        Type as MirType, UserDefinedType,
+    },
+};
 
-use continuate_ir::common::BinaryOp;
-use continuate_ir::common::FuncRef;
-use continuate_ir::common::Ident;
-use continuate_ir::common::Intrinsic;
-use continuate_ir::common::Literal;
-use continuate_ir::common::UnaryOp;
-use continuate_ir::mid_level_ir::BlockId;
-use continuate_ir::mid_level_ir::Expr;
-use continuate_ir::mid_level_ir::ExprArray;
-use continuate_ir::mid_level_ir::ExprAssign;
-use continuate_ir::mid_level_ir::ExprBinary;
-use continuate_ir::mid_level_ir::ExprCall;
-use continuate_ir::mid_level_ir::ExprClosure;
-use continuate_ir::mid_level_ir::ExprConstructor;
-use continuate_ir::mid_level_ir::ExprContApplication;
-use continuate_ir::mid_level_ir::ExprFunction;
-use continuate_ir::mid_level_ir::ExprGet;
-use continuate_ir::mid_level_ir::ExprGoto;
-use continuate_ir::mid_level_ir::ExprIdent;
-use continuate_ir::mid_level_ir::ExprIntrinsic;
-use continuate_ir::mid_level_ir::ExprLiteral;
-use continuate_ir::mid_level_ir::ExprSet;
-use continuate_ir::mid_level_ir::ExprSwitch;
-use continuate_ir::mid_level_ir::ExprTuple;
-use continuate_ir::mid_level_ir::ExprUnary;
-use continuate_ir::mid_level_ir::Function as MirFunction;
-use continuate_ir::mid_level_ir::FunctionTy;
-use continuate_ir::mid_level_ir::Type as MirType;
-use continuate_ir::mid_level_ir::UserDefinedType;
+use continuate_rt::layout::{SingleLayout, TyLayout};
 
-use continuate_rt::layout::SingleLayout;
-use continuate_rt::layout::TyLayout;
-
-use cranelift::codegen::ir;
-use cranelift::codegen::ir::condcodes::FloatCC;
-use cranelift::codegen::ir::condcodes::IntCC;
-use cranelift::codegen::ir::entities::Value;
-use cranelift::codegen::ir::types;
-use cranelift::codegen::ir::AliasRegion;
-use cranelift::codegen::ir::Block;
-use cranelift::codegen::ir::Function;
-use cranelift::codegen::ir::InstBuilder;
-use cranelift::codegen::ir::MemFlags;
-use cranelift::codegen::ir::Signature;
-use cranelift::codegen::ir::StackSlotData;
-use cranelift::codegen::ir::StackSlotKind;
-use cranelift::codegen::ir::TrapCode;
-use cranelift::codegen::ir::UserExternalName;
-use cranelift::codegen::packed_option::ReservedValue;
-use cranelift::codegen::Context;
-use cranelift::frontend::FunctionBuilder;
-use cranelift::frontend::FunctionBuilderContext;
-use cranelift::frontend::Switch;
-use cranelift::frontend::Variable;
-use cranelift::module::DataDescription;
-use cranelift::module::DataId;
-use cranelift::module::FuncId;
-use cranelift::module::Module;
+use cranelift::{
+    codegen::{
+        Context,
+        ir::{
+            self, AliasRegion, Block, Function, InstBuilder, MemFlags, Signature, StackSlotData,
+            StackSlotKind, TrapCode, UserExternalName,
+            condcodes::{FloatCC, IntCC},
+            entities::Value,
+            types,
+        },
+        packed_option::ReservedValue,
+    },
+    frontend::{FunctionBuilder, FunctionBuilderContext, Switch, Variable},
+    module::{DataDescription, DataId, FuncId, Module},
+};
 
 use itertools::Itertools as _;
 
@@ -90,16 +54,16 @@ pub(super) struct FunctionRuntime {
     /// `fn(ptr: *const ())`
     pub(super) mark_root: ir::FuncRef,
 
-    /// `fn(ptr: *const ())`
-    pub(super) unmark_temp_root: ir::FuncRef,
+    /// `fn()`
+    pub(super) clear_temp_roots: ir::FuncRef,
 
     /// `fn(ptr: *const ())`
     pub(super) unmark_root: ir::FuncRef,
 }
 
 macro_rules! match_ty {
-    { ($scrutinee:expr)
-        $( $ty:expr $( , $alternative:expr )* => $expr:expr ),* $(,)?
+    { ($scrutinee:expr_2021)
+        $( $ty:expr_2021 $( , $alternative:expr_2021 )* => $expr:expr_2021 ),* $(,)?
     } => {
         match $scrutinee {
             $( _scrutinee if _scrutinee == $ty $( || _scrutinee == $alternative )* => $expr, )*
@@ -113,14 +77,14 @@ pub(super) struct FunctionCompilerBuilder<'function, 'builder, M: ?Sized> {
     pub(super) data_description: &'function mut DataDescription,
     pub(super) triple: &'function Triple,
     pub(super) functions: &'function HashMap<FuncRef, (FuncId, Signature)>,
-    pub(super) ty_layouts: &'function HashMap<Rc<MirType>, (TyLayout<'function>, DataId)>,
+    pub(super) ty_layouts: &'function HashMap<Arc<MirType>, (TyLayout<'function>, DataId)>,
     pub(super) builder: &'function mut FunctionBuilder<'builder>,
     pub(super) block_map: &'function HashMap<BlockId, Block>,
     pub(super) mir_function: &'function MirFunction,
-    pub(super) params: &'function [(Ident, Rc<MirType>)],
+    pub(super) params: &'function [(Ident, Arc<MirType>)],
     pub(super) function_runtime: FunctionRuntime,
-    pub(super) contexts: &'function LinkedList<Context>,
-    pub(super) builder_contexts: &'function LinkedList<FunctionBuilderContext>,
+    pub(super) contexts: &'function Storage<Context>,
+    pub(super) builder_contexts: &'function Storage<FunctionBuilderContext>,
 }
 
 impl<'function, 'builder, M: ?Sized> FunctionCompilerBuilder<'function, 'builder, M> {
@@ -139,7 +103,6 @@ impl<'function, 'builder, M: ?Sized> FunctionCompilerBuilder<'function, 'builder
             contexts: self.contexts,
             builder_contexts: self.builder_contexts,
             vars: HashMap::new(),
-            temp_roots: Vec::new(),
             variables: HashMap::new(),
         }
     }
@@ -150,16 +113,15 @@ pub(super) struct FunctionCompiler<'function, 'builder, M: ?Sized> {
     data_description: &'function mut DataDescription,
     triple: &'function Triple,
     functions: &'function HashMap<FuncRef, (FuncId, Signature)>,
-    ty_layouts: &'function HashMap<Rc<MirType>, (TyLayout<'function>, DataId)>,
+    ty_layouts: &'function HashMap<Arc<MirType>, (TyLayout<'function>, DataId)>,
     builder: &'function mut FunctionBuilder<'builder>,
     block_map: &'function HashMap<BlockId, Block>,
     mir_function: &'function MirFunction,
-    params: &'function [(Ident, Rc<MirType>)],
+    params: &'function [(Ident, Arc<MirType>)],
     function_runtime: FunctionRuntime,
-    contexts: &'function LinkedList<Context>,
-    builder_contexts: &'function LinkedList<FunctionBuilderContext>,
+    contexts: &'function Storage<Context>,
+    builder_contexts: &'function Storage<FunctionBuilderContext>,
     vars: HashMap<Ident, (&'function MirType, bool)>,
-    temp_roots: Vec<Value>,
     variables: HashMap<Ident, Variable>,
 }
 
@@ -224,13 +186,9 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
     }
 
     fn clear_temp_roots(&mut self) {
-        for &temp_root in &self.temp_roots {
-            self.builder
-                .ins()
-                .call(self.function_runtime.unmark_temp_root, &[temp_root]);
-        }
-
-        self.temp_roots.clear();
+        self.builder
+            .ins()
+            .call(self.function_runtime.clear_temp_roots, &[]);
     }
 
     fn alloc_gc(&mut self, ty: &MirType) -> Value {
@@ -249,8 +207,6 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
             .call(self.function_runtime.alloc_gc, &[ty_layout]);
         let values = self.builder.inst_results(call_result);
         debug_assert_eq!(values.len(), 1);
-
-        self.temp_roots.push(values[0]);
 
         values[0]
     }
@@ -325,8 +281,6 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
 
         self.builder
             .call_memcpy(self.module.target_config(), dest_ptr, src_ptr, size);
-
-        self.temp_roots.push(dest_ptr);
 
         let size = self
             .builder
@@ -502,13 +456,16 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
     fn expr_call(&mut self, expr: &ExprCall) -> Option<Value> {
         let callable = self.callable(&expr.callee)?;
 
+        let positional: Vec<_> = expr.positional.iter().map(|e| self.expr(e)).collect();
         let args: Option<Vec<_>> = iter::once(Some(Value::reserved_value()))
+            .chain(positional)
+            // we need to execute the exprs *then* sort
             .chain(
-                expr.args
+                expr.named
                     .iter()
-                    .map(|(ident, expr)| (*ident, self.expr(expr)))
-                    .sorted_by_key(|(ident, _)| *ident)
-                    .map(|(_, value)| value),
+                    .map(|(i, e)| (*i, self.expr(e)))
+                    .sorted_by_key(|x| x.0)
+                    .map(|x| x.1),
             )
             .collect();
         let mut args = args?;
@@ -565,7 +522,8 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         ty: &FunctionTy,
         storage_ty: &MirType,
         callee_ty: &MirType,
-        continuations: impl IntoIterator<Item = Ident>,
+        positional: usize,
+        named: impl IntoIterator<Item = Ident>,
     ) -> FuncId {
         let signature = signature_from_function_ty(ty, self.triple);
         let func_id = self.module.declare_anonymous_function(&signature).unwrap();
@@ -585,34 +543,39 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         let callee = get(&mut builder, self.triple, storage, 0, &layout, field_ty);
 
         let params = ty
-            .params
+            .positional_params
             .iter()
             .map(|_| None)
-            .chain(ty.continuations.keys().map(|ident| Some(*ident)))
+            .chain(ty.named_params.keys().map(|ident| Some(*ident)))
             .sorted()
             .collect_vec();
-        let mut args: Vec<_> = builder
+        let mut args = builder
             .block_params(block)
             .iter()
             .skip(1)
             .enumerate()
             .map(|(i, value)| (*value, params[i]))
-            .collect();
-        args.extend(continuations.into_iter().enumerate().map(|(field, ident)| {
-            let (layout, field_ty) = self.field_information(storage_ty, None, field + 1);
-            (
-                get(
-                    &mut builder,
-                    self.triple,
-                    storage,
-                    field + 1,
-                    &layout,
-                    field_ty,
-                ),
-                Some(ident),
-            )
-        }));
-        args.sort_unstable_by_key(|(_, ident)| *ident);
+            .collect_vec();
+        args.extend(
+            iter::repeat_n(None, positional)
+                .chain(named.into_iter().map(Some))
+                .enumerate()
+                .map(|(field, ident)| {
+                    let (layout, field_ty) = self.field_information(storage_ty, None, field + 1);
+                    (
+                        get(
+                            &mut builder,
+                            self.triple,
+                            storage,
+                            field + 1,
+                            &layout,
+                            field_ty,
+                        ),
+                        ident,
+                    )
+                }),
+        );
+        args.sort_by_key(|(_, ident)| *ident);
         let args = iter::once(fat_ptr_meta(callee, &mut builder, self.triple))
             .chain(args.into_iter().map(|(value, _)| value))
             .collect_vec();
@@ -631,21 +594,21 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         func_id
     }
 
-    fn expr_cont_application(&mut self, expr: &ExprContApplication) -> Option<Value> {
+    fn expr_application(&mut self, expr: &ExprApplication) -> Option<Value> {
         let func_id = self.application_function(
             expr.result_ty.as_function().unwrap(),
             &expr.storage_ty,
             &expr.callee_ty,
-            expr.continuations
-                .iter()
-                .map(|(ident, _)| *ident)
-                .sorted_unstable(),
+            expr.positional.len(),
+            expr.named.iter().map(|(ident, _)| *ident).sorted_unstable(),
         );
         let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
 
         self.closure(
             func_ref,
-            iter::once(&*expr.callee).chain(expr.continuations.iter().map(|(_, expr)| expr)),
+            iter::once(&*expr.callee)
+                .chain(&expr.positional)
+                .chain(expr.named.iter().map(|(_, expr)| expr)),
             &expr.storage_ty,
         )
     }
@@ -663,7 +626,7 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         }
     }
 
-    #[allow(clippy::cognitive_complexity)]
+    #[expect(clippy::cognitive_complexity, reason = "this is abstracted by macros")]
     fn expr_binary(&mut self, expr: &ExprBinary) -> Option<Value> {
         debug_assert_eq!(expr.left_ty, expr.right_ty);
         let left = self.expr(&expr.left)?;
@@ -829,7 +792,7 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
             Expr::Get(expr) => self.expr_get(expr),
             Expr::Set(expr) => self.expr_set(expr),
             Expr::Call(expr) => self.expr_call(expr),
-            Expr::ContApplication(expr) => self.expr_cont_application(expr),
+            Expr::Application(expr) => self.expr_application(expr),
             Expr::Unary(expr) => self.expr_unary(expr),
             Expr::Binary(expr) => self.expr_binary(expr),
             Expr::Assign(expr) => self.expr_assign(expr),

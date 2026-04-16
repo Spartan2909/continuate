@@ -1,19 +1,16 @@
 mod lexer;
-pub use lexer::lex;
-pub use lexer::Spacing;
-pub use lexer::Token;
+pub use lexer::{Spacing, Token, lex};
 
 mod name_resolution;
-pub use name_resolution::resolve_names;
-pub use name_resolution::IdentDefinition;
-pub use name_resolution::NameMap;
+pub use name_resolution::{IdentDefinition, NameMap, resolve_names};
 
 mod parser;
 pub use parser::parse;
 
-use std::hash::Hash;
-use std::hash::Hasher;
-use std::mem;
+use std::{
+    hash::{Hash, Hasher},
+    mem,
+};
 
 use continuate_error::Span;
 
@@ -31,12 +28,14 @@ pub struct Ident<'src> {
 }
 
 impl<'src> Ident<'src> {
+    #[inline]
     pub const fn new(string: &'src str, span: Span) -> Ident<'src> {
         Ident { string, span }
     }
 }
 
 impl PartialEq for Ident<'_> {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.string == other.string
     }
@@ -45,6 +44,7 @@ impl PartialEq for Ident<'_> {
 impl Eq for Ident<'_> {}
 
 impl Hash for Ident<'_> {
+    #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.string.hash(state);
     }
@@ -58,6 +58,7 @@ pub enum PathIdentSegment<'src> {
 }
 
 impl<'src> PathIdentSegment<'src> {
+    #[inline]
     pub const fn as_ident(&self) -> Option<&Ident<'src>> {
         if let PathIdentSegment::Ident(ident) = self {
             Some(ident)
@@ -68,6 +69,7 @@ impl<'src> PathIdentSegment<'src> {
 }
 
 impl PartialEq for PathIdentSegment<'_> {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (PathIdentSegment::Ident(this), PathIdentSegment::Ident(other)) => this == other,
@@ -81,6 +83,7 @@ impl PartialEq for PathIdentSegment<'_> {
 impl Eq for PathIdentSegment<'_> {}
 
 impl Hash for PathIdentSegment<'_> {
+    #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         mem::discriminant(self).hash(state);
         if let PathIdentSegment::Ident(ident) = self {
@@ -96,6 +99,7 @@ pub struct PathSegment<'src> {
 }
 
 impl PartialEq for PathSegment<'_> {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.ident == other.ident
     }
@@ -104,6 +108,7 @@ impl PartialEq for PathSegment<'_> {
 impl Eq for PathSegment<'_> {}
 
 impl Hash for PathSegment<'_> {
+    #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.ident.hash(state);
     }
@@ -116,6 +121,7 @@ pub struct Path<'src> {
 }
 
 impl<'src> Path<'src> {
+    #[inline]
     pub fn as_ident(&self) -> Option<&Ident<'src>> {
         let (start, rest) = self.segments.split_first()?;
         if rest.is_empty() {
@@ -127,6 +133,7 @@ impl<'src> Path<'src> {
 }
 
 impl PartialEq for Path<'_> {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.segments == other.segments
     }
@@ -135,21 +142,21 @@ impl PartialEq for Path<'_> {
 impl Eq for Path<'_> {}
 
 impl Hash for Path<'_> {
+    #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.segments.hash(state);
     }
 }
 
 impl<'src> From<Ident<'src>> for Path<'src> {
+    #[inline]
     fn from(value: Ident<'src>) -> Self {
-        let span = value.span;
-        let segment = PathSegment {
-            ident: PathIdentSegment::Ident(value),
-            span,
-        };
         Path {
-            segments: vec![segment],
-            span,
+            span: value.span,
+            segments: vec![PathSegment {
+                span: value.span,
+                ident: PathIdentSegment::Ident(value),
+            }],
         }
     }
 }
@@ -166,8 +173,8 @@ pub enum Type<'src> {
         span: Span,
     },
     Function {
-        params: Vec<Type<'src>>,
-        continuations: Vec<(Ident<'src>, Type<'src>)>,
+        positional: Vec<Type<'src>>,
+        named: Vec<(Ident<'src>, Type<'src>)>,
         span: Span,
     },
 }
@@ -249,13 +256,9 @@ pub enum Expr<'src> {
 
     Call {
         callee: Box<Expr<'src>>,
-        arguments: Vec<Expr<'src>>,
+        positional: Vec<Expr<'src>>,
+        named: Vec<(Ident<'src>, Option<Expr<'src>>)>,
         paren_span: Span,
-    },
-    ContApplication {
-        callee: Box<Expr<'src>>,
-        arguments: Vec<(Ident<'src>, Option<Expr<'src>>)>,
-        bracket_span: Span,
     },
 
     Unary {
@@ -284,8 +287,8 @@ pub enum Expr<'src> {
 #[derive(Debug, Clone)]
 pub struct Function<'src> {
     pub name: Ident<'src>,
-    pub params: Vec<(Ident<'src>, Type<'src>)>,
-    pub continuations: Vec<(Ident<'src>, Type<'src>)>,
+    pub positional: Vec<(Ident<'src>, Type<'src>)>,
+    pub named: Vec<(Ident<'src>, Type<'src>)>,
     pub body: Vec<Expr<'src>>,
     pub span: Span,
 }
@@ -312,6 +315,7 @@ pub enum UserDefinedTy<'src> {
 }
 
 impl<'src> UserDefinedTy<'src> {
+    #[inline]
     pub const fn name(&self) -> &Ident<'src> {
         match self {
             UserDefinedTy::Product {
@@ -335,6 +339,7 @@ pub enum Item<'src> {
 }
 
 impl<'src> Item<'src> {
+    #[inline]
     pub const fn as_function(&self) -> Option<&Function<'src>> {
         if let Item::Function(function) = self {
             Some(function)
@@ -343,6 +348,7 @@ impl<'src> Item<'src> {
         }
     }
 
+    #[inline]
     pub const fn as_user_defined_ty(&self) -> Option<&UserDefinedTy<'src>> {
         if let Item::UserDefinedTy(ty) = self {
             Some(ty)
@@ -351,6 +357,7 @@ impl<'src> Item<'src> {
         }
     }
 
+    #[inline]
     pub const fn name(&self) -> &Ident<'src> {
         match self {
             Item::Function(function) => &function.name,

@@ -19,7 +19,7 @@ static I64_BOX_LAYOUT: TyLayout = TyLayout::Single(SingleLayout {
     gc_pointer_locations: Slice::new(&[0]),
 });
 
-/// ## Safety
+/// # Safety
 ///
 /// - `layout` must be valid for `T`.
 ///

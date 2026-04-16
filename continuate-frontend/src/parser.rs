@@ -1,25 +1,12 @@
-use crate::lexer::Spacing;
-use crate::lexer::Token;
-use crate::BinaryOp;
-use crate::Expr;
-use crate::Function;
-use crate::Ident;
-use crate::Item;
-use crate::Literal;
-use crate::Path;
-use crate::PathIdentSegment;
-use crate::PathSegment;
-use crate::Pattern;
-use crate::Program;
-use crate::Type;
-use crate::UnaryOp;
-use crate::UserDefinedTy;
-use crate::UserDefinedTyFields;
+use crate::{
+    BinaryOp, Expr, Function, Ident, Item, Literal, Path, PathIdentSegment, PathSegment, Pattern,
+    Program, Type, UnaryOp, UserDefinedTy, UserDefinedTyFields,
+    lexer::{Spacing, Token},
+};
 
 use chumsky::prelude::*;
 
-use continuate_error::Error;
-use continuate_error::Span;
+use continuate_error::{Error, Span};
 
 type ParserExtra = chumsky::extra::Full<Error, (), ()>;
 
@@ -39,13 +26,13 @@ macro_rules! filter_matches {
 
 /// Parse a token that matches the given pattern, then map its span to the given function.
 macro_rules! operator {
-    ($token:path, $op:expr) => {
+    ($token:path, $op:expr_2021) => {
         filter_matches!($token(_)).to_span().map($op)
     };
 }
 
 macro_rules! wide_operator {
-    ($first:path, $second:path, $op:expr) => {
+    ($first:path, $second:path, $op:expr_2021) => {
         just($first(Spacing::Joint))
             .then(filter_matches!($second(_)))
             .to_span()
@@ -53,8 +40,8 @@ macro_rules! wide_operator {
     };
 }
 
-fn ident<'tokens, 'src>(
-) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, Ident<'src>, ParserExtra> + Clone
+fn ident<'tokens, 'src>()
+-> impl Parser<'tokens, ParserInput<'tokens, 'src>, Ident<'src>, ParserExtra> + Clone
 where
     'src: 'tokens,
 {
@@ -64,8 +51,8 @@ where
     .labelled("identifier")
 }
 
-fn path<'tokens, 'src>(
-) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, Path<'src>, ParserExtra> + Clone
+fn path<'tokens, 'src>()
+-> impl Parser<'tokens, ParserInput<'tokens, 'src>, Path<'src>, ParserExtra> + Clone
 where
     'src: 'tokens,
 {
@@ -124,8 +111,8 @@ where
         })
 }
 
-fn ty<'tokens, 'src>(
-) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, Type<'src>, ParserExtra> + Clone
+fn ty<'tokens, 'src>()
+-> impl Parser<'tokens, ParserInput<'tokens, 'src>, Type<'src>, ParserExtra> + Clone
 where
     'src: 'tokens,
 {
@@ -142,20 +129,17 @@ where
             }))
             .or(just(Token::Fn)
                 .ignore_then(
-                    items(ty.clone()).delimited_by(just(Token::OpenParen), just(Token::CloseParen)),
+                    items(ty.clone())
+                        .then(items(
+                            ident()
+                                .then_ignore(filter_matches!(Token::Colon(_)))
+                                .then(ty),
+                        ))
+                        .delimited_by(just(Token::OpenParen), just(Token::CloseParen)),
                 )
-                .then(
-                    items(
-                        ident()
-                            .then_ignore(filter_matches!(Token::Colon(_)))
-                            .then(ty),
-                    )
-                    .delimited_by(just(Token::OpenBracket), just(Token::CloseBracket))
-                    .or_not(),
-                )
-                .map_with(|(params, continuations), e| Type::Function {
-                    params,
-                    continuations: continuations.unwrap_or(vec![]),
+                .map_with(|(positional, named), e| Type::Function {
+                    positional,
+                    named,
                     span: e.span(),
                 })
                 .labelled("signature"))
@@ -166,7 +150,7 @@ where
 fn named_constructor_elements<'tokens, 'src, Elem>(
     element: impl Parser<'tokens, ParserInput<'tokens, 'src>, Elem, ParserExtra> + Clone,
 ) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, Vec<(Ident<'src>, Option<Elem>)>, ParserExtra>
-       + Clone
++ Clone
 where
     'src: 'tokens,
     Elem: 'tokens,
@@ -182,8 +166,8 @@ where
         .collect()
 }
 
-fn pattern<'tokens, 'src>(
-) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, Pattern<'src>, ParserExtra> + Clone
+fn pattern<'tokens, 'src>()
+-> impl Parser<'tokens, ParserInput<'tokens, 'src>, Pattern<'src>, ParserExtra> + Clone
 where
     'src: 'tokens,
 {
@@ -239,8 +223,8 @@ where
         .collect()
 }
 
-fn literal<'tokens, 'src>(
-) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, Literal<'src>, ParserExtra> + Clone
+fn literal<'tokens, 'src>()
+-> impl Parser<'tokens, ParserInput<'tokens, 'src>, Literal<'src>, ParserExtra> + Clone
 where
     'src: 'tokens,
 {
@@ -262,18 +246,15 @@ enum CallRhs<'src> {
     },
 
     Call {
-        arguments: Vec<Expr<'src>>,
+        positional: Vec<Expr<'src>>,
+        named: Vec<(Ident<'src>, Option<Expr<'src>>)>,
         paren_span: Span,
-    },
-    ContApplication {
-        arguments: Vec<(Ident<'src>, Option<Expr<'src>>)>,
-        bracket_span: Span,
     },
 }
 
-#[allow(clippy::too_many_lines, reason = "no real alternative")]
-fn expr<'tokens, 'src>(
-) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, Expr<'src>, ParserExtra> + Clone
+#[expect(clippy::too_many_lines, reason = "no real alternative")]
+fn expr<'tokens, 'src>()
+-> impl Parser<'tokens, ParserInput<'tokens, 'src>, Expr<'src>, ParserExtra> + Clone
 where
     'src: 'tokens,
 {
@@ -367,26 +348,21 @@ where
                 });
 
             let call = items(expr.clone())
+                .then(items(
+                    filter_matches!(Token::At(_)).ignore_then(ident()).then(
+                        filter_matches!(Token::Colon(_))
+                            .ignore_then(expr.clone())
+                            .or_not(),
+                    ),
+                ))
                 .delimited_by(just(Token::OpenParen), just(Token::CloseParen))
-                .map_with(|arguments, e| CallRhs::Call {
-                    arguments,
+                .map_with(|(positional, named), e| CallRhs::Call {
+                    positional,
+                    named,
                     paren_span: e.span(),
                 });
 
-            let cont_application = items(
-                ident().then(
-                    filter_matches!(Token::Eq(_))
-                        .ignore_then(expr.clone())
-                        .or_not(),
-                ),
-            )
-            .delimited_by(just(Token::OpenBracket), just(Token::CloseBracket))
-            .map_with(|arguments, e| CallRhs::ContApplication {
-                arguments,
-                bracket_span: e.span(),
-            });
-
-            choice((get_or_set, call, cont_application))
+            get_or_set.or(call)
         };
 
         let call = atom.foldl(call_rhs.repeated(), |object, rhs| match rhs {
@@ -400,20 +376,14 @@ where
                 value: Box::new(value),
             },
             CallRhs::Call {
-                arguments,
+                positional,
+                named,
                 paren_span,
             } => Expr::Call {
                 callee: Box::new(object),
-                arguments,
+                positional,
+                named,
                 paren_span,
-            },
-            CallRhs::ContApplication {
-                arguments,
-                bracket_span,
-            } => Expr::ContApplication {
-                callee: Box::new(object),
-                arguments,
-                bracket_span,
             },
         });
 
@@ -500,8 +470,8 @@ where
     .labelled("expression")
 }
 
-fn function<'tokens, 'src>(
-) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, Function<'src>, ParserExtra> + Clone
+fn function<'tokens, 'src>()
+-> impl Parser<'tokens, ParserInput<'tokens, 'src>, Function<'src>, ParserExtra> + Clone
 where
     'src: 'tokens,
 {
@@ -513,15 +483,13 @@ where
                     .then_ignore(filter_matches!(Token::Colon(_)))
                     .then(ty()),
             )
-            .delimited_by(just(Token::OpenParen), just(Token::CloseParen)),
-        )
-        .then(
-            items(
-                ident()
+            .then(items(
+                filter_matches!(Token::At(_))
+                    .ignore_then(ident())
                     .then_ignore(filter_matches!(Token::Colon(_)))
                     .then(ty()),
-            )
-            .delimited_by(just(Token::OpenBracket), just(Token::CloseBracket)),
+            ))
+            .delimited_by(just(Token::OpenParen), just(Token::CloseParen)),
         )
         .then(
             expr()
@@ -537,10 +505,10 @@ where
                     body
                 }),
         )
-        .map_with(|(((name, params), continuations), body), e| Function {
+        .map_with(|((name, (positional, named)), body), e| Function {
             name,
-            params,
-            continuations,
+            positional,
+            named,
             body,
             span: e.span(),
         })
@@ -572,8 +540,8 @@ where
         .map(|(name, fields)| (name, fields.unwrap_or(UserDefinedTyFields::Unit)))
 }
 
-fn sum_ty<'tokens, 'src>(
-) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, UserDefinedTy<'src>, ParserExtra> + Clone
+fn sum_ty<'tokens, 'src>()
+-> impl Parser<'tokens, ParserInput<'tokens, 'src>, UserDefinedTy<'src>, ParserExtra> + Clone
 where
     'src: 'tokens,
 {
@@ -587,8 +555,8 @@ where
         })
 }
 
-fn user_defined_ty<'tokens, 'src>(
-) -> impl Parser<'tokens, ParserInput<'tokens, 'src>, UserDefinedTy<'src>, ParserExtra> + Clone
+fn user_defined_ty<'tokens, 'src>()
+-> impl Parser<'tokens, ParserInput<'tokens, 'src>, UserDefinedTy<'src>, ParserExtra> + Clone
 where
     'src: 'tokens,
 {
@@ -602,6 +570,7 @@ where
         .or(sum_ty())
 }
 
+#[inline]
 pub fn parse<'src>(
     input: &[(Token<'src>, Span)],
     eoi: Span,

@@ -1,12 +1,10 @@
-use super::default_expr_call;
-use super::default_expr_cont_application;
-use super::Visit;
-
-use crate::common::Literal;
-use crate::mid_level_ir::Expr;
-use crate::mid_level_ir::ExprCall;
-use crate::mid_level_ir::ExprContApplication;
-use crate::mid_level_ir::ExprLiteral;
+use crate::{
+    common::Literal,
+    mid_level_ir::{
+        Expr, ExprApplication, ExprCall, ExprLiteral,
+        visit::{Visit, default_expr_application, default_expr_call},
+    },
+};
 
 use std::mem;
 
@@ -26,28 +24,28 @@ impl Visit for CombineCallApplication {
     fn expr_call(&self, expr: &mut ExprCall) {
         default_expr_call(self, expr);
 
-        if let Expr::ContApplication(callee) = &mut *expr.callee {
-            let continuations = mem::take(&mut callee.continuations);
-            let mut args: Vec<_> = continuations
-                .into_iter()
-                .map(|(ident, expr)| (Some(ident), expr))
-                .collect();
-            args.extend(mem::take(&mut expr.args));
-            expr.args = args;
+        if let Expr::Application(callee) = &mut *expr.callee {
+            let mut positional = mem::take(&mut callee.positional);
+            positional.extend(mem::take(&mut expr.positional));
+            expr.positional = positional;
+            let named = mem::take(&mut callee.named);
+            expr.named.extend(named);
             let callee = mem::replace(&mut *callee.callee, empty_expr());
-            expr.callee = Box::new(callee);
+            *expr.callee = callee;
         }
     }
 
-    fn expr_cont_application(&self, expr: &mut ExprContApplication) {
-        default_expr_cont_application(self, expr);
+    fn expr_application(&self, expr: &mut ExprApplication) {
+        default_expr_application(self, expr);
 
-        if let Expr::ContApplication(callee) = &mut *expr.callee {
-            let mut continuations = mem::take(&mut callee.continuations);
-            continuations.extend(mem::take(&mut expr.continuations));
-            expr.continuations = continuations;
+        if let Expr::Application(callee) = &mut *expr.callee {
+            let mut positional = mem::take(&mut callee.positional);
+            positional.extend(mem::take(&mut expr.positional));
+            expr.positional = positional;
+            let named = mem::take(&mut callee.named);
+            expr.named.extend(named);
             let callee = mem::replace(&mut *callee.callee, empty_expr());
-            expr.callee = Box::new(callee);
+            *expr.callee = callee;
         }
     }
 }

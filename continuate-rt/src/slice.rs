@@ -1,11 +1,4 @@
-
-use std::fmt;
-use std::marker::PhantomData;
-use std::mem;
-use std::ops;
-use std::ptr;
-use std::ptr::NonNull;
-use std::slice;
+use std::{fmt, marker::PhantomData, mem, ops, ptr::NonNull, slice};
 
 use bytemuck::Pod;
 
@@ -22,16 +15,14 @@ pub struct Slice<'a, T> {
 impl<'a, T> Slice<'a, T> {
     #[inline]
     pub const fn new(slice: &'a [T]) -> Slice<'a, T> {
-        // SAFETY: The pointer is derived from a reference, and so must be non-null.
-        let ptr = unsafe { NonNull::new_unchecked(ptr::from_ref(slice).cast_mut()) };
         Slice {
-            ptr: ptr.cast(),
+            ptr: NonNull::from_ref(slice).cast(),
             len: slice.len(),
             _marker: PhantomData,
         }
     }
 
-    /// ## Safety
+    /// # Safety
     ///
     /// `data` must point to a slice of `T` with a length of at least `len`, and the elements of
     /// that slice must not be modified for the duration of `'a`.
@@ -46,22 +37,22 @@ impl<'a, T> Slice<'a, T> {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     pub const fn as_ptr(self) -> *const T {
         self.ptr.as_ptr()
     }
 
-    #[inline(always)]
+    #[inline]
     pub const fn len(self) -> usize {
         self.len
     }
 
-    #[inline(always)]
+    #[inline]
     pub const fn is_empty(self) -> bool {
         self.len == 0
     }
 
-    #[inline(always)]
+    #[inline]
     pub const fn as_slice(self) -> &'a [T] {
         // SAFETY: `self` is always a valid slice.
         unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
@@ -81,7 +72,7 @@ impl<'a, T> Slice<'a, T> {
 }
 
 impl<T> Clone for Slice<'_, T> {
-    #[inline(always)]
+    #[inline]
     fn clone(&self) -> Self {
         *self
     }

@@ -1,16 +1,11 @@
-use crate::Expr;
-use crate::Ident;
-use crate::Item;
-use crate::Path;
-use crate::Program;
+use crate::{Expr, Ident, Item, Path, Program};
 
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::fmt;
-use std::mem;
+use std::{
+    collections::{HashMap, HashSet},
+    fmt, mem,
+};
 
-use continuate_error::SourceCache;
-use continuate_error::Span;
+use continuate_error::{SourceCache, Span};
 
 #[derive(Default)]
 struct Scope<'a> {
@@ -68,6 +63,7 @@ pub struct IdentDefinition {
 }
 
 impl IdentDefinition {
+    #[inline]
     pub const fn new(span: Span, continuation_name: Option<String>) -> IdentDefinition {
         IdentDefinition {
             span,
@@ -75,6 +71,7 @@ impl IdentDefinition {
         }
     }
 
+    #[inline]
     pub const fn debug<'a>(&'a self, cache: &'a SourceCache) -> impl fmt::Debug + use<'a> {
         struct DebugIdentDefinition<'a> {
             definition: &'a IdentDefinition,
@@ -131,22 +128,27 @@ impl NameMap {
         self.paths.insert(path.span, target_span);
     }
 
+    #[inline]
     pub fn get_ident(&self, ident: &Ident) -> Option<Span> {
         self.idents.get(&ident.span).copied()
     }
 
+    #[inline]
     pub fn ident_definitions(&self) -> impl Iterator<Item = &'_ IdentDefinition> {
         self.ident_definitions.iter()
     }
 
+    #[inline]
     pub fn get_path(&self, path: &Path) -> Option<Span> {
         self.paths.get(&path.span).copied()
     }
 
+    #[inline]
     pub fn path_definitions(&self) -> impl Iterator<Item = Span> + use<'_> {
         self.path_definitions.iter().copied()
     }
 
+    #[inline]
     pub fn debug<'a>(&'a self, cache: &'a SourceCache) -> impl fmt::Debug + use<'a> {
         struct FormatIdentDefinitions<'a> {
             definitions: &'a HashSet<IdentDefinition>,
@@ -293,10 +295,10 @@ impl<'a> Resolver<'a> {
 
     #[track_caller]
     fn resolve_ident_or_path(&mut self, path: &Path) {
-        if let Some(ident) = path.as_ident() {
-            if self.try_resolve_ident(ident).is_ok() {
-                return;
-            }
+        if let Some(ident) = path.as_ident()
+            && self.try_resolve_ident(ident).is_ok()
+        {
+            return;
         }
 
         self.resolve_path(path);
@@ -354,21 +356,17 @@ impl<'a> Resolver<'a> {
             }
             Expr::Call {
                 callee,
-                arguments,
+                positional,
+                named,
                 paren_span: _,
             } => {
                 self.expr(callee);
-                self.exprs(arguments);
-            }
-            Expr::ContApplication {
-                callee,
-                arguments,
-                bracket_span: _,
-            } => {
-                self.expr(callee);
-                self.exprs(arguments.iter().filter_map(|(_, expr)| expr.as_ref()));
-                for (name, expr) in arguments {
-                    if expr.is_none() {
+                self.exprs(positional);
+                self.exprs(named.iter().filter_map(|(_, expr)| expr.as_ref()));
+                for (name, expr) in named {
+                    if let Some(expr) = expr {
+                        self.expr(expr);
+                    } else {
                         self.resolve_ident(name);
                     }
                 }
@@ -414,10 +412,10 @@ impl<'a> Resolver<'a> {
 
         for function in program.items.iter().filter_map(Item::as_function) {
             self.with_scope(|this| {
-                for (param, _) in &function.params {
+                for (param, _) in &function.positional {
                     this.define_ident(*param, false);
                 }
-                for (cont, _) in &function.continuations {
+                for (cont, _) in &function.named {
                     this.define_ident(*cont, true);
                 }
                 this.exprs(&function.body);
@@ -428,6 +426,7 @@ impl<'a> Resolver<'a> {
     }
 }
 
+#[inline]
 pub fn resolve_names(program: &Program) -> NameMap {
     Resolver::new().resolve(program)
 }

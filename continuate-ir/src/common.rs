@@ -1,22 +1,20 @@
-use std::cmp;
-use std::fmt;
-use std::hash;
-use std::num::NonZero;
-use std::sync::atomic::AtomicU32;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
+use std::{
+    cmp, fmt, hash,
+    num::NonZero,
+    sync::atomic::{AtomicU32, AtomicU64, Ordering},
+};
 
-use continuate_error::SourceCache;
-use continuate_error::Span;
+use continuate_error::{SourceCache, Span};
 
 #[derive(Clone, Copy)]
 pub struct Ident(NonZero<u64>, Span);
 
 impl Ident {
-    /// ## Panics
+    /// # Panics
     ///
     /// Panics if the total number of identifiers exceeds [`u64::MAX`].
-    #[allow(clippy::new_without_default)]
+    #[track_caller]
+    #[inline]
     pub fn new(span: Span) -> Ident {
         static NEXT: AtomicU64 = AtomicU64::new(1);
 
@@ -24,14 +22,16 @@ impl Ident {
         Ident(NonZero::new(value).expect("ident overflow"), span)
     }
 
-    /// ## Panics
+    /// # Panics
     ///
     /// Panics if `self` does not originate from a source in `cache`.
     #[track_caller]
+    #[inline]
     pub fn name<'a>(&self, cache: &'a SourceCache) -> &'a str {
         cache.str(self.1).expect("invalid `SourceCache` for ident")
     }
 
+    #[inline]
     #[must_use]
     pub const fn with_span(self, span: Span) -> Ident {
         Ident(self.0, span)
@@ -39,6 +39,7 @@ impl Ident {
 }
 
 impl PartialEq for Ident {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0
     }
@@ -47,18 +48,21 @@ impl PartialEq for Ident {
 impl Eq for Ident {}
 
 impl PartialOrd for Ident {
+    #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for Ident {
+    #[inline]
     fn cmp(&self, other: &Self) -> cmp::Ordering {
         self.0.cmp(&other.0)
     }
 }
 
 impl hash::Hash for Ident {
+    #[inline]
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
         self.0.hash(state);
     }
@@ -82,23 +86,23 @@ impl FuncRef {
 
     /// Get a new unique `FuncRef`.
     ///
-    /// ## Panics
+    /// # Panics
     ///
     /// Panics if the total number of `FuncRef`s (including [`ENTRY_POINT`]) exceeds [`u32::MAX`].
     ///
     /// [`ENTRY_POINT`]: FuncRef::ENTRY_POINT
-    #[allow(clippy::new_without_default)]
+    #[expect(clippy::new_without_default)]
+    #[inline]
     pub fn new() -> FuncRef {
         static NEXT: AtomicU32 = AtomicU32::new(2);
 
         let next = NEXT.fetch_add(1, Ordering::Relaxed);
         FuncRef(NonZero::new(next).expect("funcref overflow"))
     }
-}
 
-impl From<FuncRef> for u32 {
-    fn from(value: FuncRef) -> Self {
-        value.0.get()
+    #[inline]
+    pub const fn to_u32(self) -> u32 {
+        self.0.get()
     }
 }
 
@@ -113,10 +117,11 @@ impl fmt::Debug for FuncRef {
 pub struct UserDefinedTyRef(NonZero<u64>);
 
 impl UserDefinedTyRef {
-    /// ## Panics
+    /// # Panics
     ///
     /// Panics if the total number of identifiers exceeds [`u64::MAX`].
-    #[allow(clippy::new_without_default)]
+    #[expect(clippy::new_without_default)]
+    #[inline]
     pub fn new() -> UserDefinedTyRef {
         static NEXT: AtomicU64 = AtomicU64::new(1);
 
@@ -154,6 +159,7 @@ pub enum BinaryOp {
 }
 
 impl BinaryOp {
+    #[inline]
     pub const fn is_arithmetic(self) -> bool {
         use BinaryOp as Op;
         matches!(self, Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Rem)
@@ -161,6 +167,7 @@ impl BinaryOp {
 }
 
 impl fmt::Display for BinaryOp {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             BinaryOp::Add => "+",

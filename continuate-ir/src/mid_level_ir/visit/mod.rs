@@ -1,28 +1,12 @@
-#![allow(clippy::needless_pass_by_ref_mut, reason = "forwards compatibility")]
+#![expect(clippy::needless_pass_by_ref_mut, reason = "forwards compatibility")]
 
 mod combine_call_application;
 
-use super::Block;
-use super::Expr;
-use super::ExprArray;
-use super::ExprAssign;
-use super::ExprBinary;
-use super::ExprCall;
-use super::ExprClosure;
-use super::ExprConstructor;
-use super::ExprContApplication;
-use super::ExprFunction;
-use super::ExprGet;
-use super::ExprGoto;
-use super::ExprIdent;
-use super::ExprIntrinsic;
-use super::ExprLiteral;
-use super::ExprSet;
-use super::ExprSwitch;
-use super::ExprTuple;
-use super::ExprUnary;
-use super::Function;
-use super::Program;
+use crate::mid_level_ir::{
+    Block, Expr, ExprApplication, ExprArray, ExprAssign, ExprBinary, ExprCall, ExprClosure,
+    ExprConstructor, ExprFunction, ExprGet, ExprGoto, ExprIdent, ExprIntrinsic, ExprLiteral,
+    ExprSet, ExprSwitch, ExprTuple, ExprUnary, Function, Program,
+};
 
 trait Visit {
     fn always_enabled(&self) -> bool {
@@ -65,8 +49,8 @@ trait Visit {
         default_expr_call(self, expr);
     }
 
-    fn expr_cont_application(&self, expr: &mut ExprContApplication) {
-        default_expr_cont_application(self, expr);
+    fn expr_application(&self, expr: &mut ExprApplication) {
+        default_expr_application(self, expr);
     }
 
     fn expr_unary(&self, expr: &mut ExprUnary) {
@@ -181,24 +165,32 @@ fn default_expr_call<V: Visit + ?Sized>(v: &V, expr: &mut ExprCall) {
     let ExprCall {
         callee,
         callee_ty: _,
-        args,
+        positional,
+        named,
     } = expr;
     v.expr(callee);
-    for (_, expr) in args {
+    for expr in positional {
+        v.expr(expr);
+    }
+    for (_, expr) in named {
         v.expr(expr);
     }
 }
 
-fn default_expr_cont_application<V: Visit + ?Sized>(v: &V, expr: &mut ExprContApplication) {
-    let ExprContApplication {
+fn default_expr_application<V: Visit + ?Sized>(v: &V, expr: &mut ExprApplication) {
+    let ExprApplication {
         callee,
         callee_ty: _,
-        continuations,
+        positional,
+        named,
         result_ty: _,
         storage_ty: _,
     } = expr;
     v.expr(callee);
-    for (_, expr) in continuations {
+    for expr in positional {
+        v.expr(expr);
+    }
+    for (_, expr) in named {
         v.expr(expr);
     }
 }
@@ -271,7 +263,7 @@ fn default_expr<V: Visit + ?Sized>(v: &V, expr: &mut Expr) {
         Expr::Get(expr) => v.expr_get(expr),
         Expr::Set(expr) => v.expr_set(expr),
         Expr::Call(expr) => v.expr_call(expr),
-        Expr::ContApplication(expr) => v.expr_cont_application(expr),
+        Expr::Application(expr) => v.expr_application(expr),
         Expr::Unary(expr) => v.expr_unary(expr),
         Expr::Binary(expr) => v.expr_binary(expr),
         Expr::Assign(expr) => v.expr_assign(expr),
@@ -302,6 +294,7 @@ fn default_visit<V: Visit + ?Sized>(v: &V, program: &mut Program) {
 
 const PASSES: &[&dyn Visit] = &[&combine_call_application::CombineCallApplication];
 
+#[inline]
 pub fn run_passes(program: &mut Program, optimisations: bool) {
     for pass in PASSES {
         if optimisations || pass.always_enabled() {

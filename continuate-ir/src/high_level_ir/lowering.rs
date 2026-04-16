@@ -1,56 +1,26 @@
-use crate::common::FuncRef;
-use crate::common::Ident;
-use crate::common::Literal;
-use crate::common::UserDefinedTyRef;
-use crate::high_level_ir::BinaryOp;
-use crate::high_level_ir::DestructureFields;
-use crate::high_level_ir::Expr;
-use crate::high_level_ir::ExprArray;
-use crate::high_level_ir::ExprAssign;
-use crate::high_level_ir::ExprBinary;
-use crate::high_level_ir::ExprBlock;
-use crate::high_level_ir::ExprCall;
-use crate::high_level_ir::ExprConstructor;
-use crate::high_level_ir::ExprConstructorFields;
-use crate::high_level_ir::ExprContApplication;
-use crate::high_level_ir::ExprDeclare;
-use crate::high_level_ir::ExprGet;
-use crate::high_level_ir::ExprMatch;
-use crate::high_level_ir::ExprSet;
-use crate::high_level_ir::ExprTuple;
-use crate::high_level_ir::ExprUnary;
-use crate::high_level_ir::Function;
-use crate::high_level_ir::Pattern;
-use crate::high_level_ir::Program;
-use crate::high_level_ir::Type;
-use crate::high_level_ir::UnaryOp;
-use crate::high_level_ir::UserDefinedType;
-use crate::high_level_ir::UserDefinedTypeFields;
+use crate::{
+    common::{FuncRef, Ident, Literal, UserDefinedTyRef},
+    high_level_ir::{
+        BinaryOp, DestructureFields, Expr, ExprArray, ExprAssign, ExprBinary, ExprBlock, ExprCall,
+        ExprConstructor, ExprConstructorFields, ExprDeclare, ExprGet, ExprIdent, ExprMatch,
+        ExprSet, ExprTuple, ExprUnary, Function, Pattern, Program, Type, UnaryOp, UserDefinedType,
+        UserDefinedTypeFields,
+    },
+};
 
-use std::collections::HashMap;
-use std::iter;
-use std::rc::Rc;
+use std::{collections::HashMap, iter, sync::Arc};
 
 use continuate_error::Span;
 
-use continuate_frontend::BinaryOp as AstBinaryOp;
-use continuate_frontend::Expr as AstExpr;
-use continuate_frontend::Function as AstFunction;
-use continuate_frontend::Ident as AstIdent;
-use continuate_frontend::Item;
-use continuate_frontend::Literal as AstLiteral;
-use continuate_frontend::NameMap;
-use continuate_frontend::Path as AstPath;
-use continuate_frontend::Path;
-use continuate_frontend::Pattern as AstPattern;
-use continuate_frontend::Program as AstProgram;
-use continuate_frontend::Type as AstType;
-use continuate_frontend::UnaryOp as AstUnaryOp;
-use continuate_frontend::UserDefinedTy as AstUserDefinedTy;
-use continuate_frontend::UserDefinedTyFields as AstUserDefinedTyFields;
+use continuate_frontend::{
+    BinaryOp as AstBinaryOp, Expr as AstExpr, Function as AstFunction, Ident as AstIdent, Item,
+    Literal as AstLiteral, NameMap, Path as AstPath, Path, Pattern as AstPattern,
+    Program as AstProgram, Type as AstType, UnaryOp as AstUnaryOp,
+    UserDefinedTy as AstUserDefinedTy, UserDefinedTyFields as AstUserDefinedTyFields,
+};
 
 struct Lowerer<'a> {
-    program: Program<Expr>,
+    program: Program<()>,
     ast: &'a AstProgram<'a>,
     user_defined_types: HashMap<Span, UserDefinedTyRef>,
     names: NameMap,
@@ -70,7 +40,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn resolve_ty_path(&mut self, path: &Path) -> Option<Rc<Type>> {
+    fn resolve_ty_path(&mut self, path: &Path) -> Option<Arc<Type>> {
         self.names
             .get_path(path)
             .and_then(|span| self.user_defined_types.get(&span))
@@ -91,7 +61,7 @@ impl<'a> Lowerer<'a> {
             .copied()
     }
 
-    fn ty(&mut self, ty: &AstType) -> Rc<Type> {
+    fn ty(&mut self, ty: &AstType) -> Arc<Type> {
         match ty {
             AstType::Bool(_) => self.program.insert_type(Type::Bool),
             AstType::Int(_) => self.program.insert_type(Type::Int),
@@ -103,13 +73,13 @@ impl<'a> Lowerer<'a> {
                 self.program.insert_type(ty)
             }
             AstType::Function {
-                params,
-                continuations,
+                positional,
+                named,
                 span: _,
             } => {
                 let ty = Type::function(
-                    params.iter().map(|ty| self.ty(ty)).collect(),
-                    continuations
+                    positional.iter().map(|ty| self.ty(ty)).collect(),
+                    named
                         .iter()
                         .map(|(name, ty)| {
                             (
@@ -151,7 +121,7 @@ impl<'a> Lowerer<'a> {
                 fields,
                 span: _,
             } => {
-                let ty = Rc::new(UserDefinedType::Product(self.ty_fields(fields)));
+                let ty = Arc::new(UserDefinedType::Product(self.ty_fields(fields)));
                 self.program
                     .user_defined_types
                     .insert(self.user_defined_types[&name.span], ty);
@@ -169,7 +139,7 @@ impl<'a> Lowerer<'a> {
                 );
                 self.program
                     .user_defined_types
-                    .insert(self.user_defined_types[&name.span], Rc::new(ty));
+                    .insert(self.user_defined_types[&name.span], Arc::new(ty));
             }
         }
     }
@@ -210,7 +180,7 @@ impl<'a> Lowerer<'a> {
             }));
     }
 
-    fn expr_literal(literal: &AstLiteral) -> Expr {
+    fn expr_literal(literal: &AstLiteral) -> Expr<()> {
         match *literal {
             AstLiteral::Int(value, _) => Expr::Literal(Literal::Int(value)),
             AstLiteral::Float(value, _) => Expr::Literal(Literal::Float(value)),
@@ -218,17 +188,17 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn expr_path(&self, path: &AstPath) -> Expr {
-        if let Some(ident) = path.as_ident() {
-            if let Some(ident) = self.ident(ident) {
-                return Expr::Ident(ident);
-            }
+    fn expr_path(&self, path: &AstPath) -> Expr<()> {
+        if let Some(ident) = path.as_ident()
+            && let Some(ident) = self.ident(ident)
+        {
+            return Expr::Ident(ExprIdent { ident });
         }
 
         Expr::Function(self.resolve_fn_path(path).unwrap())
     }
 
-    fn expr_block(&mut self, exprs: &[AstExpr], tail: Option<&AstExpr>) -> Expr {
+    fn expr_block(&mut self, exprs: &[AstExpr], tail: Option<&AstExpr>) -> Expr<()> {
         let exprs = exprs
             .iter()
             .chain(tail)
@@ -237,12 +207,12 @@ impl<'a> Lowerer<'a> {
         Expr::Block(ExprBlock { exprs })
     }
 
-    fn expr_tuple(&mut self, exprs: &[AstExpr]) -> Expr {
+    fn expr_tuple(&mut self, exprs: &[AstExpr]) -> Expr<()> {
         let exprs = exprs.iter().map(|expr| self.expr(expr)).collect();
         Expr::Tuple(ExprTuple { exprs })
     }
 
-    #[allow(
+    #[expect(
         clippy::map_unwrap_or,
         reason = "required to satisfy the borrow checker"
     )]
@@ -250,7 +220,7 @@ impl<'a> Lowerer<'a> {
         &mut self,
         path: &AstPath,
         fields: &[(AstIdent, Option<AstExpr>)],
-    ) -> Expr {
+    ) -> Expr<()> {
         let ty = self.resolve_ty_path(path).unwrap();
         let fields = fields
             .iter()
@@ -259,7 +229,11 @@ impl<'a> Lowerer<'a> {
                     ident.string.to_string(),
                     expr.as_ref()
                         .map(|expr| self.expr(expr))
-                        .unwrap_or_else(|| Expr::Ident(self.ident(ident).unwrap())),
+                        .unwrap_or_else(|| {
+                            Expr::Ident(ExprIdent {
+                                ident: self.ident(ident).unwrap(),
+                            })
+                        }),
                 )
             })
             .collect();
@@ -270,12 +244,12 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    fn expr_array(&mut self, exprs: &[AstExpr]) -> Expr {
+    fn expr_array(&mut self, exprs: &[AstExpr]) -> Expr<()> {
         let exprs = exprs.iter().map(|expr| self.expr(expr)).collect();
         Expr::Array(ExprArray { exprs })
     }
 
-    #[allow(
+    #[expect(
         clippy::map_unwrap_or,
         reason = "required to satisfy the borrow checker"
     )]
@@ -321,7 +295,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn expr_match(&mut self, scrutinee: &AstExpr, arms: &[(AstPattern, AstExpr)]) -> Expr {
+    fn expr_match(&mut self, scrutinee: &AstExpr, arms: &[(AstPattern, AstExpr)]) -> Expr<()> {
         let scrutinee = self.expr(scrutinee);
         let arms = arms
             .iter()
@@ -333,14 +307,14 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    fn expr_get(&mut self, object: &AstExpr, field: &AstIdent) -> Expr {
+    fn expr_get(&mut self, object: &AstExpr, field: &AstIdent) -> Expr<()> {
         Expr::Get(ExprGet {
             object: Box::new(self.expr(object)),
             field: field.string.to_string(),
         })
     }
 
-    fn expr_set(&mut self, object: &AstExpr, field: &AstIdent, value: &AstExpr) -> Expr {
+    fn expr_set(&mut self, object: &AstExpr, field: &AstIdent, value: &AstExpr) -> Expr<()> {
         Expr::Set(ExprSet {
             object: Box::new(self.expr(object)),
             field: field.string.to_string(),
@@ -348,41 +322,40 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    fn expr_call(&mut self, callee: &AstExpr, arguments: &[AstExpr]) -> Expr {
-        let args = arguments.iter().map(|expr| self.expr(expr)).collect();
-        Expr::Call(ExprCall {
-            callee: Box::new(self.expr(callee)),
-            args,
-        })
-    }
-
-    #[allow(
+    #[expect(
         clippy::map_unwrap_or,
         reason = "required to satisfy the borrow checker"
     )]
-    fn expr_cont_application(
+    fn expr_call(
         &mut self,
         callee: &AstExpr,
-        arguments: &[(AstIdent, Option<AstExpr>)],
-    ) -> Expr {
-        let continuations = arguments
+        positional: &[AstExpr],
+        named: &[(AstIdent, Option<AstExpr>)],
+    ) -> Expr<()> {
+        let positional = positional.iter().map(|expr| self.expr(expr)).collect();
+        let named = named
             .iter()
             .map(|(ident, expr)| {
                 (
                     self.ident(ident).unwrap(),
                     expr.as_ref()
                         .map(|expr| self.expr(expr))
-                        .unwrap_or_else(|| Expr::Ident(self.ident(ident).unwrap())),
+                        .unwrap_or_else(|| {
+                            Expr::Ident(ExprIdent {
+                                ident: self.ident(ident).unwrap(),
+                            })
+                        }),
                 )
             })
             .collect();
-        Expr::ContApplication(ExprContApplication {
+        Expr::Call(ExprCall {
             callee: Box::new(self.expr(callee)),
-            continuations,
+            positional,
+            named,
         })
     }
 
-    fn expr_unary(&mut self, operator: &AstUnaryOp, operand: &AstExpr) -> Expr {
+    fn expr_unary(&mut self, operator: &AstUnaryOp, operand: &AstExpr) -> Expr<()> {
         let op = match operator {
             AstUnaryOp::Neg(_) => UnaryOp::Neg,
             AstUnaryOp::Not(_) => UnaryOp::Not,
@@ -393,7 +366,7 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    fn expr_binary(&mut self, left: &AstExpr, operator: &AstBinaryOp, right: &AstExpr) -> Expr {
+    fn expr_binary(&mut self, left: &AstExpr, operator: &AstBinaryOp, right: &AstExpr) -> Expr<()> {
         let op = match operator {
             AstBinaryOp::Add(_) => BinaryOp::Add,
             AstBinaryOp::Sub(_) => BinaryOp::Sub,
@@ -414,22 +387,25 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    fn expr_declare(&mut self, name: &AstIdent, ty: Option<&AstType>, value: &AstExpr) -> Expr {
+    #[expect(clippy::map_unwrap_or, reason = "required by the borrow checker")]
+    fn expr_declare(&mut self, name: &AstIdent, ty: Option<&AstType>, value: &AstExpr) -> Expr<()> {
         Expr::Declare(ExprDeclare {
             ident: self.ident(name).unwrap(),
-            ty: ty.map(|ty| self.ty(ty)),
+            ty: ty
+                .map(|ty| self.ty(ty))
+                .unwrap_or_else(|| self.program.insert_type(Type::Unknown)),
             expr: Box::new(self.expr(value)),
         })
     }
 
-    fn expr_assign(&mut self, name: &AstIdent, value: &AstExpr) -> Expr {
+    fn expr_assign(&mut self, name: &AstIdent, value: &AstExpr) -> Expr<()> {
         Expr::Assign(ExprAssign {
             ident: self.ident(name).unwrap(),
             expr: Box::new(self.expr(value)),
         })
     }
 
-    fn expr(&mut self, expr: &AstExpr) -> Expr {
+    fn expr(&mut self, expr: &AstExpr) -> Expr<()> {
         match expr {
             AstExpr::Literal(literal) => Self::expr_literal(literal),
             AstExpr::Path(path) => self.expr_path(path),
@@ -458,14 +434,10 @@ impl<'a> Lowerer<'a> {
             } => self.expr_set(object, field, value),
             AstExpr::Call {
                 callee,
-                arguments,
+                positional,
+                named,
                 paren_span: _,
-            } => self.expr_call(callee, arguments),
-            AstExpr::ContApplication {
-                callee,
-                arguments,
-                bracket_span: _,
-            } => self.expr_cont_application(callee, arguments),
+            } => self.expr_call(callee, positional, named),
             AstExpr::Unary { operator, operand } => self.expr_unary(operator, operand),
             AstExpr::Binary {
                 left,
@@ -486,14 +458,14 @@ impl<'a> Lowerer<'a> {
         let name = format!("{}::{}", self.program.name, fun.name.string);
         let mut ir_fun = Function::new(name);
 
-        ir_fun.params = fun
-            .params
+        ir_fun.positional = fun
+            .positional
             .iter()
             .map(|(name, ty)| (self.ident(name).unwrap(), self.ty(ty)))
             .collect();
 
-        ir_fun.continuations = fun
-            .continuations
+        ir_fun.named = fun
+            .named
             .iter()
             .map(|(name, ty)| (self.ident(name).unwrap(), self.ty(ty)))
             .collect();
@@ -507,7 +479,7 @@ impl<'a> Lowerer<'a> {
             .insert(self.functions[&fun.name.span], ir_fun);
     }
 
-    fn lower(mut self) -> Program<Expr> {
+    fn lower(mut self) -> Program<()> {
         for ty in self.ast.items.iter().filter_map(Item::as_user_defined_ty) {
             self.declare_ty(ty);
         }
@@ -528,6 +500,7 @@ impl<'a> Lowerer<'a> {
     }
 }
 
-pub fn lower(ast: &AstProgram, names: NameMap, program_name: String) -> Program<Expr> {
+#[inline]
+pub fn lower(ast: &AstProgram, names: NameMap, program_name: String) -> Program<()> {
     Lowerer::new(program_name, ast, names).lower()
 }

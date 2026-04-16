@@ -1,35 +1,13 @@
-use crate::common::BinaryOp;
-use crate::common::FuncRef;
-use crate::common::Ident;
-use crate::common::Intrinsic;
-use crate::common::Literal;
-use crate::common::UnaryOp;
-use crate::mid_level_ir::BlockId;
-use crate::mid_level_ir::Expr;
-use crate::mid_level_ir::ExprArray;
-use crate::mid_level_ir::ExprAssign;
-use crate::mid_level_ir::ExprBinary;
-use crate::mid_level_ir::ExprCall;
-use crate::mid_level_ir::ExprClosure;
-use crate::mid_level_ir::ExprConstructor;
-use crate::mid_level_ir::ExprContApplication;
-use crate::mid_level_ir::ExprGet;
-use crate::mid_level_ir::ExprIntrinsic;
-use crate::mid_level_ir::ExprSet;
-use crate::mid_level_ir::ExprSwitch;
-use crate::mid_level_ir::ExprTuple;
-use crate::mid_level_ir::ExprUnary;
-use crate::mid_level_ir::Function;
-use crate::mid_level_ir::Program;
+use crate::{
+    common::{BinaryOp, FuncRef, Ident, Intrinsic, Literal, UnaryOp},
+    mid_level_ir::{
+        BlockId, Expr, ExprApplication, ExprArray, ExprAssign, ExprBinary, ExprCall, ExprClosure,
+        ExprConstructor, ExprGet, ExprIntrinsic, ExprSet, ExprSwitch, ExprTuple, ExprUnary,
+        Function, Program,
+    },
+};
 
-use std::cell::RefCell;
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::fmt;
-use std::iter;
-use std::mem;
-use std::ops;
-use std::rc::Rc;
+use std::{cell::RefCell, cmp::Ordering, collections::HashMap, fmt, iter, mem, ops, rc::Rc};
 
 macro_rules! ub {
     () => { panic!("encoutered undefined behaviour") };
@@ -59,7 +37,11 @@ pub enum Value {
     Array(RefCell<Vec<Rc<Value>>>),
     Tuple(RefCell<Vec<Rc<Value>>>),
     Function(FuncRef),
-    ContinuedFunction(Rc<Value>, HashMap<Ident, Rc<Value>>),
+    AppliedFunction {
+        fun: Rc<Value>,
+        positional: Vec<Rc<Value>>,
+        named: HashMap<Ident, Rc<Value>>,
+    },
     Closure {
         func_ref: FuncRef,
         environment: SharedEnvironment,
@@ -68,6 +50,18 @@ pub enum Value {
 }
 
 impl Value {
+    const fn applied(
+        fun: Rc<Value>,
+        positional: Vec<Rc<Value>>,
+        named: HashMap<Ident, Rc<Value>>,
+    ) -> Value {
+        Value::AppliedFunction {
+            fun,
+            positional,
+            named,
+        }
+    }
+
     pub(crate) fn discriminant(&self) -> i64 {
         match self {
             Value::UserDefined(UserDefinedValue {
@@ -146,35 +140,53 @@ impl Value {
 
     fn call(
         &self,
-        params: Vec<Rc<Value>>,
-        mut bound_params: HashMap<Ident, Rc<Value>>,
+        positional_args: Vec<Rc<Value>>,
+        mut named_args: HashMap<Ident, Rc<Value>>,
         executor: &mut Executor,
         program: &Program,
     ) -> ControlFlow<Void> {
         match *self {
             Value::Function(func_ref) => {
                 let function = program.functions.get(&func_ref).unwrap();
-                bound_params.extend(function.params.iter().map(|(ident, _)| *ident).zip(params));
-                executor.function(function, func_ref, bound_params, None, program)
+                named_args.extend(
+                    function
+                        .positional_params
+                        .iter()
+                        .map(|(ident, _)| *ident)
+                        .zip(positional_args),
+                );
+                executor.function(function, func_ref, named_args, None, program)
             }
-            Value::ContinuedFunction(ref callee, ref continuations) => {
-                bound_params.extend(
-                    continuations
+            Value::AppliedFunction {
+                ref fun,
+                ref positional,
+                ref named,
+            } => {
+                let mut positional = positional.clone();
+                positional.extend(positional_args);
+                named_args.extend(
+                    named
                         .iter()
                         .map(|(ident, value)| (*ident, Rc::clone(value))),
                 );
-                callee.call(params, bound_params, executor, program)
+                fun.call(positional, named_args, executor, program)
             }
             Value::Closure {
                 func_ref,
                 ref environment,
             } => {
                 let function = program.functions.get(&func_ref).unwrap();
-                bound_params.extend(function.params.iter().map(|(ident, _)| *ident).zip(params));
+                named_args.extend(
+                    function
+                        .positional_params
+                        .iter()
+                        .map(|(ident, _)| *ident)
+                        .zip(positional_args),
+                );
                 executor.function(
                     function,
                     func_ref,
-                    bound_params,
+                    named_args,
                     Some(Rc::clone(environment)),
                     program,
                 )
@@ -183,19 +195,27 @@ impl Value {
         }
     }
 
-    fn apply_continuations<I>(self: &Rc<Self>, continuations: I) -> Value
-    where
-        I: IntoIterator<Item = (Ident, Rc<Value>)>,
-        I::IntoIter: ExactSizeIterator,
-    {
+    fn apply(
+        self: &Rc<Self>,
+        positional_args: impl IntoIterator<Item = Rc<Value>>,
+        named_args: impl IntoIterator<Item = (Ident, Rc<Value>)>,
+    ) -> Value {
         match &**self {
-            Value::Function(_) | Value::Closure { .. } => {
-                Value::ContinuedFunction(Rc::clone(self), continuations.into_iter().collect())
-            }
-            Value::ContinuedFunction(callee, existing_continuations) => {
-                let mut new_continuations = existing_continuations.clone();
-                new_continuations.extend(continuations);
-                Value::ContinuedFunction(Rc::clone(callee), new_continuations)
+            Value::Function(_) | Value::Closure { .. } => Value::applied(
+                Rc::clone(self),
+                positional_args.into_iter().collect(),
+                named_args.into_iter().collect(),
+            ),
+            Value::AppliedFunction {
+                fun,
+                positional,
+                named,
+            } => {
+                let mut positional = positional.clone();
+                positional.extend(positional_args);
+                let mut named = named.clone();
+                named.extend(named_args);
+                Value::applied(Rc::clone(fun), positional, named)
             }
             _ => ub!("attempted to apply continuations to {:?}", self),
         }
@@ -218,7 +238,7 @@ impl Value {
 }
 
 impl PartialOrd for Value {
-    /// ## Panics
+    /// # Panics
     ///
     /// May panic if any [`RefCell`]s in `self` or `other` are mutably borrowed.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -236,6 +256,7 @@ impl PartialOrd for Value {
 impl ops::Add for &Value {
     type Output = Option<Value>;
 
+    #[inline]
     fn add(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Int(n1), Value::Int(n2)) => Some(Value::Int(n1 + n2)),
@@ -254,6 +275,7 @@ impl ops::Add for &Value {
 impl ops::Sub for &Value {
     type Output = Option<Value>;
 
+    #[inline]
     fn sub(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Int(n1), Value::Int(n2)) => Some(Value::Int(n1 - n2)),
@@ -266,6 +288,7 @@ impl ops::Sub for &Value {
 impl ops::Mul for &Value {
     type Output = Option<Value>;
 
+    #[inline]
     fn mul(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Int(n1), Value::Int(n2)) => Some(Value::Int(n1 * n2)),
@@ -278,6 +301,7 @@ impl ops::Mul for &Value {
 impl ops::Div for &Value {
     type Output = Option<Value>;
 
+    #[inline]
     fn div(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Int(n1), Value::Int(n2)) => Some(Value::Int(n1 / n2)),
@@ -290,6 +314,7 @@ impl ops::Div for &Value {
 impl ops::Rem for &Value {
     type Output = Option<Value>;
 
+    #[inline]
     fn rem(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Int(n1), Value::Int(n2)) => Some(Value::Int(n1 % n2)),
@@ -316,6 +341,7 @@ impl From<Void> for Value {
 }
 
 impl From<Void> for Rc<Value> {
+    #[inline]
     fn from(value: Void) -> Self {
         match value {}
     }
@@ -329,7 +355,7 @@ enum ControlFlow<T> {
 }
 
 macro_rules! value {
-    ($ctrl:expr) => {
+    ($ctrl:expr_2021) => {
         match ($ctrl) {
             ControlFlow::Goto(block) => return ControlFlow::Goto(block),
             ControlFlow::Terminate(n) => return ControlFlow::Terminate(n),
@@ -460,35 +486,41 @@ impl Executor {
     fn call(
         &mut self,
         func: &Expr,
-        params: &[(Option<Ident>, Expr)],
+        positional: &[Expr],
+        named: &[(Ident, Expr)],
         program: &Program,
     ) -> ControlFlow<Rc<Value>> {
         let func = value!(self.expr(func, program));
-        let mut args = Vec::new();
-        let mut continuations = HashMap::new();
-        for &(ident, ref param) in params {
+        let mut positional_args = Vec::new();
+        let mut named_args = HashMap::new();
+        for param in positional {
             let param = value!(self.expr(param, program));
-            if let Some(ident) = ident {
-                continuations.insert(ident, param);
-            } else {
-                args.push(param);
-            }
+            positional_args.push(param);
         }
-        func.call(args, continuations, self, program).cast()
+        for &(name, ref param) in named {
+            let param = value!(self.expr(param, program));
+            named_args.insert(name, param);
+        }
+        func.call(positional_args, named_args, self, program).cast()
     }
 
-    fn cont_application(
+    fn application(
         &mut self,
         func: &Expr,
-        continuations: &Vec<(Ident, Expr)>,
+        positional: &[Expr],
+        named: &Vec<(Ident, Expr)>,
         program: &Program,
     ) -> ControlFlow<Rc<Value>> {
         let func = value!(self.expr(func, program));
-        let mut evaluated_continuations = Vec::with_capacity(continuations.len());
-        for (index, continuation) in continuations {
-            evaluated_continuations.push((*index, value!(self.expr(continuation, program))));
+        let mut eval_positional = Vec::with_capacity(positional.len());
+        for arg in positional {
+            eval_positional.push(value!(self.expr(arg, program)));
         }
-        ControlFlow::Value(Rc::new(func.apply_continuations(evaluated_continuations)))
+        let mut eval_named = Vec::with_capacity(named.len());
+        for (index, arg) in named {
+            eval_named.push((*index, value!(self.expr(arg, program))));
+        }
+        ControlFlow::Value(Rc::new(func.apply(eval_positional, eval_named)))
     }
 
     fn unary_op(
@@ -614,15 +646,17 @@ impl Executor {
             Expr::Call(ExprCall {
                 ref callee,
                 callee_ty: _,
-                ref args,
-            }) => self.call(callee, args, program),
-            Expr::ContApplication(ExprContApplication {
+                ref positional,
+                ref named,
+            }) => self.call(callee, positional, named, program),
+            Expr::Application(ExprApplication {
                 ref callee,
                 callee_ty: _,
-                ref continuations,
+                ref positional,
+                ref named,
                 result_ty: _,
                 storage_ty: _,
-            }) => self.cont_application(callee, continuations, program),
+            }) => self.application(callee, positional, named, program),
             Expr::Unary(ExprUnary {
                 operator,
                 ref operand,
@@ -703,7 +737,7 @@ impl Executor {
 
     fn run(mut self, program: &Program) -> i64 {
         let entry_point = program.functions.get(&FuncRef::ENTRY_POINT).unwrap();
-        let termination_param = *entry_point.continuations.keys().next().unwrap();
+        let termination_param = *entry_point.named_params.keys().next().unwrap();
         let termination_fn = Rc::new(Value::Function(program.lib_std.fn_termination));
         self.function(
             entry_point,
@@ -716,6 +750,7 @@ impl Executor {
     }
 }
 
+#[inline]
 pub fn run(program: &Program) -> i64 {
     Executor::new(FuncRef::ENTRY_POINT).run(program)
 }

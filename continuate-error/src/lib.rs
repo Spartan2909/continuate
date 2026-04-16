@@ -1,41 +1,31 @@
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::fmt;
-use std::fmt::Write as _;
-use std::io;
-use std::io::Write;
-use std::iter;
-use std::mem;
-use std::num::NonZeroUsize;
-use std::ops::Range;
-use std::path::Path;
-use std::path::PathBuf;
-use std::result;
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::{self, Write as _},
+    io::{self, Write},
+    iter, mem,
+    num::NonZero,
+    ops::Range,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
-use ariadne::Label;
-use ariadne::Report;
-use ariadne::ReportKind;
+use ariadne::{Label, Report, ReportKind};
 
-use chumsky::error::RichPattern;
-use chumsky::input::Input;
-use chumsky::label;
-use chumsky::span;
-use chumsky::util::MaybeRef;
+use chumsky::{error::RichPattern, input::Input, label, span, util::MaybeRef};
 
 use strum::EnumDiscriminants;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SourceId(NonZeroUsize);
+pub struct SourceId(NonZero<usize>);
 
 impl SourceId {
-    const DUMMY: SourceId = if let Some(id) = NonZeroUsize::new(1) {
+    const DUMMY: SourceId = if let Some(id) = NonZero::new(1) {
         SourceId(id)
     } else {
         unreachable!()
     };
 
-    const START: SourceId = if let Some(id) = NonZeroUsize::new(2) {
+    const START: SourceId = if let Some(id) = NonZero::new(2) {
         SourceId(id)
     } else {
         unreachable!()
@@ -48,11 +38,12 @@ impl SourceId {
     }
 
     const fn as_usize(self) -> usize {
-        NonZeroUsize::get(self.0)
+        NonZero::get(self.0)
     }
 }
 
 impl fmt::Debug for SourceId {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "SourceId({})", self.0)
     }
@@ -71,10 +62,12 @@ impl Source {
         }
     }
 
+    #[inline]
     pub fn contents(&self) -> &str {
         self.source.text()
     }
 
+    #[inline]
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -86,6 +79,7 @@ pub struct SourceCache {
 }
 
 impl SourceCache {
+    #[inline]
     pub fn new() -> SourceCache {
         SourceCache {
             sources: HashMap::new(),
@@ -93,9 +87,10 @@ impl SourceCache {
         }
     }
 
-    /// ## Panics
+    /// # Panics
     ///
     /// Panics if the total number of source files exceeds `u32::MAX - 3`.
+    #[inline]
     pub fn insert_source<T: Into<Arc<str>>>(&mut self, source: T, path: PathBuf) -> SourceId {
         let id = self.next_id.next();
         let source = Source::new(source.into(), path);
@@ -103,23 +98,26 @@ impl SourceCache {
         id
     }
 
+    #[inline]
     pub fn eof(&self, source_id: SourceId) -> Option<Span> {
         let source = self.sources.get(&source_id)?;
         let len = source.source.len();
         Span::new(len, len, source_id)
     }
 
+    #[inline]
     pub fn get(&self, id: SourceId) -> Option<&Source> {
         self.sources.get(&id)
     }
 
-    fn fetch(&self, id: SourceId) -> result::Result<&ariadne::Source<Arc<str>>, impl fmt::Debug> {
+    fn fetch(&self, id: SourceId) -> Result<&ariadne::Source<Arc<str>>, impl fmt::Debug + use<>> {
         self.sources.get(&id).map_or_else(
             || Err(format!("source for {id:?} not found")),
             |source| Ok(&source.source),
         )
     }
 
+    #[inline]
     pub fn str(&self, span: Span) -> Option<&str> {
         self.get(span.source)?
             .contents()
@@ -128,6 +126,7 @@ impl SourceCache {
 }
 
 impl Default for SourceCache {
+    #[inline]
     fn default() -> Self {
         Self::new()
     }
@@ -137,10 +136,7 @@ impl ariadne::Cache<SourceId> for SourceCache {
     type Storage = Arc<str>;
 
     #[inline]
-    fn fetch(
-        &mut self,
-        id: &SourceId,
-    ) -> result::Result<&ariadne::Source<Self::Storage>, impl fmt::Debug> {
+    fn fetch(&mut self, id: &SourceId) -> Result<&ariadne::Source<Self::Storage>, impl fmt::Debug> {
         (*self).fetch(*id)
     }
 
@@ -154,10 +150,7 @@ impl ariadne::Cache<SourceId> for &SourceCache {
     type Storage = Arc<str>;
 
     #[inline]
-    fn fetch(
-        &mut self,
-        id: &SourceId,
-    ) -> result::Result<&ariadne::Source<Self::Storage>, impl fmt::Debug> {
+    fn fetch(&mut self, id: &SourceId) -> Result<&ariadne::Source<Self::Storage>, impl fmt::Debug> {
         (**self).fetch(*id)
     }
 
@@ -176,6 +169,7 @@ pub struct Span {
 
 impl Span {
     /// An empty span in a non-existent source file.
+    #[inline]
     pub const fn dummy() -> Span {
         Span {
             start: 0,
@@ -184,6 +178,7 @@ impl Span {
         }
     }
 
+    #[inline]
     pub fn new(start: usize, end: usize, source: SourceId) -> Option<Span> {
         Some(Span {
             start: start.try_into().ok()?,
@@ -196,11 +191,13 @@ impl Span {
         self.source.as_usize() == SourceId::DUMMY.as_usize()
     }
 
+    #[inline]
     pub fn contains_span(&self, other: &Span) -> bool {
         self.source == other.source && self.start <= other.start && self.end >= other.end
     }
 
     #[must_use = "This method returns a new span without modifying the original one"]
+    #[inline]
     pub const fn first_n(&self, n: usize) -> Option<Span> {
         if n > u32::MAX as usize || self.start + n as u32 > self.end {
             return None;
@@ -213,6 +210,7 @@ impl Span {
         })
     }
 
+    #[inline]
     #[must_use = "This method returns a new span without modifying the original one"]
     pub const fn last_n(&self, n: usize) -> Option<Span> {
         if n > u32::MAX as usize || self.start + n as u32 > self.end {
@@ -244,6 +242,7 @@ impl Span {
         self.len() == 0
     }
 
+    #[inline]
     pub fn union(self, other: Span) -> Option<Span> {
         if self.is_dummy() {
             Some(other)
@@ -260,6 +259,7 @@ impl Span {
         }
     }
 
+    #[inline]
     pub fn debug(self, cache: &SourceCache) -> impl fmt::Debug + use<'_> {
         DebugSpan { span: self, cache }
     }
@@ -285,22 +285,27 @@ impl span::Span for Span {
     type Offset = usize;
     type Context = SourceId;
 
+    #[inline]
     fn new(context: SourceId, range: Range<usize>) -> Self {
         Span::new(range.start, range.end, context).unwrap()
     }
 
+    #[inline]
     fn context(&self) -> Self::Context {
         self.source
     }
 
+    #[inline]
     fn start(&self) -> Self::Offset {
         self.start as usize
     }
 
+    #[inline]
     fn end(&self) -> Self::Offset {
         self.end as usize
     }
 
+    #[inline]
     fn union(&self, other: Self) -> Self {
         (*self).union(other).unwrap()
     }
@@ -309,18 +314,22 @@ impl span::Span for Span {
 impl ariadne::Span for Span {
     type SourceId = SourceId;
 
+    #[inline]
     fn source(&self) -> &Self::SourceId {
         &self.source
     }
 
+    #[inline]
     fn start(&self) -> usize {
         self.start as usize
     }
 
+    #[inline]
     fn end(&self) -> usize {
         self.end as usize
     }
 
+    #[inline]
     fn len(&self) -> usize {
         (self.end - self.start) as usize
     }
@@ -458,7 +467,7 @@ impl SingleError {
     }
 }
 
-#[allow(clippy::fallible_impl_from)]
+#[expect(clippy::fallible_impl_from)]
 impl From<ErrorInner> for SingleError {
     fn from(value: ErrorInner) -> Self {
         let span = match value {
@@ -486,6 +495,7 @@ pub struct Error {
 }
 
 impl Error {
+    #[inline]
     pub fn unexpected_token<I: IntoIterator<Item = Option<String>>>(
         expected: I,
         found: Option<String>,
@@ -499,6 +509,7 @@ impl Error {
         .into()
     }
 
+    #[inline]
     pub fn unclosed_delimiter(
         unclosed: String,
         unclosed_span: Span,
@@ -516,6 +527,7 @@ impl Error {
         .into()
     }
 
+    #[inline]
     pub fn unopened_delimiter(unopened: String, unopened_span: Span) -> Error {
         ErrorInner::UnopenedDelimiter {
             unopened,
@@ -528,6 +540,7 @@ impl Error {
         ErrorInner::Simple(message).into()
     }
 
+    #[inline]
     pub fn report(&self) -> Vec<Report<'static, Span>> {
         self.errors.iter().map(SingleError::report).collect()
     }
@@ -536,9 +549,10 @@ impl Error {
     ///
     /// This method assumes that the output is going to be printed to `stderr`.
     ///
-    /// ## Errors
+    /// # Errors
     ///
     /// Returns an error if writing to `w` fails.
+    #[inline]
     pub fn write(&self, cache: &SourceCache, mut w: impl Write) -> io::Result<()> {
         self.report()
             .into_iter()
@@ -549,9 +563,10 @@ impl Error {
     ///
     /// This method assumes that the output is going to be printed to `stderr`.
     ///
-    /// ## Errors
+    /// # Errors
     ///
     /// Returns an error if writing to `w` fails.
+    #[inline]
     pub fn write_for_stdout(&self, cache: &SourceCache, mut w: impl Write) -> io::Result<()> {
         self.report()
             .into_iter()
@@ -560,9 +575,10 @@ impl Error {
 
     /// Write this error to `stderr`.
     ///
-    /// ## Errors
+    /// # Errors
     ///
     /// Returns an error if writing to `stderr` fails.
+    #[inline]
     pub fn eprint(&self, cache: &SourceCache) -> io::Result<()> {
         self.report()
             .into_iter()
@@ -573,9 +589,10 @@ impl Error {
     ///
     /// In most cases, [`Error::eprint`] is the "more correct" method to use.
     ///
-    /// ## Errors
+    /// # Errors
     ///
     /// Returns an error if writing to `stdout` fails.
+    #[inline]
     pub fn print(&self, cache: &SourceCache) -> io::Result<()> {
         self.report()
             .into_iter()
@@ -583,6 +600,7 @@ impl Error {
     }
 
     #[must_use]
+    #[inline]
     pub fn combine(mut self, other: Error) -> Error {
         self.errors.extend(other.errors);
         self
@@ -590,6 +608,7 @@ impl Error {
 }
 
 impl From<ErrorInner> for Error {
+    #[inline]
     fn from(value: ErrorInner) -> Self {
         Error {
             errors: vec![value.into()],
@@ -598,18 +617,21 @@ impl From<ErrorInner> for Error {
 }
 
 impl From<&str> for Error {
+    #[inline]
     fn from(value: &str) -> Self {
         Error::simple(value.to_string())
     }
 }
 
 impl From<String> for Error {
+    #[inline]
     fn from(value: String) -> Self {
         Error::simple(value)
     }
 }
 
 impl Default for Error {
+    #[inline]
     fn default() -> Self {
         Error::simple("unrecognised token".to_string())
     }
@@ -620,6 +642,7 @@ where
     I: Input<'a, Span = Span>,
     I::Token: fmt::Display,
 {
+    #[inline]
     fn merge(mut self, mut other: Self) -> Self {
         self.errors.append(&mut other.errors);
         self
@@ -636,6 +659,7 @@ where
     I::Token: fmt::Display + 'b,
     L: Into<RichPattern<'b, I::Token>>,
 {
+    #[inline]
     fn expected_found<E: IntoIterator<Item = L>>(
         expected: E,
         found: Option<MaybeRef<'a, I::Token>>,
@@ -650,6 +674,7 @@ where
         )
     }
 
+    #[inline]
     fn label_with(&mut self, label: L) {
         let label = to_string_as_pattern(label);
         for error in &mut self.errors {
@@ -671,9 +696,10 @@ where
         }
     }
 
+    #[inline]
     fn in_context(&mut self, label: L, _: Span) {
         <Self as label::LabelError<'a, I, L>>::label_with(self, label);
     }
 }
 
-pub type Result<T> = result::Result<T, Error>;
+pub type Result<T, E = Error> = std::result::Result<T, E>;

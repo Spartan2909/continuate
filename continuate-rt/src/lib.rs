@@ -1,5 +1,4 @@
 #![allow(unsafe_code)]
-#![warn(clippy::missing_inline_in_public_items)]
 
 pub mod garbage_collector;
 
@@ -7,17 +6,15 @@ pub mod layout;
 
 pub mod slice;
 
-use std::error::Error;
-use std::io;
+use std::{error::Error, io};
 
 #[cfg(debug_assertions)]
 use tracing::debug;
 
 use tracing_subscriber::filter::LevelFilter;
 
-#[export_name = "cont_rt_init"]
-#[allow(clippy::missing_panics_doc)]
-#[allow(clippy::missing_inline_in_public_items)]
+#[unsafe(export_name = "cont_rt_init")]
+#[expect(clippy::missing_panics_doc)]
 pub extern "C" fn enable_log() {
     #[cfg(debug_assertions)]
     init_tracing(LevelFilter::DEBUG).expect("failed to instantiate logger");
@@ -26,13 +23,12 @@ pub extern "C" fn enable_log() {
     debug!("runtime initialised");
 }
 
-/// ## Safety
+/// # Safety
 ///
 /// - All garbage-collected values must be valid.
 ///
 /// - No garbage-collected values may be accessed again.
-#[export_name = "cont_rt_cleanup"]
-#[allow(clippy::missing_inline_in_public_items)]
+#[unsafe(export_name = "cont_rt_cleanup")]
 pub unsafe extern "C" fn cleanup() {
     #[cfg(debug_assertions)]
     debug!("runtime cleaning up");
@@ -43,7 +39,7 @@ pub unsafe extern "C" fn cleanup() {
     }
 }
 
-/// ## Errors
+/// # Errors
 ///
 /// Returns an error if `tracing` instantiation fails.
 #[inline]

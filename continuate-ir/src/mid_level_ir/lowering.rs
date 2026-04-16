@@ -1,64 +1,17 @@
-use crate::common::Ident;
-use crate::common::Intrinsic;
-use crate::common::UserDefinedTyRef;
-use crate::high_level_ir::DestructureFields;
-use crate::high_level_ir::Function as HirFunction;
-use crate::high_level_ir::FunctionTy as HirFunctionTy;
-use crate::high_level_ir::Pattern;
-use crate::high_level_ir::Program as HirProgram;
-use crate::high_level_ir::Type as HirType;
-use crate::high_level_ir::Typed;
-use crate::high_level_ir::TypedExpr as HirExpr;
-use crate::high_level_ir::TypedExprArray as HirExprArray;
-use crate::high_level_ir::TypedExprAssign as HirExprAssign;
-use crate::high_level_ir::TypedExprBinary as HirExprBinary;
-use crate::high_level_ir::TypedExprBlock as HirExprBlock;
-use crate::high_level_ir::TypedExprCall as HirExprCall;
-use crate::high_level_ir::TypedExprClosure as HirExprClosure;
-use crate::high_level_ir::TypedExprConstructor as HirExprConstructor;
-use crate::high_level_ir::TypedExprConstructorFields;
-use crate::high_level_ir::TypedExprContApplication as HirExprContApplication;
-use crate::high_level_ir::TypedExprDeclare as HirExprDeclare;
-use crate::high_level_ir::TypedExprGet as HirExprGet;
-use crate::high_level_ir::TypedExprIntrinsic as HirExprIntrinsic;
-use crate::high_level_ir::TypedExprMatch as HirExprMatch;
-use crate::high_level_ir::TypedExprSet as HirExprSet;
-use crate::high_level_ir::TypedExprTuple as HirExprTuple;
-use crate::high_level_ir::TypedExprUnary as HirExprUnary;
-use crate::high_level_ir::UserDefinedType as HirUserDefinedType;
-use crate::high_level_ir::UserDefinedTypeFields;
-use crate::mid_level_ir::Block;
-use crate::mid_level_ir::BlockId;
-use crate::mid_level_ir::ClosureCaptures;
-use crate::mid_level_ir::Expr;
-use crate::mid_level_ir::ExprArray;
-use crate::mid_level_ir::ExprAssign;
-use crate::mid_level_ir::ExprBinary;
-use crate::mid_level_ir::ExprCall;
-use crate::mid_level_ir::ExprClosure;
-use crate::mid_level_ir::ExprConstructor;
-use crate::mid_level_ir::ExprContApplication;
-use crate::mid_level_ir::ExprFunction;
-use crate::mid_level_ir::ExprGet;
-use crate::mid_level_ir::ExprGoto;
-use crate::mid_level_ir::ExprIdent;
-use crate::mid_level_ir::ExprIntrinsic;
-use crate::mid_level_ir::ExprLiteral;
-use crate::mid_level_ir::ExprSet;
-use crate::mid_level_ir::ExprSwitch;
-use crate::mid_level_ir::ExprTuple;
-use crate::mid_level_ir::ExprUnary;
-use crate::mid_level_ir::Function;
-use crate::mid_level_ir::Program;
-use crate::mid_level_ir::Type;
-use crate::mid_level_ir::UserDefinedType;
+use crate::{
+    common::{Ident, Intrinsic, UserDefinedTyRef},
+    high_level_ir as hir, mid_level_ir as mir,
+};
 
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
-use std::iter;
-use std::mem;
-use std::rc::Rc;
-use std::slice;
+type HirTy = Arc<hir::Type>;
+
+type HirExpr = hir::Expr<HirTy>;
+
+use std::{
+    collections::{HashMap, hash_map::Entry},
+    iter, mem, slice,
+    sync::Arc,
+};
 
 use itertools::Itertools as _;
 
@@ -70,97 +23,107 @@ enum ArmData {
 
 struct MatchVariant {
     variant: usize,
-    block: BlockId,
+    block: mir::BlockId,
 }
 
-fn field_index(ty: &HirUserDefinedType, field: &str) -> Option<usize> {
+fn field_index(ty: &hir::UserDefinedType, field: &str) -> Option<usize> {
     let fields = ty.as_product()?;
     match fields {
-        UserDefinedTypeFields::Named(fields) => fields.iter().position(|(name, _)| name == field),
-        UserDefinedTypeFields::Anonymous(_) => field.parse().ok(),
-        UserDefinedTypeFields::Unit => None,
+        hir::UserDefinedTypeFields::Named(fields) => {
+            fields.iter().position(|(name, _)| name == field)
+        }
+        hir::UserDefinedTypeFields::Anonymous(_) => field.parse().ok(),
+        hir::UserDefinedTypeFields::Unit => None,
     }
 }
 
 struct Lowerer<'a> {
-    program: Program,
-    environment: HashMap<Ident, Rc<Type>>,
-    current_block: BlockId,
-    hir_program: &'a HirProgram<HirExpr>,
-    types: HashMap<&'a HirType, Rc<Type>>,
+    program: mir::Program,
+    environment: HashMap<Ident, Arc<mir::Type>>,
+    current_block: mir::BlockId,
+    hir_program: &'a hir::Program<HirTy>,
+    types: HashMap<&'a hir::Type, Arc<mir::Type>>,
 }
 
 impl<'a> Lowerer<'a> {
-    fn user_defined_ty(&mut self, ty_ref: UserDefinedTyRef) -> UserDefinedType {
+    fn user_defined_ty(&mut self, ty_ref: UserDefinedTyRef) -> mir::UserDefinedType {
         let ty = &self.hir_program.user_defined_types[&ty_ref];
         match &**ty {
-            HirUserDefinedType::Product(fields) => {
+            hir::UserDefinedType::Product(fields) => {
                 let mut new_fields = Vec::with_capacity(fields.len());
                 new_fields.extend(fields.iter().map(|field| self.lower_ty(field)));
-                UserDefinedType::Product(new_fields)
+                mir::UserDefinedType::Product(new_fields)
             }
-            HirUserDefinedType::Sum(variants) => {
+            hir::UserDefinedType::Sum(variants) => {
                 let mut new_variants = Vec::with_capacity(variants.len());
                 for (_, variant) in variants {
                     let mut new_variant = Vec::with_capacity(variant.len());
                     new_variant.extend(variant.iter().map(|field| self.lower_ty(field)));
                     new_variants.push(new_variant);
                 }
-                UserDefinedType::Sum(new_variants)
+                mir::UserDefinedType::Sum(new_variants)
             }
         }
     }
 
-    fn lower_ty(&mut self, hir_ty: &'a HirType) -> Rc<Type> {
+    fn lower_ty(&mut self, hir_ty: &'a hir::Type) -> Arc<mir::Type> {
         if let Some(ty) = self.types.get(hir_ty) {
-            return Rc::clone(ty);
+            return Arc::clone(ty);
         }
 
         let ty = match *hir_ty {
-            HirType::Bool => Type::Bool,
-            HirType::Int => Type::Int,
-            HirType::Float => Type::Float,
-            HirType::String => Type::String,
-            HirType::Array(ref ty, len) => Type::Array(self.lower_ty(ty), len),
-            HirType::Tuple(ref types) => {
-                Type::Tuple(types.iter().map(|ty| self.lower_ty(ty)).collect())
+            hir::Type::Bool => mir::Type::Bool,
+            hir::Type::Int => mir::Type::Int,
+            hir::Type::Float => mir::Type::Float,
+            hir::Type::String => mir::Type::String,
+            hir::Type::Array(ref ty, len) => mir::Type::Array(self.lower_ty(ty), len),
+            hir::Type::Tuple(ref types) => {
+                mir::Type::Tuple(types.iter().map(|ty| self.lower_ty(ty)).collect())
             }
-            HirType::Function(HirFunctionTy {
-                ref params,
-                ref continuations,
-            }) => Type::function(
-                params.iter().map(|ty| self.lower_ty(ty)).collect(),
-                continuations
+            hir::Type::Function(hir::FunctionTy {
+                ref positional_params,
+                ref named_params,
+            }) => mir::Type::function(
+                positional_params
+                    .iter()
+                    .map(|ty| self.lower_ty(ty))
+                    .collect(),
+                named_params
                     .iter()
                     .map(|(&ident, ty)| (ident, self.lower_ty(ty)))
                     .collect(),
             ),
-            HirType::UserDefined(ty) => Type::UserDefined(self.user_defined_ty(ty)),
-            HirType::Unknown => unreachable!(),
-            HirType::None => Type::None,
+            hir::Type::UserDefined(ty) => mir::Type::UserDefined(self.user_defined_ty(ty)),
+            hir::Type::Unknown => unreachable!(),
+            hir::Type::None => mir::Type::None,
         };
         let ty = self.program.insert_type(ty);
-        self.types.insert(hir_ty, Rc::clone(&ty));
+        self.types.insert(hir_ty, Arc::clone(&ty));
         ty
     }
 
     fn expr_list(
         &mut self,
         exprs: impl IntoIterator<Item = &'a HirExpr>,
-        block: &mut Block,
-        function: &mut Function,
-    ) -> Vec<Expr> {
+        block: &mut mir::Block,
+        function: &mut mir::Function,
+    ) -> Vec<mir::Expr> {
         exprs
             .into_iter()
             .map(|expr| self.expr(expr, block, function))
             .collect()
     }
 
-    fn block(&mut self, exprs: &'a [HirExpr], block: &mut Block, function: &mut Function) -> Expr {
+    fn block(
+        &mut self,
+        exprs: &'a [HirExpr],
+        block: &mut mir::Block,
+        function: &mut mir::Function,
+    ) -> mir::Expr {
         let mut exprs = self.expr_list(exprs, block, function);
         let last_expr = exprs.pop().unwrap_or_else(|| {
-            let ty = self.program.insert_type(Type::Tuple(Vec::new()));
-            Expr::Tuple(ExprTuple {
+            let ty = self.program.insert_type(mir::Type::Tuple(Vec::new()));
+            mir::Expr::Tuple(mir::ExprTuple {
                 ty,
                 values: Vec::new(),
             })
@@ -173,22 +136,22 @@ impl<'a> Lowerer<'a> {
 
     fn expr_block(
         &mut self,
-        expr: &'a HirExprBlock,
-        block: &mut Block,
-        function: &mut Function,
-    ) -> Expr {
-        self.block(&expr.exprs, block, function)
+        expr: &'a hir::Typed<hir::ExprBlock<HirTy>>,
+        block: &mut mir::Block,
+        function: &mut mir::Function,
+    ) -> mir::Expr {
+        self.block(&expr.value.exprs, block, function)
     }
 
     fn expr_tuple(
         &mut self,
-        expr: &'a Typed<HirExprTuple>,
-        block: &mut Block,
-        function: &mut Function,
-    ) -> Expr {
+        expr: &'a hir::Typed<hir::ExprTuple<HirTy>>,
+        block: &mut mir::Block,
+        function: &mut mir::Function,
+    ) -> mir::Expr {
         let values = self.expr_list(&expr.value.exprs, block, function);
 
-        Expr::Tuple(ExprTuple {
+        mir::Expr::Tuple(mir::ExprTuple {
             ty: self.lower_ty(&expr.ty),
             values,
         })
@@ -196,13 +159,13 @@ impl<'a> Lowerer<'a> {
 
     fn expr_constructor(
         &mut self,
-        expr: &'a HirExprConstructor,
-        block: &mut Block,
-        function: &mut Function,
-    ) -> Expr {
+        expr: &'a hir::ExprConstructor<HirTy>,
+        block: &mut mir::Block,
+        function: &mut mir::Function,
+    ) -> mir::Expr {
         let ty = &self.hir_program.user_defined_types[&expr.ty.as_user_defined().unwrap()];
         let fields = match &expr.fields {
-            TypedExprConstructorFields::Named(fields) => self.expr_list(
+            hir::ExprConstructorFields::Named(fields) => self.expr_list(
                 fields
                     .iter()
                     .sorted_unstable_by(|(name_1, _), (name_2, _)| {
@@ -215,13 +178,13 @@ impl<'a> Lowerer<'a> {
                 block,
                 function,
             ),
-            TypedExprConstructorFields::Anonymous(fields) => {
+            hir::ExprConstructorFields::Anonymous(fields) => {
                 self.expr_list(fields, block, function)
             }
-            TypedExprConstructorFields::Unit => Vec::new(),
+            hir::ExprConstructorFields::Unit => Vec::new(),
         };
 
-        Expr::Constructor(ExprConstructor {
+        mir::Expr::Constructor(mir::ExprConstructor {
             ty: self.lower_ty(&expr.ty),
             index: expr.variant.as_ref().and_then(|variant| {
                 ty.as_sum()
@@ -235,18 +198,20 @@ impl<'a> Lowerer<'a> {
 
     fn expr_array(
         &mut self,
-        expr: &'a HirExprArray,
-        block: &mut Block,
-        function: &mut Function,
-    ) -> Expr {
-        let array = self.expr_list(&expr.exprs, block, function);
+        expr: &'a hir::Typed<hir::ExprArray<HirTy>>,
+        block: &mut mir::Block,
+        function: &mut mir::Function,
+    ) -> mir::Expr {
+        let array = self.expr_list(&expr.value.exprs, block, function);
         let mut values = Vec::with_capacity(array.len());
         values.extend(array);
-        let value_ty = self.lower_ty(&expr.element_ty);
-        let ty = self
-            .program
-            .insert_type(Type::Array(Rc::clone(&value_ty), expr.exprs.len() as u64));
-        Expr::Array(ExprArray {
+        let (value_ty, _) = expr.ty.as_array().unwrap();
+        let value_ty = self.lower_ty(value_ty);
+        let ty = self.program.insert_type(mir::Type::Array(
+            Arc::clone(&value_ty),
+            expr.value.exprs.len() as u64,
+        ));
+        mir::Expr::Array(mir::ExprArray {
             ty,
             values,
             value_ty,
@@ -255,13 +220,13 @@ impl<'a> Lowerer<'a> {
 
     fn expr_get(
         &mut self,
-        expr: &'a HirExprGet,
-        block: &mut Block,
-        function: &mut Function,
-    ) -> Expr {
-        let object = self.expr(&expr.object.value, block, function);
+        expr: &'a hir::ExprGet<HirTy>,
+        block: &mut mir::Block,
+        function: &mut mir::Function,
+    ) -> mir::Expr {
+        let object = self.expr(&expr.object, block, function);
         let user_defined = expr.object.ty.as_user_defined().unwrap();
-        Expr::Get(ExprGet {
+        mir::Expr::Get(mir::ExprGet {
             object: Box::new(object),
             object_ty: self.lower_ty(&expr.object.ty),
             object_variant: None,
@@ -275,16 +240,16 @@ impl<'a> Lowerer<'a> {
 
     fn expr_set(
         &mut self,
-        expr: &'a HirExprSet,
-        block: &mut Block,
-        function: &mut Function,
-    ) -> Expr {
-        let object = self.expr(&expr.object.value, block, function);
+        expr: &'a hir::ExprSet<HirTy>,
+        block: &mut mir::Block,
+        function: &mut mir::Function,
+    ) -> mir::Expr {
+        let object = self.expr(&expr.object, block, function);
         let user_defined = expr.object.ty.as_user_defined().unwrap();
 
-        let value = self.expr(&expr.value.value, block, function);
+        let value = self.expr(&expr.value, block, function);
 
-        Expr::Set(ExprSet {
+        mir::Expr::Set(mir::ExprSet {
             object: Box::new(object),
             object_ty: self.lower_ty(&expr.object.ty),
             object_variant: None,
@@ -299,68 +264,79 @@ impl<'a> Lowerer<'a> {
 
     fn expr_call(
         &mut self,
-        expr: &'a HirExprCall,
-        block: &mut Block,
-        function: &mut Function,
-    ) -> Expr {
-        let callee = self.expr(&expr.callee.value, block, function);
-        let params = self.expr_list(&expr.args, block, function);
+        expr: &'a hir::ExprCall<HirTy>,
+        block: &mut mir::Block,
+        function: &mut mir::Function,
+    ) -> mir::Expr {
+        let callee = self.expr(&expr.callee, block, function);
+        let positional = self.expr_list(&expr.positional, block, function);
+        let named = expr
+            .named
+            .iter()
+            .map(|(i, e)| (*i, self.expr(e, block, function)))
+            .collect();
 
-        let mut new_params = Vec::with_capacity(params.len());
-        new_params.extend(params.into_iter().map(|expr| (None, expr)));
         let callee_ty = self.lower_ty(&expr.callee.ty);
-        Expr::Call(ExprCall {
+        mir::Expr::Call(mir::ExprCall {
             callee: Box::new(callee),
             callee_ty,
-            args: new_params,
+            positional,
+            named,
         })
     }
 
-    fn expr_cont_application(
+    fn expr_application(
         &mut self,
-        expr: &'a Typed<HirExprContApplication>,
-        block: &mut Block,
-        function: &mut Function,
-    ) -> Expr {
-        let callee = self.expr(&expr.value.callee.value, block, function);
+        expr: &'a hir::Typed<hir::ExprApplication<HirTy>>,
+        block: &mut mir::Block,
+        function: &mut mir::Function,
+    ) -> mir::Expr {
+        let callee = self.expr(&expr.callee, block, function);
 
-        let mut new_continuations = Vec::with_capacity(expr.value.continuations.len());
-        for (ident, expr) in &expr.value.continuations {
+        let new_positional = self.expr_list(&expr.positional, block, function);
+
+        let mut new_named = Vec::with_capacity(expr.named.len());
+        for (ident, expr) in &expr.named {
             let expr = self.expr(expr, block, function);
-            new_continuations.push((*ident, expr));
+            new_named.push((*ident, expr));
         }
 
-        let callee_ty = self.lower_ty(&expr.value.callee.ty);
+        let callee_ty = self.lower_ty(&expr.callee.ty);
         let callee_ty = callee_ty.as_function().unwrap();
-        let storage_ty = UserDefinedType::Product(
-            iter::once(self.lower_ty(&expr.value.callee.ty))
+        let storage_ty = mir::UserDefinedType::Product(
+            iter::once(self.lower_ty(&expr.callee.ty))
                 .chain(
-                    expr.value
-                        .continuations
+                    callee_ty.positional_params[..expr.positional.len()]
+                        .iter()
+                        .cloned(),
+                )
+                .chain(
+                    expr.named
                         .iter()
                         .sorted_unstable_by_key(|(ident, _)| *ident)
-                        .map(|(ident, _)| Rc::clone(&callee_ty.continuations[ident])),
+                        .map(|(ident, _)| Arc::clone(&callee_ty.named_params[ident])),
                 )
                 .collect(),
         );
 
-        Expr::ContApplication(ExprContApplication {
+        mir::Expr::Application(mir::ExprApplication {
             callee: Box::new(callee),
-            callee_ty: self.lower_ty(&expr.value.callee.ty),
-            continuations: new_continuations,
+            callee_ty: self.lower_ty(&expr.callee.ty),
+            positional: new_positional,
+            named: new_named,
             result_ty: self.lower_ty(&expr.ty),
-            storage_ty: self.program.insert_type(Type::UserDefined(storage_ty)),
+            storage_ty: self.program.insert_type(mir::Type::UserDefined(storage_ty)),
         })
     }
 
     fn expr_unary(
         &mut self,
-        expr: &'a HirExprUnary,
-        block: &mut Block,
-        function: &mut Function,
-    ) -> Expr {
-        let operand = self.expr(&expr.right.value, block, function);
-        Expr::Unary(ExprUnary {
+        expr: &'a hir::ExprUnary<HirTy>,
+        block: &mut mir::Block,
+        function: &mut mir::Function,
+    ) -> mir::Expr {
+        let operand = self.expr(&expr.right, block, function);
+        mir::Expr::Unary(mir::ExprUnary {
             operator: expr.op,
             operand: Box::new(operand),
             operand_ty: self.lower_ty(&expr.right.ty),
@@ -369,14 +345,14 @@ impl<'a> Lowerer<'a> {
 
     fn expr_binary(
         &mut self,
-        expr: &'a HirExprBinary,
-        block: &mut Block,
-        function: &mut Function,
-    ) -> Expr {
-        let left = self.expr(&expr.left.value, block, function);
-        let right = self.expr(&expr.right.value, block, function);
+        expr: &'a hir::ExprBinary<HirTy>,
+        block: &mut mir::Block,
+        function: &mut mir::Function,
+    ) -> mir::Expr {
+        let left = self.expr(&expr.left, block, function);
+        let right = self.expr(&expr.right, block, function);
 
-        Expr::Binary(ExprBinary {
+        mir::Expr::Binary(mir::ExprBinary {
             left: Box::new(left),
             left_ty: self.lower_ty(&expr.left.ty),
             operator: expr.op,
@@ -387,16 +363,16 @@ impl<'a> Lowerer<'a> {
 
     fn expr_declare(
         &mut self,
-        expr: &'a HirExprDeclare,
-        block: &mut Block,
-        function: &mut Function,
-    ) -> Expr {
+        expr: &'a hir::ExprDeclare<HirTy>,
+        block: &mut mir::Block,
+        function: &mut mir::Function,
+    ) -> mir::Expr {
         let right = self.expr(&expr.expr, block, function);
 
         function
             .declarations
             .insert(expr.ident, (self.lower_ty(&expr.ty), None));
-        Expr::Assign(ExprAssign {
+        mir::Expr::Assign(mir::ExprAssign {
             ident: expr.ident,
             expr: Box::new(right),
         })
@@ -404,38 +380,34 @@ impl<'a> Lowerer<'a> {
 
     fn expr_assign(
         &mut self,
-        expr: &'a HirExprAssign,
-        block: &mut Block,
-        function: &mut Function,
-    ) -> Expr {
+        expr: &'a hir::ExprAssign<HirTy>,
+        block: &mut mir::Block,
+        function: &mut mir::Function,
+    ) -> mir::Expr {
         let right = self.expr(&expr.expr, block, function);
 
-        Expr::Assign(ExprAssign {
+        mir::Expr::Assign(mir::ExprAssign {
             ident: expr.ident,
             expr: Box::new(right),
         })
     }
 
-    #[expect(
-        clippy::iter_on_empty_collections,
-        reason = "must be an empty slice to typecheck"
-    )]
     fn order_destructure_fields<'b>(
-        fields: &'b DestructureFields,
-        ty: &'b HirUserDefinedType,
+        fields: &'b hir::DestructureFields,
+        ty: &'b hir::UserDefinedType,
         variant: Option<&str>,
-    ) -> impl Iterator<Item = &'b Pattern> {
+    ) -> impl Iterator<Item = &'b hir::Pattern> + use<'b> {
         enum Iter<'a> {
             Named {
-                fields: &'a [(String, Pattern)],
+                fields: &'a [(String, hir::Pattern)],
                 pos: usize,
-                ty: &'a [(String, Rc<HirType>)],
+                ty: &'a [(String, Arc<hir::Type>)],
             },
-            Anonymous(slice::Iter<'a, Pattern>),
+            Anonymous(slice::Iter<'a, hir::Pattern>),
         }
 
         impl<'a> Iterator for Iter<'a> {
-            type Item = &'a Pattern;
+            type Item = &'a hir::Pattern;
 
             fn next(&mut self) -> Option<Self::Item> {
                 match *self {
@@ -461,31 +433,31 @@ impl<'a> Lowerer<'a> {
         }
 
         match fields {
-            DestructureFields::Named(fields) => Iter::Named {
+            hir::DestructureFields::Named(fields) => Iter::Named {
                 fields,
                 pos: 0,
                 ty: ty.fields(variant).unwrap().as_named().unwrap(),
             },
-            DestructureFields::Anonymous(fields) => Iter::Anonymous(fields.iter()),
-            DestructureFields::Unit => Iter::Anonymous([].iter()),
+            hir::DestructureFields::Anonymous(fields) => Iter::Anonymous(fields.iter()),
+            hir::DestructureFields::Unit => Iter::Anonymous([].iter()),
         }
     }
 
     fn pattern(
         &mut self,
-        scrutinee: (&Expr, Rc<Type>),
-        arm_pat: &Pattern,
-        arm_block: &mut Block,
-        arm_block_id: BlockId,
-        otherwise: BlockId,
-        function: &mut Function,
+        scrutinee: (&mir::Expr, Arc<mir::Type>),
+        arm_pat: &hir::Pattern,
+        arm_block: &mut mir::Block,
+        arm_block_id: mir::BlockId,
+        otherwise: mir::BlockId,
+        function: &mut mir::Function,
     ) -> ArmData {
         let (scrutinee, scrutinee_ty) = scrutinee;
 
         match *arm_pat {
-            Pattern::Wildcard => ArmData::Wildcard,
-            Pattern::Ident(ident) => {
-                let binding = Expr::Assign(ExprAssign {
+            hir::Pattern::Wildcard => ArmData::Wildcard,
+            hir::Pattern::Ident(ident) => {
+                let binding = mir::Expr::Assign(mir::ExprAssign {
                     ident,
                     expr: Box::new(scrutinee.clone()),
                 });
@@ -493,7 +465,7 @@ impl<'a> Lowerer<'a> {
                 arm_block.exprs.push(binding);
                 ArmData::Wildcard
             }
-            Pattern::Destructure {
+            hir::Pattern::Destructure {
                 ref ty,
                 ref variant,
                 ref fields,
@@ -503,17 +475,17 @@ impl<'a> Lowerer<'a> {
                 for (field, pattern) in
                     Self::order_destructure_fields(fields, ty, variant.as_deref()).enumerate()
                 {
-                    let get = Expr::Get(ExprGet {
+                    let get = mir::Expr::Get(mir::ExprGet {
                         object: Box::new(scrutinee.clone()),
-                        object_ty: Rc::clone(&scrutinee_ty),
+                        object_ty: Arc::clone(&scrutinee_ty),
                         object_variant: variant_index,
                         field,
                     });
                     let field_ty_ref = scrutinee_ty.field(variant_index, field).unwrap();
-                    let mut new_block = Block::new();
+                    let mut new_block = mir::Block::new();
                     let new_block_id = function.block();
                     match self.pattern(
-                        (&get, Rc::clone(&field_ty_ref)),
+                        (&get, Arc::clone(&field_ty_ref)),
                         pattern,
                         &mut new_block,
                         new_block_id,
@@ -527,12 +499,12 @@ impl<'a> Lowerer<'a> {
                             variant,
                             block: switch_arm_id,
                         }) => {
-                            let discriminant = Expr::Intrinsic(ExprIntrinsic {
+                            let discriminant = mir::Expr::Intrinsic(mir::ExprIntrinsic {
                                 intrinsic: Intrinsic::Discriminant,
                                 values: vec![(get, field_ty_ref)],
                             });
                             let arms = iter::once((variant as i64, switch_arm_id));
-                            let switch = Expr::Switch(ExprSwitch {
+                            let switch = mir::Expr::Switch(mir::ExprSwitch {
                                 scrutinee: Box::new(discriminant),
                                 arms: arms.collect(),
                                 otherwise,
@@ -556,18 +528,18 @@ impl<'a> Lowerer<'a> {
 
     fn expr_match(
         &mut self,
-        expr: &'a HirExprMatch,
-        block: &mut Block,
-        function: &mut Function,
-    ) -> Expr {
-        let scrutinee = self.expr(&expr.scrutinee.value, block, function);
+        expr: &'a hir::ExprMatch<HirTy>,
+        block: &mut mir::Block,
+        function: &mut mir::Function,
+    ) -> mir::Expr {
+        let scrutinee = self.expr(&expr.scrutinee, block, function);
 
         let mut discriminants = vec![];
         let otherwise = function.block();
         let next_id = function.block();
 
         for (arm_pat, arm) in &expr.arms {
-            let mut arm_block = Block::new();
+            let mut arm_block = mir::Block::new();
             let mut arm_block_id = function.block();
 
             let scrutinee_ty = self.lower_ty(&expr.scrutinee.ty);
@@ -594,7 +566,7 @@ impl<'a> Lowerer<'a> {
 
             let arm = self.expr(arm, &mut arm_block, function);
             arm_block.exprs.push(arm);
-            let goto = Expr::Goto(ExprGoto { block: next_id });
+            let goto = mir::Expr::Goto(mir::ExprGoto { block: next_id });
             arm_block.exprs.push(goto);
 
             function.blocks.insert(arm_block_id, arm_block);
@@ -604,28 +576,30 @@ impl<'a> Lowerer<'a> {
             }
         }
 
-        let current_block = mem::replace(block, Block::new());
+        let current_block = mem::replace(block, mir::Block::new());
         function.blocks.insert(self.current_block, current_block);
         self.current_block = next_id;
 
         let scrutinee = if discriminants.is_empty() {
             scrutinee
         } else {
-            Expr::Intrinsic(ExprIntrinsic {
+            mir::Expr::Intrinsic(mir::ExprIntrinsic {
                 intrinsic: Intrinsic::Discriminant,
                 values: vec![(scrutinee.clone(), self.lower_ty(&expr.scrutinee.ty))],
             })
         };
 
         if let Entry::Vacant(entry) = function.blocks.entry(otherwise) {
-            let mut otherwise_block = Block::new();
-            otherwise_block.exprs.push(Expr::Intrinsic(ExprIntrinsic {
-                intrinsic: Intrinsic::Unreachable,
-                values: vec![],
-            }));
+            let mut otherwise_block = mir::Block::new();
+            otherwise_block
+                .exprs
+                .push(mir::Expr::Intrinsic(mir::ExprIntrinsic {
+                    intrinsic: Intrinsic::Unreachable,
+                    values: vec![],
+                }));
             entry.insert(otherwise_block);
         }
-        Expr::Switch(ExprSwitch {
+        mir::Expr::Switch(mir::ExprSwitch {
             scrutinee: Box::new(scrutinee),
             arms: discriminants
                 .iter()
@@ -635,7 +609,7 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    fn expr_closure(&mut self, expr: &HirExprClosure) -> Expr {
+    fn expr_closure(&mut self, expr: &hir::ExprClosure) -> mir::Expr {
         let func = &self.hir_program.functions[&expr.func];
         let captures: Vec<_> = func.captures.iter().copied().sorted_unstable().collect();
 
@@ -644,136 +618,140 @@ impl<'a> Lowerer<'a> {
             Some(
                 &captures
                     .iter()
-                    .map(|ident| (*ident, Rc::clone(&self.environment[ident])))
+                    .map(|ident| (*ident, Arc::clone(&self.environment[ident])))
                     .collect_vec(),
             ),
         );
         self.program.functions.insert(expr.func, func);
 
-        let storage_ty = UserDefinedType::Product(
+        let storage_ty = mir::UserDefinedType::Product(
             captures
                 .iter()
-                .map(|ident| Rc::clone(&self.environment[ident]))
+                .map(|ident| Arc::clone(&self.environment[ident]))
                 .collect(),
         );
 
         let func_ref = expr.func;
-        Expr::Closure(ExprClosure {
+        mir::Expr::Closure(mir::ExprClosure {
             func_ref,
             captures,
-            storage_ty: self.program.insert_type(Type::UserDefined(storage_ty)),
+            storage_ty: self.program.insert_type(mir::Type::UserDefined(storage_ty)),
         })
     }
 
     fn expr_intrinsic(
         &mut self,
-        expr: &'a HirExprIntrinsic,
-        block: &mut Block,
-        function: &mut Function,
-    ) -> Expr {
-        Expr::Intrinsic(ExprIntrinsic {
+        expr: &'a hir::ExprIntrinsic<HirTy>,
+        block: &mut mir::Block,
+        function: &mut mir::Function,
+    ) -> mir::Expr {
+        mir::Expr::Intrinsic(mir::ExprIntrinsic {
             intrinsic: expr.intrinsic,
             values: expr
                 .values
                 .iter()
-                .map(|expr| {
-                    (
-                        self.expr(&expr.value, block, function),
-                        self.lower_ty(&expr.ty),
-                    )
-                })
+                .map(|expr| (self.expr(expr, block, function), self.lower_ty(&expr.ty)))
                 .collect(),
         })
     }
 
-    fn expr(&mut self, expr: &'a HirExpr, block: &mut Block, function: &mut Function) -> Expr {
+    fn expr(
+        &mut self,
+        expr: &'a hir::Expr<HirTy>,
+        block: &mut mir::Block,
+        function: &mut mir::Function,
+    ) -> mir::Expr {
         match expr {
-            HirExpr::Literal(lit) => Expr::Literal(ExprLiteral {
+            hir::Expr::Literal(lit) => mir::Expr::Literal(mir::ExprLiteral {
                 literal: lit.clone(),
             }),
-            HirExpr::Ident(ident) => Expr::Ident(ExprIdent { ident: *ident }),
-            HirExpr::Function(func_ref) => Expr::Function(ExprFunction {
+            hir::Expr::Ident(ident) => mir::Expr::Ident(mir::ExprIdent {
+                ident: ident.ident.value,
+            }),
+            hir::Expr::Function(func_ref) => mir::Expr::Function(mir::ExprFunction {
                 function: *func_ref,
             }),
-            HirExpr::Block(expr) => self.expr_block(&expr.value, block, function),
-            HirExpr::Tuple(expr) => self.expr_tuple(expr, block, function),
-            HirExpr::Constructor(expr) => self.expr_constructor(expr, block, function),
-            HirExpr::Array(expr) => self.expr_array(expr, block, function),
-            HirExpr::Get(expr) => self.expr_get(expr, block, function),
-            HirExpr::Set(expr) => self.expr_set(expr, block, function),
-            HirExpr::Call(expr) => self.expr_call(expr, block, function),
-            HirExpr::ContApplication(expr) => self.expr_cont_application(expr, block, function),
-            HirExpr::Unary(expr) => self.expr_unary(expr, block, function),
-            HirExpr::Binary(expr) => self.expr_binary(expr, block, function),
-            HirExpr::Declare(expr) => self.expr_declare(expr, block, function),
-            HirExpr::Assign(expr) => self.expr_assign(expr, block, function),
-            HirExpr::Match(expr) => self.expr_match(&expr.value, block, function),
-            HirExpr::Closure(expr) => self.expr_closure(expr),
-            HirExpr::Intrinsic(expr) => self.expr_intrinsic(expr, block, function),
+            hir::Expr::Block(expr) => self.expr_block(expr, block, function),
+            hir::Expr::Tuple(expr) => self.expr_tuple(expr, block, function),
+            hir::Expr::Constructor(expr) => self.expr_constructor(expr, block, function),
+            hir::Expr::Array(expr) => self.expr_array(expr, block, function),
+            hir::Expr::Get(expr) => self.expr_get(expr, block, function),
+            hir::Expr::Set(expr) => self.expr_set(expr, block, function),
+            hir::Expr::Call(expr) => self.expr_call(expr, block, function),
+            hir::Expr::Application(expr) => self.expr_application(expr, block, function),
+            hir::Expr::Unary(expr) => self.expr_unary(expr, block, function),
+            hir::Expr::Binary(expr) => self.expr_binary(expr, block, function),
+            hir::Expr::Declare(expr) => self.expr_declare(expr, block, function),
+            hir::Expr::Assign(expr) => self.expr_assign(expr, block, function),
+            hir::Expr::Match(expr) => self.expr_match(expr, block, function),
+            hir::Expr::Closure(expr) => self.expr_closure(expr),
+            hir::Expr::Intrinsic(expr) => self.expr_intrinsic(expr, block, function),
         }
     }
 
-    fn captures(&mut self, captures: &[(Ident, Rc<Type>)]) -> ClosureCaptures {
-        let storage_ty = UserDefinedType::Product(
+    fn captures(&mut self, captures: &[(Ident, Arc<mir::Type>)]) -> mir::ClosureCaptures {
+        let storage_ty = mir::UserDefinedType::Product(
             captures
                 .iter()
                 .sorted_unstable_by_key(|(ident, _)| *ident)
-                .map(|(_, ty)| Rc::clone(ty))
+                .map(|(_, ty)| Arc::clone(ty))
                 .collect(),
         );
-        ClosureCaptures {
+        mir::ClosureCaptures {
             captures: captures
                 .iter()
                 .map(|(ident, _)| *ident)
                 .sorted_unstable()
                 .collect(),
 
-            storage_ty: self.program.insert_type(Type::UserDefined(storage_ty)),
+            storage_ty: self.program.insert_type(mir::Type::UserDefined(storage_ty)),
         }
     }
 
     fn function(
         &mut self,
-        function: &'a HirFunction<HirExpr>,
-        captures: Option<&[(Ident, Rc<Type>)]>,
-    ) -> Function {
-        let mut mir_function = Function::new(function.name.clone());
-        mir_function.params.reserve(function.params.len());
-        for (param, ty) in &function.params {
-            mir_function.params.push((*param, self.lower_ty(ty)));
-        }
+        function: &'a hir::Function<HirTy>,
+        captures: Option<&[(Ident, Arc<mir::Type>)]>,
+    ) -> mir::Function {
+        let mut mir_function = mir::Function::new(function.name.clone());
         mir_function
-            .continuations
-            .reserve(function.continuations.len());
-        for (&param, ty) in &function.continuations {
-            mir_function.continuations.insert(param, self.lower_ty(ty));
+            .positional_params
+            .reserve(function.positional.len());
+        for (param, ty) in &function.positional {
+            mir_function
+                .positional_params
+                .push((*param, self.lower_ty(ty)));
+        }
+        mir_function.named_params.reserve(function.named.len());
+        for (&param, ty) in &function.named {
+            mir_function.named_params.insert(param, self.lower_ty(ty));
         }
 
         self.environment.clear();
 
         if let Some(captures) = captures {
             self.environment
-                .extend(captures.iter().map(|(ident, ty)| (*ident, Rc::clone(ty))));
+                .extend(captures.iter().map(|(ident, ty)| (*ident, Arc::clone(ty))));
             mir_function.declarations.extend(
                 captures
                     .iter()
-                    .map(|(ident, ty)| (*ident, (Rc::clone(ty), None))),
+                    .map(|(ident, ty)| (*ident, (Arc::clone(ty), None))),
             );
             mir_function.captures = Some(self.captures(captures));
         }
 
         for (&param, ty) in mir_function
-            .params
+            .positional_params
             .iter()
             .map(|(param, ty)| (param, ty))
-            .chain(&mir_function.continuations)
+            .chain(&mir_function.named_params)
         {
-            self.environment.insert(param, Rc::clone(ty));
+            self.environment.insert(param, Arc::clone(ty));
         }
 
-        self.current_block = Function::entry_point();
+        self.current_block = mir::Function::entry_point();
 
-        let mut block = Block::new();
+        let mut block = mir::Block::new();
         let body = self.block(&function.body, &mut block, &mut mir_function);
         block.exprs.push(body);
         mir_function.blocks.insert(self.current_block, block);
@@ -781,11 +759,11 @@ impl<'a> Lowerer<'a> {
         mir_function
     }
 
-    fn lower(program: &'a HirProgram<HirExpr>) -> Program {
+    fn lower(program: &'a hir::Program<HirTy>) -> mir::Program {
         let mut lowerer = Lowerer {
-            program: Program::new(program),
+            program: mir::Program::new(program),
             environment: HashMap::new(),
-            current_block: Function::entry_point(),
+            current_block: mir::Function::entry_point(),
             hir_program: program,
             types: HashMap::new(),
         };
@@ -807,6 +785,7 @@ impl<'a> Lowerer<'a> {
     }
 }
 
-pub fn lower(program: &HirProgram<HirExpr>) -> Program {
+#[inline]
+pub fn lower(program: &hir::Program<HirTy>) -> mir::Program {
     Lowerer::lower(program)
 }

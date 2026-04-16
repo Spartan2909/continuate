@@ -14,16 +14,12 @@ struct Args {
     source: PathBuf,
 }
 
-fn fold_errors(errors: impl IntoIterator<Item = Error>) -> Option<Error> {
-    errors.into_iter().reduce(|acc, err| acc.combine(err))
-}
-
-fn main() {
+fn main() -> anyhow::Result<()> {
     continuate_rt::init_tracing(LevelFilter::DEBUG).expect("failed to instantiate logger");
 
     let args = Args::parse();
 
-    let input = std::fs::read_to_string(&args.source).unwrap();
+    let input = std::fs::read_to_string(&args.source)?;
 
     let program_name = args
         .source
@@ -41,10 +37,13 @@ fn main() {
         continuate_frontend::parse(&tokens, source_cache.eof(source_id).unwrap(), &program_name)
             .into_output_errors();
 
-    let error = fold_errors(lex_errors.into_iter().chain(parse_errors));
+    let error = lex_errors
+        .into_iter()
+        .chain(parse_errors)
+        .reduce(Error::combine);
     if let Some(error) = error {
-        error.eprint(&source_cache).unwrap();
-        panic!("failed due to above error");
+        error.eprint(&source_cache)?;
+        return Err(anyhow::anyhow!("failed due to above error"));
     }
 
     let ast = ast.unwrap();
@@ -53,7 +52,13 @@ fn main() {
 
     let program = continuate_ir::high_level_ir::lower(&ast, name_map, program_name);
 
-    let program = typeck(&program).unwrap();
+    let program = match typeck(&program) {
+        Ok(x) => x,
+        Err(e) => {
+            e.eprint(&source_cache)?;
+            return Err(anyhow::anyhow!("failed due to above error"));
+        }
+    };
 
     let mut mir_program = mid_level_ir::lower(&program);
 
@@ -61,5 +66,7 @@ fn main() {
 
     continuate_ir::mid_level_ir::run_passes(&mut mir_program, true);
 
-    continuate_backend::jit_compile(mir_program).run();
+    continuate_backend::jit::compile(mir_program).run();
+
+    Ok(())
 }
