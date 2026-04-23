@@ -35,7 +35,7 @@
             cargoExtraArgs = "-p continuate-rt";
           };
         };
-        crane.shell.args.packages = [ pkgs.bacon ];
+        crane.shell.args.packages = with pkgs; [ bacon cargo-deny ];
       };
     };
 }
