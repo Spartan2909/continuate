@@ -308,6 +308,7 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
             kind: StackSlotKind::ExplicitSlot,
             size: layout.size.try_into().unwrap(),
             align_shift: 3,
+            key: None,
         };
         let stack_slot = self.builder.create_sized_stack_slot(stack_slot_data);
 
@@ -369,6 +370,7 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
             kind: StackSlotKind::ExplicitSlot,
             size: size.try_into().unwrap(),
             align_shift: 3,
+            key: None,
         };
         let stack_slot = self.builder.create_sized_stack_slot(stack_slot_data);
 
@@ -806,8 +808,8 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
     /// This method does not finalise or verify the function, or define it in the module.
     pub(super) fn compile(mut self) {
         for (param, param_ty) in self.params {
-            let var = self.variable(*param);
-            self.builder.declare_var(var, ty_for(param_ty, self.triple));
+            let var = self.builder.declare_var(ty_for(param_ty, self.triple));
+            self.variables.insert(*param, var);
             self.vars.insert(*param, (param_ty, true));
         }
 
@@ -822,8 +824,8 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         }
 
         for (&ident, (var_ty, initialiser)) in &self.mir_function.declarations {
-            let var = self.variable(ident);
-            self.builder.declare_var(var, ty_for(var_ty, self.triple));
+            let var = self.builder.declare_var(ty_for(var_ty, self.triple));
+            self.variables.insert(ident, var);
 
             if let Some(initialiser) = initialiser {
                 let value = self.literal(initialiser);

@@ -33,11 +33,10 @@ fn spacing<'src>(lex: &Lexer<'src, Token<'src>>) -> Spacing {
 
 #[derive(Debug, Clone, Copy, PartialEq, Logos)]
 #[logos(error = Error)]
-#[logos(skip r"[ \t\n]+")]
+#[logos(skip(r"//.*\n|[ \t\n]+", allow_greedy = true))]
 pub enum Token<'src> {
-    #[regex(r"//[^\n]+", logos::skip)]
-    Comment,
-
+    // #[regex(r"//.*\n", logos::skip)]
+    // Comment,
     #[token("enum")]
     Enum,
     #[token("fn")]
@@ -126,8 +125,7 @@ impl fmt::Display for Token<'_> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            Token::Comment => f.write_str("<comment>\n"),
-
+            // Token::Comment => f.write_str("<comment>\n"),
             Token::Enum => f.write_str("enum"),
             Token::Fn => f.write_str("fn"),
             Token::If => f.write_str("if"),

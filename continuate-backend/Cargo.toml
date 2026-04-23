@@ -6,13 +6,13 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-bumpalo = "3.17.0"
+bumpalo = "3.20.2"
 continuate-ir.workspace = true
 continuate-rt.workspace = true
-cranelift = { version = "0.119.0", features = ["jit", "module", "object"] }
+cranelift = { version = "0.131.0", features = ["jit", "module", "object"] }
 itertools.workspace = true
 tracing.workspace = true
-target-lexicon = "0.13.2" # Must be matched to cranelift-codegen/dep:target-lexicon
+target-lexicon = "0.13.5" # Must be matched to cranelift-frontend/dep:target-lexicon
 
 [lints]
 workspace = true

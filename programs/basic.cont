@@ -4,6 +4,7 @@ fn sum(left: int, right: int, @ret: fn(int)) {
 }
 
 fn main(@ret: fn(int)) {
-    let x = sum(@ret);
-    x(3, 7)
+    // does some stuff ig
+    let x = sum(3);
+    x(7, @ret)
 }

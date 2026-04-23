@@ -66,7 +66,8 @@ fn main() -> anyhow::Result<()> {
 
     continuate_ir::mid_level_ir::run_passes(&mut mir_program, true);
 
-    continuate_backend::jit::compile(mir_program).run();
+    let res = continuate_backend::jit::compile(mir_program).run();
+    println!("out: {res}");
 
     Ok(())
 }
