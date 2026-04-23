@@ -25,8 +25,12 @@ static I64_BOX_LAYOUT: TyLayout = TyLayout::Single(SingleLayout {
 ///
 /// - The returned value must not be used after it is collected.
 unsafe fn alloc_value<'a, T: 'a>(layout: &'static TyLayout<'static>, value: T) -> NonNull<T> {
+    let stack_frame = StackFrame {
+        return_address: 0,
+        stack_pointer: &(),
+    };
     // SAFETY: `I64_LAYOUT` is valid.
-    let ptr: NonNull<T> = unsafe { alloc_gc(layout).cast() };
+    let ptr: NonNull<T> = unsafe { alloc_gc(layout, &stack_frame).cast() };
     // SAFETY: `ptr` has just been allocated
     unsafe {
         ptr.write(value);
@@ -59,11 +63,6 @@ fn link() {
 
     // SAFETY: `I64_BOX_LAYOUT` is valid.
     let x_box = unsafe { alloc_value(&I64_BOX_LAYOUT, I64Box(x)) };
-
-    // SAFETY: `x` is a valid marked, garbage-collected pointer.
-    unsafe {
-        unmark_root(x.cast());
-    }
 
     // SAFETY: `x` must be valid.
     unsafe {

@@ -1,6 +1,6 @@
 [package]
 name = "continuate-backend"
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
@@ -9,10 +9,14 @@ rust-version.workspace = true
 bumpalo = "3.20.2"
 continuate-ir.workspace = true
 continuate-rt.workspace = true
-cranelift = { version = "0.131.0", features = ["jit", "module", "object"] }
+cranelift = { version = "0.131.0", features = ["module"] }
 itertools.workspace = true
 tracing.workspace = true
 target-lexicon = "0.13.5" # Must be matched to cranelift-frontend/dep:target-lexicon
+
+[features]
+jit = ["cranelift/jit"]
+object = ["cranelift/object"]
 
 [lints]
 workspace = true

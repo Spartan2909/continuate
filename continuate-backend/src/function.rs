@@ -1,16 +1,9 @@
 use crate::{
-    Callable, dangling_static_ptr, declare_static, fat_ptr, fat_ptr_ty, ptr_ty,
-    signature_from_function_ty, storage::Storage, ty_for, ty_ref_size_align_ptr,
+    BoxedModuleError, Callable, ModuleResult, dangling_static_ptr, declare_static, fat_ptr_ty,
+    ptr_ty, signature_from_function_ty, storage::Storage, ty_for, ty_ref_size_align_ptr,
 };
 
-use std::{
-    collections::{HashMap, hash_map::Entry},
-    iter,
-    sync::{
-        Arc,
-        atomic::{AtomicU32, Ordering},
-    },
-};
+use std::{collections::HashMap, iter, sync::Arc};
 
 use continuate_ir::{
     common::{BinaryOp, FuncRef, Ident, Intrinsic, Literal, UnaryOp},
@@ -45,20 +38,11 @@ use itertools::Itertools as _;
 use target_lexicon::Triple;
 
 pub(super) struct FunctionRuntime {
-    /// `fn(ty_layout: &'static TyLayout<'static>) -> *mut ()`
+    /// `fn(ty_layout: &'static TyLayout<'static>, &StackMap, *const stack) -> *mut ()`
     pub(super) alloc_gc: ir::FuncRef,
 
-    /// `fn(len: usize) -> *mut ()`
+    /// `fn(len: usize, &StackMap, *const stack) -> *mut ()`
     pub(super) alloc_string: ir::FuncRef,
-
-    /// `fn(ptr: *const ())`
-    pub(super) mark_root: ir::FuncRef,
-
-    /// `fn()`
-    pub(super) clear_temp_roots: ir::FuncRef,
-
-    /// `fn(ptr: *const ())`
-    pub(super) unmark_root: ir::FuncRef,
 }
 
 macro_rules! match_ty {
@@ -71,6 +55,19 @@ macro_rules! match_ty {
         }
     };
 }
+
+enum ExprError {
+    Module(BoxedModuleError),
+    NoValue,
+}
+
+impl From<BoxedModuleError> for ExprError {
+    fn from(value: BoxedModuleError) -> Self {
+        ExprError::Module(value)
+    }
+}
+
+type Result<T, E = ExprError> = std::result::Result<T, E>;
 
 pub(super) struct FunctionCompilerBuilder<'function, 'builder, M: ?Sized> {
     pub(super) module: &'function mut M,
@@ -155,40 +152,20 @@ fn get(
     )
 }
 
+const fn is_ptr(ty: &MirType) -> bool {
+    match ty {
+        MirType::Bool | MirType::Int | MirType::Float | MirType::Unknown | MirType::None => false,
+        MirType::String
+        | MirType::Array(_, _)
+        | MirType::Tuple(_)
+        | MirType::Function(_)
+        | MirType::UserDefined(_) => true,
+    }
+}
+
 impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
-    fn variable(&mut self, ident: Ident) -> Variable {
-        static NEXT: AtomicU32 = AtomicU32::new(0);
-
-        match self.variables.entry(ident) {
-            Entry::Occupied(entry) => *entry.get(),
-            Entry::Vacant(entry) => {
-                let variable = NEXT.fetch_add(1, Ordering::Relaxed);
-                assert_ne!(variable, u32::MAX, "variable overflow");
-                entry.insert(Variable::from_u32(variable));
-                Variable::from_u32(variable)
-            }
-        }
-    }
-
     fn fat_ptr(&mut self, thin_ptr: Value, metadata: Value) -> Value {
-        super::fat_ptr(thin_ptr, metadata, self.triple, self.builder)
-    }
-
-    fn value_ptr(&mut self, value: Value, ty: &MirType) -> Option<Value> {
-        if !ty.is_primitive() {
-            Some(value)
-        } else if *ty == MirType::String {
-            let str_ptr = fat_ptr_addr(value, self.builder, self.triple);
-            Some(str_ptr)
-        } else {
-            None
-        }
-    }
-
-    fn clear_temp_roots(&mut self) {
-        self.builder
-            .ins()
-            .call(self.function_runtime.clear_temp_roots, &[]);
+        crate::fat_ptr(thin_ptr, metadata, self.triple, self.builder)
     }
 
     fn alloc_gc(&mut self, ty: &MirType) -> Value {
@@ -201,14 +178,17 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
             .ins()
             .global_value(ptr_ty(self.triple), ty_layout);
 
+        let sp = self.builder.ins().get_stack_pointer(ptr_ty(self.triple));
         let call_result = self
             .builder
             .ins()
-            .call(self.function_runtime.alloc_gc, &[ty_layout]);
+            .call(self.function_runtime.alloc_gc, &[ty_layout, sp]);
         let values = self.builder.inst_results(call_result);
-        debug_assert_eq!(values.len(), 1);
+        let value = values[0];
 
-        values[0]
+        self.builder.declare_value_needs_stack_map(value);
+
+        value
     }
 
     fn closure<'a>(
@@ -216,7 +196,7 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         func_ref: cranelift::codegen::ir::entities::FuncRef,
         captures: impl IntoIterator<Item = &'a Expr>,
         storage_ty: &MirType,
-    ) -> Option<Value> {
+    ) -> Result<Value> {
         let layout = self
             .ty_layouts
             .get(storage_ty)
@@ -226,22 +206,24 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
             .unwrap();
         let storage = self.compound_ty(storage_ty, layout, captures)?;
         let function_ptr = self.builder.ins().func_addr(ptr_ty(self.triple), func_ref);
-        Some(fat_ptr(function_ptr, storage, self.triple, self.builder))
+        let value = self.fat_ptr(storage, function_ptr);
+        self.builder.declare_value_needs_stack_map(value);
+        Ok(value)
     }
 
-    fn literal(&mut self, literal: &Literal) -> Value {
+    fn literal(&mut self, literal: &Literal) -> ModuleResult<Value> {
         match *literal {
-            Literal::Int(n) => self.builder.ins().iconst(types::I64, n),
-            Literal::Float(n) => self.builder.ins().f64const(n),
+            Literal::Int(n) => Ok(self.builder.ins().iconst(types::I64, n)),
+            Literal::Float(n) => Ok(self.builder.ins().f64const(n)),
             Literal::String(ref string) => self.expr_literal_string(string),
         }
     }
 
-    fn expr_literal(&mut self, expr: &ExprLiteral) -> Value {
-        self.literal(&expr.literal)
+    fn expr_literal(&mut self, expr: &ExprLiteral) -> Result<Value> {
+        Ok(self.literal(&expr.literal)?)
     }
 
-    fn expr_literal_string(&mut self, string: &str) -> Value {
+    fn expr_literal_string(&mut self, string: &str) -> ModuleResult<Value> {
         let mut contents = Vec::with_capacity(string.len() + 1);
         contents.extend(string.as_bytes().iter().copied());
         contents.push(0);
@@ -251,21 +233,22 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
             None,
             self.module,
             self.data_description,
-        )
-        .unwrap_or_else(|| {
-            dangling_static_ptr(None, self.module, self.data_description, self.triple)
-        });
+        )?
+        .map_or_else(
+            || dangling_static_ptr(None, self.module, self.data_description, self.triple),
+            Ok,
+        )?;
 
         let len = self
             .builder
             .ins()
             .iconst(ptr_ty(self.triple), string.len() as i64 + 1);
+        let sp = self.builder.ins().get_stack_pointer(ptr_ty(self.triple));
         let call_result = self
             .builder
             .ins()
-            .call(self.function_runtime.alloc_string, &[len]);
+            .call(self.function_runtime.alloc_string, &[len, sp]);
         let values = self.builder.inst_results(call_result);
-        debug_assert_eq!(values.len(), 1);
 
         let dest_ptr = values[0];
 
@@ -287,7 +270,11 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
             .ins()
             .iconst(ptr_ty(self.triple), string.len() as i64);
 
-        self.fat_ptr(dest_ptr, size)
+        let value = self.fat_ptr(dest_ptr, size);
+
+        self.builder.declare_value_needs_stack_map(value);
+
+        Ok(value)
     }
 
     fn expr_function(&mut self, expr: &ExprFunction) -> Value {
@@ -295,7 +282,7 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
         let function_ptr = self.builder.ins().func_addr(ptr_ty(self.triple), func_ref);
         let metadata = self.builder.ins().iconst(ptr_ty(self.triple), 0);
-        self.fat_ptr(function_ptr, metadata)
+        self.fat_ptr(metadata, function_ptr)
     }
 
     fn compound_ty<'a>(
@@ -303,7 +290,7 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         ty: &MirType,
         layout: &SingleLayout,
         values: impl IntoIterator<Item = &'a Expr>,
-    ) -> Option<Value> {
+    ) -> Result<Value> {
         let stack_slot_data = StackSlotData {
             kind: StackSlotKind::ExplicitSlot,
             size: layout.size.try_into().unwrap(),
@@ -336,15 +323,15 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         self.builder
             .call_memcpy(self.module.target_config(), dest_ptr, src_ptr, size);
 
-        Some(dest_ptr)
+        Ok(dest_ptr)
     }
 
-    fn expr_tuple(&mut self, expr: &ExprTuple) -> Option<Value> {
+    fn expr_tuple(&mut self, expr: &ExprTuple) -> Result<Value> {
         let layout = self.ty_layouts[&expr.ty].0.as_single().unwrap();
         self.compound_ty(&expr.ty, layout, &expr.values)
     }
 
-    fn expr_constructor(&mut self, expr: &ExprConstructor) -> Option<Value> {
+    fn expr_constructor(&mut self, expr: &ExprConstructor) -> Result<Value> {
         let layout = self.ty_layouts[&expr.ty].0;
         if let Some(index) = expr.index {
             let layout = &layout.as_sum().unwrap()[index];
@@ -362,8 +349,8 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         }
     }
 
-    fn expr_array(&mut self, expr: &ExprArray) -> Option<Value> {
-        let (value_size, _, _) = ty_ref_size_align_ptr(&expr.value_ty);
+    fn expr_array(&mut self, expr: &ExprArray) -> Result<Value> {
+        let (value_size, _, _) = ty_ref_size_align_ptr(&expr.value_ty, self.triple);
         let size = value_size * expr.values.len() as u64;
 
         let stack_slot_data = StackSlotData {
@@ -394,7 +381,7 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         self.builder
             .call_memcpy(self.module.target_config(), dest_ptr, src_ptr, size);
 
-        Some(dest_ptr)
+        Ok(dest_ptr)
     }
 
     fn field_information<'a>(
@@ -415,11 +402,11 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         }
     }
 
-    fn expr_get(&mut self, expr: &ExprGet) -> Option<Value> {
+    fn expr_get(&mut self, expr: &ExprGet) -> Result<Value> {
         let object = self.expr(&expr.object)?;
         let (layout, field_ty) =
             self.field_information(&expr.object_ty, expr.object_variant, expr.field);
-        Some(get(
+        Ok(get(
             self.builder,
             self.triple,
             object,
@@ -429,7 +416,7 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         ))
     }
 
-    fn expr_set(&mut self, expr: &ExprSet) -> Option<Value> {
+    fn expr_set(&mut self, expr: &ExprSet) -> Result<Value> {
         let object = self.expr(&expr.object)?;
         let layout = self
             .field_information(&expr.object_ty, expr.object_variant, expr.field)
@@ -444,22 +431,21 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
             object,
             layout.field_locations[expr.field] as i32,
         );
-        self.clear_temp_roots();
-        Some(value)
+        Ok(value)
     }
 
-    fn callable(&mut self, callee: &Expr) -> Option<Callable> {
+    fn callable(&mut self, callee: &Expr) -> Result<Callable> {
         match callee {
-            Expr::Function(expr) => Some(Callable::Static(expr.function)),
-            _ => Some(Callable::Dynamic(self.expr(callee)?)),
+            Expr::Function(expr) => Ok(Callable::Static(expr.function)),
+            _ => Ok(Callable::Dynamic(self.expr(callee)?)),
         }
     }
 
-    fn expr_call(&mut self, expr: &ExprCall) -> Option<Value> {
+    fn expr_call(&mut self, expr: &ExprCall) -> Result<Value> {
         let callable = self.callable(&expr.callee)?;
 
         let positional: Vec<_> = expr.positional.iter().map(|e| self.expr(e)).collect();
-        let args: Option<Vec<_>> = iter::once(Some(Value::reserved_value()))
+        let args: Result<Vec<_>> = iter::once(Ok(Value::reserved_value()))
             .chain(positional)
             // we need to execute the exprs *then* sort
             .chain(
@@ -471,27 +457,6 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
             )
             .collect();
         let mut args = args?;
-
-        let vars: Vec<_> = self
-            .vars
-            .iter()
-            .filter_map(|(&var, &(var_ty, initialised))| {
-                if initialised {
-                    Some((var, var_ty))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        for (var, var_ty) in vars {
-            let var = self.variable(var);
-            let value = self.builder.use_var(var);
-            if let Some(ptr) = self.value_ptr(value, var_ty) {
-                self.builder
-                    .ins()
-                    .call(self.function_runtime.unmark_root, &[ptr]);
-            }
-        }
 
         match callable {
             Callable::Static(func_ref) => {
@@ -506,9 +471,9 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
                     signature_from_function_ty(expr.callee_ty.as_function().unwrap(), self.triple);
                 let sig_ref = self.builder.import_signature(signature);
 
-                let function_ptr = fat_ptr_addr(callee, self.builder, self.triple);
+                let function_ptr = fat_ptr_meta(callee, self.builder, self.triple);
 
-                args[0] = fat_ptr_meta(callee, self.builder, self.triple);
+                args[0] = fat_ptr_addr(callee, self.builder, self.triple);
 
                 self.builder
                     .ins()
@@ -516,7 +481,7 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
             }
         }
 
-        None
+        Err(ExprError::NoValue)
     }
 
     fn application_function(
@@ -578,14 +543,14 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
                 }),
         );
         args.sort_by_key(|(_, ident)| *ident);
-        let args = iter::once(fat_ptr_meta(callee, &mut builder, self.triple))
+        let args = iter::once(fat_ptr_addr(callee, &mut builder, self.triple))
             .chain(args.into_iter().map(|(value, _)| value))
             .collect_vec();
 
         let signature = signature_from_function_ty(callee_ty.as_function().unwrap(), self.triple);
         let sig_ref = builder.import_signature(signature);
 
-        let callee = fat_ptr_addr(callee, &mut builder, self.triple);
+        let callee = fat_ptr_meta(callee, &mut builder, self.triple);
         builder.ins().return_call_indirect(sig_ref, callee, &args);
 
         let mut context = self.contexts.get();
@@ -596,7 +561,7 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         func_id
     }
 
-    fn expr_application(&mut self, expr: &ExprApplication) -> Option<Value> {
+    fn expr_application(&mut self, expr: &ExprApplication) -> Result<Value> {
         let func_id = self.application_function(
             expr.result_ty.as_function().unwrap(),
             &expr.storage_ty,
@@ -615,21 +580,19 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         )
     }
 
-    fn expr_unary(&mut self, expr: &ExprUnary) -> Option<Value> {
+    fn expr_unary(&mut self, expr: &ExprUnary) -> Result<Value> {
         let operand = self.expr(&expr.operand)?;
         let operand_ty = ty_for(&expr.operand_ty, self.triple);
         match expr.operator {
-            UnaryOp::Neg if operand_ty == types::F64 => Some(self.builder.ins().ineg(operand)),
-            UnaryOp::Neg if operand_ty == types::I64 => Some(self.builder.ins().fneg(operand)),
-            UnaryOp::Not if operand_ty == types::I8 => {
-                Some(self.builder.ins().bxor_imm(operand, 1))
-            }
+            UnaryOp::Neg if operand_ty == types::F64 => Ok(self.builder.ins().ineg(operand)),
+            UnaryOp::Neg if operand_ty == types::I64 => Ok(self.builder.ins().fneg(operand)),
+            UnaryOp::Not if operand_ty == types::I8 => Ok(self.builder.ins().bxor_imm(operand, 1)),
             UnaryOp::Neg | UnaryOp::Not => unreachable!(),
         }
     }
 
     #[expect(clippy::cognitive_complexity, reason = "this is abstracted by macros")]
-    fn expr_binary(&mut self, expr: &ExprBinary) -> Option<Value> {
+    fn expr_binary(&mut self, expr: &ExprBinary) -> Result<Value> {
         debug_assert_eq!(expr.left_ty, expr.right_ty);
         let left = self.expr(&expr.left)?;
         let left_ty = ty_for(&expr.left_ty, self.triple);
@@ -680,55 +643,36 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
                 types::F64 => self.builder.ins().fcmp(FloatCC::GreaterThanOrEqual, left, right),
             },
         };
-        Some(value)
+        Ok(value)
     }
 
-    fn expr_assign(&mut self, expr: &ExprAssign) -> Option<Value> {
-        let (var_ty, initialised_ref) = self.vars.get_mut(&expr.ident).unwrap();
-        let (var_ty, initialised) = (*var_ty, *initialised_ref);
-        *initialised_ref = true;
-
-        if initialised {
-            let var = self.variable(expr.ident);
-            let value = self.builder.use_var(var);
-            if let Some(ptr) = self.value_ptr(value, var_ty) {
-                self.builder
-                    .ins()
-                    .call(self.function_runtime.unmark_root, &[ptr]);
-            }
-        }
+    fn expr_assign(&mut self, expr: &ExprAssign) -> Result<Value> {
+        let (_, initialised) = self.vars.get_mut(&expr.ident).unwrap();
+        *initialised = true;
 
         let value = self.expr(&expr.expr)?;
-        let var = self.variable(expr.ident);
+        let var = self.variables[&expr.ident];
         self.builder.def_var(var, value);
 
-        if let Some(ptr) = self.value_ptr(value, var_ty) {
-            self.builder
-                .ins()
-                .call(self.function_runtime.mark_root, &[ptr]);
-        }
-
-        self.clear_temp_roots();
-
-        Some(value)
+        Ok(value)
     }
 
-    fn expr_switch(&mut self, expr: &ExprSwitch) -> Option<Value> {
+    fn expr_switch(&mut self, expr: &ExprSwitch) -> Result<Value> {
         let scrutinee = self.expr(&expr.scrutinee)?;
         let mut switch = Switch::new();
         for (&val, block_id) in &expr.arms {
             switch.set_entry(val as u128, self.block_map[block_id]);
         }
         switch.emit(self.builder, scrutinee, self.block_map[&expr.otherwise]);
-        None
+        Err(ExprError::NoValue)
     }
 
-    fn expr_goto(&mut self, expr: &ExprGoto) -> Option<Value> {
+    fn expr_goto(&mut self, expr: &ExprGoto) -> Result<Value> {
         self.builder.switch_to_block(self.block_map[&expr.block]);
-        None
+        Err(ExprError::NoValue)
     }
 
-    fn expr_closure(&mut self, expr: &ExprClosure) -> Option<Value> {
+    fn expr_closure(&mut self, expr: &ExprClosure) -> Result<Value> {
         let captures: Vec<_> = expr
             .captures
             .iter()
@@ -741,53 +685,51 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         self.closure(func_ref, &captures, &expr.storage_ty)
     }
 
-    fn expr_intrinsic(&mut self, expr: &ExprIntrinsic) -> Option<Value> {
-        let values: Option<Vec<_>> = expr
+    fn expr_intrinsic(&mut self, expr: &ExprIntrinsic) -> Result<Value> {
+        let values: Result<Vec<_>> = expr
             .values
             .iter()
-            .map(|(expr, ty)| Some((self.expr(expr)?, &**ty)))
+            .map(|(expr, ty)| Ok((self.expr(expr)?, &**ty)))
             .collect();
         let values = values?;
         match expr.intrinsic {
             Intrinsic::Discriminant => {
                 let (value, ty) = values[0];
                 if *ty == MirType::Bool {
-                    Some(self.builder.ins().sextend(types::I64, value))
+                    Ok(self.builder.ins().sextend(types::I64, value))
                 } else if matches!(ty, MirType::UserDefined(UserDefinedType::Sum(_))) {
-                    Some(
-                        self.builder.ins().load(
-                            ptr_ty(self.triple),
-                            MemFlags::new()
-                                .with_aligned()
-                                .with_alias_region(Some(AliasRegion::Heap))
-                                .with_notrap(),
-                            value,
-                            -(ptr_ty(self.triple).bytes() as i32),
-                        ),
-                    )
+                    Ok(self.builder.ins().load(
+                        ptr_ty(self.triple),
+                        MemFlags::new()
+                            .with_aligned()
+                            .with_alias_region(Some(AliasRegion::Heap))
+                            .with_notrap(),
+                        value,
+                        -(ptr_ty(self.triple).bytes() as i32),
+                    ))
                 } else {
-                    Some(self.builder.ins().iconst(ptr_ty(self.triple), 0))
+                    Ok(self.builder.ins().iconst(ptr_ty(self.triple), 0))
                 }
             }
             Intrinsic::Terminate => {
                 self.builder.ins().return_(&[values[0].0]);
-                None
+                Err(ExprError::NoValue)
             }
             Intrinsic::Unreachable => {
                 self.builder.ins().trap(TrapCode::unwrap_user(1));
-                None
+                Err(ExprError::NoValue)
             }
         }
     }
 
-    fn expr(&mut self, expr: &Expr) -> Option<Value> {
+    fn expr(&mut self, expr: &Expr) -> Result<Value> {
         match expr {
-            Expr::Literal(expr) => Some(self.expr_literal(expr)),
+            Expr::Literal(expr) => self.expr_literal(expr),
             Expr::Ident(expr) => {
-                let var = self.variable(expr.ident);
-                Some(self.builder.use_var(var))
+                let var = self.variables[&expr.ident];
+                Ok(self.builder.use_var(var))
             }
-            Expr::Function(expr) => Some(self.expr_function(expr)),
+            Expr::Function(expr) => Ok(self.expr_function(expr)),
             Expr::Tuple(expr) => self.expr_tuple(expr),
             Expr::Constructor(expr) => self.expr_constructor(expr),
             Expr::Array(expr) => self.expr_array(expr),
@@ -806,9 +748,12 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
     }
 
     /// This method does not finalise or verify the function, or define it in the module.
-    pub(super) fn compile(mut self) {
+    pub(super) fn compile(mut self) -> ModuleResult<()> {
         for (param, param_ty) in self.params {
             let var = self.builder.declare_var(ty_for(param_ty, self.triple));
+            if is_ptr(param_ty) {
+                self.builder.declare_var_needs_stack_map(var);
+            }
             self.variables.insert(*param, var);
             self.vars.insert(*param, (param_ty, true));
         }
@@ -819,16 +764,19 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         self.builder.switch_to_block(entry_point);
         for (i, &(param, _)) in self.params.iter().enumerate() {
             let param_value = self.builder.block_params(entry_point)[i + 1];
-            let var = self.variable(param);
+            let var = self.variables[&param];
             self.builder.def_var(var, param_value);
         }
 
         for (&ident, (var_ty, initialiser)) in &self.mir_function.declarations {
             let var = self.builder.declare_var(ty_for(var_ty, self.triple));
             self.variables.insert(ident, var);
+            if is_ptr(var_ty) {
+                self.builder.declare_var_needs_stack_map(var);
+            }
 
             if let Some(initialiser) = initialiser {
-                let value = self.literal(initialiser);
+                let value = self.literal(initialiser)?;
 
                 self.builder.def_var(var, value);
             }
@@ -841,7 +789,7 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
             for (i, &ident) in captures.captures.iter().enumerate() {
                 let (layout, field_ty) = self.field_information(&captures.storage_ty, None, i);
                 let value = get(self.builder, self.triple, storage, i, &layout, field_ty);
-                let var = self.variable(ident);
+                let var = self.variables[&ident];
                 self.builder.def_var(var, value);
             }
         }
@@ -850,8 +798,12 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
             self.builder.switch_to_block(self.block_map[&block_id]);
 
             for expr in &block.exprs {
-                self.expr(expr);
+                if let Err(ExprError::Module(e)) = self.expr(expr) {
+                    return Err(e);
+                }
             }
         }
+
+        Ok(())
     }
 }

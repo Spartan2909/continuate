@@ -1,6 +1,6 @@
 #![allow(unsafe_code)]
 
-use crate::{Compiler, call_entry_point, pretty_unwrap};
+use crate::{Compiler, call_entry_point};
 
 use std::mem;
 
@@ -12,24 +12,31 @@ use cranelift::{
     codegen::ir::{AbiParam, Function, InstBuilder, UserExternalName, UserFuncName, types},
     frontend::FunctionBuilder,
     jit::{JITBuilder, JITModule},
-    module::{Module, default_libcall_names},
+    module::{Module, ModuleResult, default_libcall_names},
 };
 
 pub struct JitResult {
     module: Option<JITModule>,
     f: extern "C" fn() -> i64,
+    stack_maps: *const (),
 }
 
 impl JitResult {
-    unsafe fn new(module: JITModule, f: extern "C" fn() -> i64) -> JitResult {
+    unsafe fn new(
+        module: JITModule,
+        f: extern "C" fn() -> i64,
+        stack_maps: *const (),
+    ) -> JitResult {
         JitResult {
             module: Some(module),
             f,
+            stack_maps,
         }
     }
 
     #[inline]
     pub fn run(&self) -> i64 {
+        let _lock = continuate_rt::garbage_collector::set_stack_maps_ptr(self.stack_maps);
         (self.f)()
     }
 }
@@ -47,13 +54,13 @@ impl Drop for JitResult {
 }
 
 impl Compiler<'_, JITModule> {
-    fn compile_jit(mut self) -> JitResult {
-        self.compile_module();
+    fn compile_jit(mut self) -> crate::ModuleResult<JitResult> {
+        let stack_maps = self.compile_module()?;
 
         let mut signature = self.module.make_signature();
         signature.returns.push(AbiParam::new(types::I64));
 
-        let main = pretty_unwrap(self.module.declare_anonymous_function(&signature));
+        let main = self.module.declare_anonymous_function(&signature)?;
         let name = UserFuncName::User(UserExternalName::new(1, 0));
         let mut function = Function::with_name_signature(name, signature);
         let mut func_ctx = self.builder_contexts.get();
@@ -79,43 +86,40 @@ impl Compiler<'_, JITModule> {
         let mut context = self.contexts.get();
         context.clear();
         context.func = function;
-        pretty_unwrap(self.module.define_function(main, &mut context));
+        self.module.define_function(main, &mut context)?;
 
-        pretty_unwrap(self.module.finalize_definitions());
+        self.module.finalize_definitions()?;
 
         let main = self.module.get_finalized_function(main);
 
         // SAFETY: This is the correct signature for `main`.
         let main = unsafe { mem::transmute::<*const u8, extern "C" fn() -> i64>(main) };
 
+        let stack_maps = self.module.get_finalized_data(stack_maps).0;
+
         // SAFETY: No functions from `self.module` are ever called.
-        unsafe { JitResult::new(self.module, main) }
+        let res = unsafe { JitResult::new(self.module, main, stack_maps.cast()) };
+        Ok(res)
     }
 }
 
-#[expect(clippy::missing_panics_doc)]
+/// Compile a program to an immediately runnable [`JitResult`].
+///
+/// # Errors
+///
+/// Returns an error if the module fails to encode the program.
+#[expect(clippy::result_large_err, reason = "this is a standard cranelift type")]
 #[inline]
-pub fn compile(program: Program) -> JitResult {
+pub fn compile(program: Program) -> ModuleResult<JitResult> {
     use continuate_rt::garbage_collector as rt;
-    let mut builder = JITBuilder::with_flags(
-        &[
-            ("preserve_frame_pointers", "true"),
-            ("is_pic", "true"),
-            ("enable_llvm_abi_extensions", "true"),
-        ],
-        default_libcall_names(),
-    )
-    .expect("these are valid flags");
+    let mut builder = JITBuilder::with_flags(crate::flags(), default_libcall_names())?;
     builder.symbols([
         ("cont_rt_alloc_string", rt::alloc_string as _),
         ("cont_rt_alloc_gc", rt::alloc_gc as _),
-        ("cont_rt_mark_root", rt::mark_root as _),
-        ("cont_rt_unmark_root", rt::unmark_root as _),
-        ("cont_rt_clear_temp_roots", rt::clear_temp_roots as _),
     ]);
     let module = JITModule::new(builder);
 
     let arena = Bump::new();
-    let compiler = Compiler::new(program, module, &arena);
-    compiler.compile_jit()
+    let compiler = Compiler::new(program, module, &arena)?;
+    Ok(compiler.compile_jit()?)
 }

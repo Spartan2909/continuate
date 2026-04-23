@@ -1,22 +1,19 @@
-use crate::layout::{SingleLayout, TyLayout};
+use crate::{
+    debug,
+    layout::{SingleLayout, TyLayout},
+};
 
 use std::{
     alloc::{self, Layout, handle_alloc_error},
-    borrow::Borrow,
     ffi::{CStr, c_char},
-    fmt,
-    hash::{self},
-    mem,
-    ptr::NonNull,
-    sync::Mutex,
+    fmt, mem,
+    ptr::{self, NonNull},
+    slice,
+    sync::{
+        Mutex, PoisonError,
+        atomic::{AtomicPtr, Ordering},
+    },
 };
-
-use ahash::{HashSet, RandomState};
-
-#[cfg(debug_assertions)]
-use tracing::debug;
-
-static STRING_LAYOUT: TyLayout = TyLayout::String;
 
 #[repr(C)]
 struct GcValue<T: ?Sized> {
@@ -64,50 +61,8 @@ impl<T: ?Sized> fmt::Debug for GcValue<T> {
     }
 }
 
-#[repr(transparent)]
-struct HashableGcValue<T>(NonNull<GcValue<T>>);
-
-impl<T> Clone for HashableGcValue<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> Copy for HashableGcValue<T> {}
-
-impl<T> PartialEq for HashableGcValue<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl<T> Eq for HashableGcValue<T> {}
-
-impl<T> hash::Hash for HashableGcValue<T> {
-    fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        state.write_usize(self.0.as_ptr() as usize);
-    }
-}
-
-impl<T> From<NonNull<GcValue<T>>> for HashableGcValue<T> {
-    fn from(value: NonNull<GcValue<T>>) -> Self {
-        HashableGcValue(value)
-    }
-}
-
-impl<T> Borrow<NonNull<GcValue<T>>> for HashableGcValue<T> {
-    fn borrow(&self) -> &NonNull<GcValue<T>> {
-        &self.0
-    }
-}
-
-// SAFETY: `HashableGcValue` cannot be used from safe code.
-unsafe impl<T> Send for HashableGcValue<T> {}
-
 struct GarbageCollector {
     values: Option<NonNull<GcValue<()>>>,
-    roots: HashSet<HashableGcValue<()>>,
-    temp_roots: HashSet<HashableGcValue<()>>,
     bytes_allocated: usize,
     next_gc: usize,
 }
@@ -161,20 +116,121 @@ unsafe fn mark_object(value: *mut GcValue<()>) {
     }
 }
 
-impl GarbageCollector {
-    const HEAP_GROW_FACTOR: usize = 2;
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StackFrame {
+    pub return_address: usize,
+    pub stack_pointer: *const (),
+}
 
-    /// # Safety
-    ///
-    /// All roots in `self` must be valid.
-    unsafe fn mark_roots(&mut self) {
-        for &root in self.roots.iter().chain(&self.temp_roots) {
-            // SAFETY: Must be ensured by caller.
-            unsafe {
-                mark_object(root.0.as_ptr());
-            }
+#[repr(align(8))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StackMap {
+    pub return_address: usize,
+    pub entry: *const u64,
+}
+
+#[repr(C, align(8))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StackMapEntry {
+    pub offset: u32,
+    pub size: u32,
+}
+
+impl StackMapEntry {
+    const fn normalise(self) -> StackMapEntry {
+        StackMapEntry {
+            offset: self.offset.to_le(),
+            size: self.size.to_le(),
         }
     }
+}
+
+static STACK_MAPS_LOCK: Mutex<()> = Mutex::new(());
+
+static STACK_MAPS_PTR: AtomicPtr<StackMap> = AtomicPtr::new(ptr::null_mut());
+
+#[inline]
+pub fn set_stack_maps_ptr(ptr: *const ()) -> impl Drop {
+    let lock = STACK_MAPS_LOCK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let gc_lock = GARBAGE_COLLECTOR
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    STACK_MAPS_PTR.store(ptr.cast_mut().cast(), Ordering::Relaxed);
+    drop(gc_lock);
+    lock
+}
+
+unsafe fn get_stack_map(return_address: usize) -> &'static [StackMapEntry] {
+    let mut stack_maps = STACK_MAPS_PTR.load(Ordering::Acquire);
+    let map = loop {
+        // SAFETY: `stack_maps` must be valid.
+        let map = unsafe { *stack_maps };
+        if map.return_address == return_address {
+            break map.entry;
+        }
+        // SAFETY: One of the stack maps is valid.
+        stack_maps = unsafe { stack_maps.add(1) };
+    };
+    // SAFETY: `map` must be valid.
+    let len = unsafe { *map }.to_le();
+    let len = len as usize;
+    // SAFETY: we're offsetting to just after `map`, which is fine
+    let map = unsafe { map.add(1) };
+    // SAFETY: `len` must be correct for `map`
+    unsafe { slice::from_raw_parts(map.cast(), len) }
+}
+
+#[cfg(target_pointer_width = "32")]
+type DoubleUsize = u64;
+
+#[cfg(target_pointer_width = "64")]
+type DoubleUsize = u128;
+
+/// # Safety
+///
+/// `stack_frame` must be correct.
+unsafe fn mark_roots(stack_frame: &StackFrame) {
+    debug!("marking roots");
+
+    // SAFETY: `stack_frame` must be correct
+    let map = unsafe { get_stack_map(stack_frame.return_address) };
+    for entry in map {
+        debug!("marking {entry:?}");
+
+        let entry = entry.normalise();
+        let ptr: *mut () = if entry.size as usize == mem::size_of::<usize>() {
+            // SAFETY: Stack map information must be valid
+            let ptr = unsafe { stack_frame.stack_pointer.byte_add(entry.offset as usize) };
+            // SAFETY: This is a valid pointer to a pointer
+            unsafe { *ptr.cast() }
+        } else {
+            debug_assert_eq!(entry.size as usize, mem::size_of::<usize>() * 2);
+            // SAFETY: Stack map information must be valid
+            let ptr = unsafe { stack_frame.stack_pointer.byte_add(entry.offset as usize) };
+            // SAFETY: This is a valid pointer to a wide pointer
+            let wide: DoubleUsize = unsafe { *ptr.cast() };
+            let wide = wide >> (mem::size_of::<usize>() * 8);
+            let thin = wide as usize;
+            ptr::with_exposed_provenance_mut(thin)
+        };
+        if ptr.is_null() {
+            continue;
+        }
+        let difference = mem::offset_of!(GcValue<()>, value);
+        // SAFETY: `ptr` is a pointer to a `GcValue`.
+        let gc_value = unsafe { ptr.byte_sub(difference) };
+        // SAFETY: This is a valid `GcObject`
+        unsafe {
+            mark_object(gc_value.cast());
+        }
+    }
+}
+
+impl GarbageCollector {
+    const HEAP_GROW_FACTOR: usize = 2;
 
     /// # Safety
     ///
@@ -227,6 +283,8 @@ impl GarbageCollector {
     /// - Any memory allocated in `self` which is accessed after this method is called must be marked.
     /// - All values in `self` must be valid.
     unsafe fn sweep(&mut self) {
+        debug!("sweeping");
+
         let mut previous = None;
         let mut current = self.values;
         while let Some(value) = current {
@@ -260,10 +318,10 @@ impl GarbageCollector {
     ///
     /// - Any memory allocated in `self` which is accessed after this method is called must be  reachable from an element of `self.roots` or `self.temp_roots`.
     /// - All values in `self` must be valid.
-    unsafe fn collect(&mut self) {
+    unsafe fn collect(&mut self, stack_frame: &StackFrame) {
         // SAFETY: Must be ensured by caller.
         unsafe {
-            self.mark_roots();
+            mark_roots(stack_frame);
         }
 
         // SAFETY: All reachable memory has just been marked.
@@ -277,12 +335,18 @@ impl GarbageCollector {
     /// # Safety
     ///
     /// `ptr` must be a valid pointer to a (possibly uninitialised) `GcValue<()>` allocated in `gc`.
-    unsafe fn track_object(&mut self, ptr: NonNull<GcValue<()>>, size: usize) {
+    unsafe fn track_object(
+        &mut self,
+        ptr: NonNull<GcValue<()>>,
+        size: usize,
+        stack_frame: &StackFrame,
+    ) {
         self.bytes_allocated += size;
-        if cfg!(test) || self.bytes_allocated > self.next_gc {
+        if cfg!(debug_assertions) || self.bytes_allocated > self.next_gc {
+            debug!("collecting garbage");
             // SAFETY: The only unreachable object is `ptr`, which is not yet tracked.
             unsafe {
-                self.collect();
+                self.collect(stack_frame);
             }
         }
 
@@ -298,8 +362,6 @@ impl GarbageCollector {
             next_ptr.write(self.values);
         }
         self.values = Some(ptr);
-
-        self.temp_roots.insert(ptr.into());
     }
 
     /// # Safety
@@ -323,33 +385,26 @@ impl GarbageCollector {
 // SAFETY: Every pointer in a `GarbageCollector` is owned by that collector.
 unsafe impl Send for GarbageCollector {}
 
-const fn new_hash_set<T>() -> HashSet<T> {
-    HashSet::with_hasher(RandomState::with_seeds(
-        0x0d15_ea5e_1bad_b002,
-        0xbadc_0ffe_e0dd_f00d,
-        0xdefe_c8ed_dead_beef,
-        0xabad_cafe_d00d_feed,
-    ))
-}
-
 static GARBAGE_COLLECTOR: Mutex<GarbageCollector> = Mutex::new(GarbageCollector {
     values: None,
-    roots: new_hash_set(),
-    temp_roots: new_hash_set(),
     bytes_allocated: 0,
     next_gc: 1024 * 1024,
 });
 
 /// # Safety
 ///
-/// `layout` must be a valid layout. In particular, it must accurately describe the locations of pointers in the allocated value, and `layout.size()` and `layout.align()` must fit the preconditions of [`Layout::from_size_align`].
+/// - `layout` must be a valid layout.
+///   In particular, it must accurately describe the locations of pointers in the allocated value, and `layout.size()` and `layout.align()` must fit the preconditions of [`Layout::from_size_align`].
+/// - The contents of `stack_frame` must be correct.
 ///
 /// # Panics
 ///
-/// Panics if `layout` is a `TyLayout::String` or if another garbage collection operation has previously panicked.
+/// Panics if `layout` describes a string.
 #[unsafe(export_name = "cont_rt_alloc_gc")]
-pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull<()> {
-    #[cfg(debug_assertions)]
+pub unsafe extern "C-unwind" fn alloc_gc(
+    layout: &'static TyLayout<'static>,
+    stack_frame: &StackFrame,
+) -> NonNull<()> {
     debug!("allocating object with layout {layout:?}");
 
     let size = layout
@@ -358,8 +413,9 @@ pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull
     let size = size as usize + mem::size_of::<GcValue<()>>();
     let align = (layout.align() as usize).max(mem::align_of::<GcValue<()>>());
 
-    // SAFETY: Must be ensured by caller.
-    let mut gc = GARBAGE_COLLECTOR.lock().unwrap();
+    let mut gc = GARBAGE_COLLECTOR
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
 
     // SAFETY: Must be ensured by caller.
     let mem_layout = unsafe { Layout::from_size_align_unchecked(size, align) };
@@ -379,7 +435,7 @@ pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull
 
     // SAFETY: `ptr` is a valid pointer to a `GcValue<()>`.
     unsafe {
-        gc.track_object(ptr, size);
+        gc.track_object(ptr, size, stack_frame);
     }
 
     drop(gc);
@@ -392,68 +448,21 @@ pub unsafe extern "C" fn alloc_gc(layout: &'static TyLayout<'static>) -> NonNull
 
 /// # Safety
 ///
-/// - `ptr` must point to memory allocated with [`alloc_gc`], and must not have previously been passed to this function.
-/// - `ptr` must be valid for writes.
+/// The contents of `stack_frame` must be correct.
 ///
 /// # Panics
 ///
-/// Panics if a garbage collection operation has previously panicked.
-#[unsafe(export_name = "cont_rt_mark_root")]
-pub unsafe extern "C" fn mark_root(ptr: NonNull<()>) {
-    // SAFETY: Must be ensured by caller.
-    let value: *mut GcValue<()> = unsafe {
-        ptr.as_ptr()
-            .byte_sub(mem::offset_of!(GcValue<()>, value))
-            .cast()
-    };
-    // SAFETY: Garbage collected pointers are always non-null.
-    let value = unsafe { NonNull::new_unchecked(value) };
-    // SAFETY: Must be ensured by caller.
-    let mut gc = GARBAGE_COLLECTOR.lock().unwrap();
-    gc.roots.insert(value.into());
-}
-
-/// # Safety
-///
-/// `ptr` must point to memory allocated with [`alloc_gc`] and marked by [`mark_root`], and must
-///   not have previously been passed to this function.
-///
-/// # Panics
-///
-/// Panics if a garbage collection operation has previously panicked.
-#[unsafe(export_name = "cont_rt_unmark_root")]
-pub unsafe extern "C" fn unmark_root(ptr: NonNull<()>) {
-    // SAFETY: Must be ensured by caller.
-    let value: *mut GcValue<()> = unsafe {
-        ptr.as_ptr()
-            .byte_sub(mem::offset_of!(GcValue<()>, value))
-            .cast()
-    };
-    // SAFETY: `value` is derived from a non-null pointer.
-    let value = unsafe { NonNull::new_unchecked(value) };
-    GARBAGE_COLLECTOR.lock().unwrap().roots.remove(&value);
-}
-
-/// # Panics
-///
-/// Panics if a garbage collection operation has previously panicked.
-#[unsafe(export_name = "cont_rt_clear_temp_roots")]
-pub extern "C" fn clear_temp_roots() {
-    GARBAGE_COLLECTOR.lock().unwrap().temp_roots.clear();
-}
-
-/// # Panics
-///
-/// Panics if a garbage collection operation has previously panicked.
+/// Panics if `len` is greater than `isize::MAX` when rounded up to a multiple of 8.
 #[unsafe(export_name = "cont_rt_alloc_string")]
-pub extern "C" fn alloc_string(len: usize) -> NonNull<()> {
-    #[cfg(debug_assertions)]
+pub unsafe extern "C-unwind" fn alloc_string(len: usize, stack_frame: &StackFrame) -> NonNull<()> {
     debug!("allocating string with length {len}");
 
     let size = len + mem::size_of::<GcValue<()>>();
     let mem_layout = Layout::from_size_align(size, mem::align_of::<GcValue<()>>()).unwrap();
 
-    let mut gc = GARBAGE_COLLECTOR.lock().unwrap();
+    let mut gc = GARBAGE_COLLECTOR
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
 
     // SAFETY: `GcValue`s are not zero-sized.
     let ptr: NonNull<GcValue<()>> = unsafe {
@@ -463,7 +472,7 @@ pub extern "C" fn alloc_string(len: usize) -> NonNull<()> {
     let layout_ptr: NonNull<&TyLayout> = ptr.cast();
     // SAFETY: `ptr` has just been allocated with enough space for a `usize`.
     unsafe {
-        layout_ptr.as_ptr().write(&STRING_LAYOUT);
+        layout_ptr.as_ptr().write(&TyLayout::String);
     }
 
     // SAFETY: See above.
@@ -471,7 +480,7 @@ pub extern "C" fn alloc_string(len: usize) -> NonNull<()> {
 
     // SAFETY: `ptr` is a valid pointer to a `GcValue<()>`.
     unsafe {
-        gc.track_object(ptr, size);
+        gc.track_object(ptr, size, stack_frame);
     }
 
     drop(gc);
@@ -484,15 +493,14 @@ pub extern "C" fn alloc_string(len: usize) -> NonNull<()> {
 ///
 /// - All garbage-collected value must be valid.
 /// - No garbage-collected values may be accessed again.
-///
-/// # Panics
-///
-/// Panics if a garbage collection operation has previously panicked.
 #[inline]
 pub unsafe fn clear() {
     // SAFETY: Must be ensured by caller.
     unsafe {
-        GARBAGE_COLLECTOR.lock().unwrap().clear();
+        GARBAGE_COLLECTOR
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
     }
 }
 
