@@ -80,10 +80,27 @@ impl<'a> Lowerer<'a> {
             hir::Type::Tuple(ref types) => {
                 mir::Type::Tuple(types.iter().map(|ty| self.lower_ty(ty)).collect())
             }
-            hir::Type::Function(hir::FunctionTy {
+            hir::Type::Function(
+                hir::FunctionTy {
+                    ref positional_params,
+                    ref named_params,
+                },
+                fun,
+            ) => mir::Type::function(
+                positional_params
+                    .iter()
+                    .map(|ty| self.lower_ty(ty))
+                    .collect(),
+                named_params
+                    .iter()
+                    .map(|(&ident, ty)| (ident, self.lower_ty(ty)))
+                    .collect(),
+                fun,
+            ),
+            hir::Type::FunctionPtr(hir::FunctionTy {
                 ref positional_params,
                 ref named_params,
-            }) => mir::Type::function(
+            }) => mir::Type::function_ptr(
                 positional_params
                     .iter()
                     .map(|ty| self.lower_ty(ty))
@@ -669,6 +686,9 @@ impl<'a> Lowerer<'a> {
                 ident: ident.ident.value,
             }),
             hir::Expr::Function(func_ref) => mir::Expr::Function(mir::ExprFunction {
+                function: *func_ref,
+            }),
+            hir::Expr::FunctionPtr(func_ref) => mir::Expr::FunctionPtr(mir::ExprFunctionPtr {
                 function: *func_ref,
             }),
             hir::Expr::Block(expr) => self.expr_block(expr, block, function),

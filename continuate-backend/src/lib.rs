@@ -255,7 +255,9 @@ fn ty_ref_size_align_ptr(ty: &MirType, triple: &Triple) -> (u64, u64, bool) {
         MirType::Array(_, _) | MirType::Tuple(_) | MirType::UserDefined(_) => {
             (ptr_size.into(), ptr_size.into(), true)
         }
-        MirType::String | MirType::Function(_) => ((ptr_size * 2).into(), ptr_size.into(), true),
+        MirType::String | MirType::Function(..) | MirType::FunctionPtr(_) => {
+            ((ptr_size * 2).into(), ptr_size.into(), true)
+        }
         MirType::Unknown => unreachable!(),
         MirType::None => (0, 1, false),
     }
@@ -469,6 +471,7 @@ impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
             .declare_data_in_data(gc_pointer_locations, &mut self.data_description);
         self.data_description
             .write_data_addr(offset, gc_pointer_locations, 0);
+        self.data_description.set_align(8);
 
         self.module
             .define_data(layout_global, &self.data_description)?;
@@ -519,6 +522,7 @@ impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
                     .module
                     .declare_data_in_data(variant_layouts, &mut self.data_description);
                 self.data_description.write_data_addr(ptr_size, gv, 0);
+                self.data_description.set_align(8);
 
                 let endianness = self.triple.endianness().unwrap();
                 contents.extend(u64_as_endianness(size, endianness));
@@ -565,11 +569,13 @@ impl<'arena, M: Module + ?Sized> Compiler<'arena, M> {
         }
     }
 
+    // TODO: Assumes 64 bit
     fn calc_ty_layout(&mut self, ty: Arc<MirType>) -> ModuleResult<()> {
         let layout = match *ty {
             MirType::Bool => SingleLayout::primitive(1, 1).into(),
-            MirType::Int | MirType::Float | MirType::Function(_) => {
-                SingleLayout::primitive(8, 8).into()
+            MirType::Int | MirType::Float => SingleLayout::primitive(8, 8).into(),
+            MirType::Function(..) | MirType::FunctionPtr(_) => {
+                SingleLayout::primitive(16, 8).into()
             }
             MirType::String => TyLayout::String,
             MirType::Array(ref elem_ty, len) => {

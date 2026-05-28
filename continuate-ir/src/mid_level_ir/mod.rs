@@ -26,6 +26,7 @@ pub enum Expr {
     Literal(ExprLiteral),
     Ident(ExprIdent),
     Function(ExprFunction),
+    FunctionPtr(ExprFunctionPtr),
     Tuple(ExprTuple),
     Constructor(ExprConstructor),
     Array(ExprArray),
@@ -54,6 +55,11 @@ pub struct ExprIdent {
 
 #[derive(Debug, Clone)]
 pub struct ExprFunction {
+    pub function: FuncRef,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExprFunctionPtr {
     pub function: FuncRef,
 }
 
@@ -187,7 +193,8 @@ pub enum Type {
     String,
     Array(Arc<Type>, u64),
     Tuple(Vec<Arc<Type>>),
-    Function(FunctionTy),
+    Function(FunctionTy, FuncRef),
+    FunctionPtr(FunctionTy),
     UserDefined(UserDefinedType),
     Unknown,
     None,
@@ -198,8 +205,23 @@ impl Type {
     pub const fn function(
         positional_params: Vec<Arc<Type>>,
         named_params: HashMap<Ident, Arc<Type>>,
+        function: FuncRef,
     ) -> Type {
-        Type::Function(FunctionTy {
+        Type::Function(
+            FunctionTy {
+                positional_params,
+                named_params,
+            },
+            function,
+        )
+    }
+
+    #[inline]
+    pub const fn function_ptr(
+        positional_params: Vec<Arc<Type>>,
+        named_params: HashMap<Ident, Arc<Type>>,
+    ) -> Type {
+        Type::FunctionPtr(FunctionTy {
             positional_params,
             named_params,
         })
@@ -207,10 +229,9 @@ impl Type {
 
     #[inline]
     pub const fn as_function(&self) -> Option<&FunctionTy> {
-        if let Type::Function(func) = self {
-            Some(func)
-        } else {
-            None
+        match self {
+            Type::Function(ty, _) | Type::FunctionPtr(ty) => Some(ty),
+            _ => None,
         }
     }
 
@@ -238,7 +259,12 @@ impl Type {
     pub const fn is_primitive(&self) -> bool {
         matches!(
             self,
-            Type::Bool | Type::Int | Type::Float | Type::String | Type::Function(_)
+            Type::Bool
+                | Type::Int
+                | Type::Float
+                | Type::String
+                | Type::Function(_, _)
+                | Type::FunctionPtr(_)
         )
     }
 }

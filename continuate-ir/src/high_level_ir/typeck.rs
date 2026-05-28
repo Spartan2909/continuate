@@ -114,7 +114,7 @@ impl<'a> TypeCk<'a> {
 
     fn expr_function(&self, func_ref: FuncRef) -> hir::Typed<Expr> {
         let ty = Arc::clone(&self.typed_program.signatures[&func_ref]);
-        hir::Typed::new(hir::Expr::Function(func_ref), ty)
+        hir::Typed::new(hir::Expr::FunctionPtr(func_ref), ty)
     }
 
     fn block(&mut self, exprs: &[Expr<()>]) -> Result<hir::Typed<Vec<Expr>>> {
@@ -268,7 +268,7 @@ impl<'a> TypeCk<'a> {
         let field_ty = fields
             .get(&expr.field)
             .cloned()
-            .ok_or_else(|| format!("{object_ty:?} has no field '{}'", &expr.field))?;
+            .ok_or_else(|| format!("{object_ty:?} has no field '{}'", expr.field))?;
         let expr = Expr::Get(hir::ExprGet {
             object: hir::Typed::new(Box::new(object), object_ty),
             field: expr.field.clone(),
@@ -304,56 +304,19 @@ impl<'a> TypeCk<'a> {
         Ok(hir::Typed::new(expr, field_ty))
     }
 
-    // fn expr_call(&mut self, expr: &hir::ExprCall<()>) -> Result<hir::Typed<Expr>> {
-    //     let callee = self.expr(&expr.callee)?;
-    //     let hir::Type::Function(hir::FunctionTy {
-    //         positional_params,
-    //         named_params,
-    //     }) = &*callee.ty
-    //     else {
-    //         Err(format!("{:?} is not a function", callee.ty))?
-    //     };
-
-    //     if !named_params.is_empty() {
-    //         Err("cannot call a function with remaining named parameters")?;
-    //     }
-
-    //     if expr.positional.len() != positional_params.len() {
-    //         Err(format!(
-    //             "incorrect number of arguments (expected {}, got {})",
-    //             positional_params.len(),
-    //             expr.positional.len()
-    //         ))?;
-    //     }
-
-    //     let args: Result<Vec<_>> = positional_params
-    //         .iter()
-    //         .zip(&expr.positional)
-    //         .map(|(param, arg)| {
-    //             let (arg, ty) = self.expr(arg)?.into_pair();
-    //             ty.unify(param, &mut self.typed_program)?;
-    //             Ok(arg)
-    //         })
-    //         .collect();
-
-    //     let expr = hir::ExprCall {
-    //         callee: callee.boxed(),
-    //         positional: args?,
-    //         named: vec![],
-    //     };
-
-    //     Ok(hir::Typed::new(
-    //         Expr::Call(expr),
-    //         self.typed_program.insert_type(hir::Type::None),
-    //     ))
-    // }
-
     fn expr_call(&mut self, expr: &hir::ExprCall<()>) -> Result<hir::Typed<Expr>> {
         let callee = self.expr(&expr.callee)?;
-        let hir::Type::Function(hir::FunctionTy {
+        let (hir::Type::Function(
+            hir::FunctionTy {
+                positional_params,
+                named_params,
+            },
+            _,
+        )
+        | hir::Type::FunctionPtr(hir::FunctionTy {
             positional_params,
             named_params,
-        }) = &*callee.ty
+        })) = &*callee.ty
         else {
             Err("{ty:?} is not a function")?
         };
@@ -396,7 +359,7 @@ impl<'a> TypeCk<'a> {
                 self.typed_program.insert_type(hir::Type::None),
             ))
         } else {
-            let ty = hir::Type::function(positional_params, named_params);
+            let ty = hir::Type::function_ptr(positional_params, named_params);
             let ty = self.typed_program.insert_type(ty);
             let expr = hir::Typed::new(
                 hir::ExprApplication {
@@ -639,7 +602,9 @@ impl<'a> TypeCk<'a> {
         match expr {
             hir::Expr::Literal(literal) => Ok(self.expr_literal(literal.clone())),
             hir::Expr::Ident(ident) => self.expr_ident(ident),
-            hir::Expr::Function(func_ref) => Ok(self.expr_function(*func_ref)),
+            hir::Expr::Function(func_ref) | hir::Expr::FunctionPtr(func_ref) => {
+                Ok(self.expr_function(*func_ref))
+            }
             hir::Expr::Block(expr) => self.expr_block(expr),
             hir::Expr::Tuple(expr) => self.expr_tuple(expr),
             hir::Expr::Constructor(expr) => self.expr_constructor(expr),
@@ -697,7 +662,7 @@ impl<'a> TypeCk<'a> {
                 .collect();
             let ty = self
                 .typed_program
-                .insert_type(hir::Type::function(positional, named));
+                .insert_type(hir::Type::function(positional, named, func_ref));
             self.typed_program.signatures.insert(func_ref, ty);
         }
 

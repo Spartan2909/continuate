@@ -4,8 +4,8 @@ mod combine_call_application;
 
 use crate::mid_level_ir::{
     Block, Expr, ExprApplication, ExprArray, ExprAssign, ExprBinary, ExprCall, ExprClosure,
-    ExprConstructor, ExprFunction, ExprGet, ExprGoto, ExprIdent, ExprIntrinsic, ExprLiteral,
-    ExprSet, ExprSwitch, ExprTuple, ExprUnary, Function, Program,
+    ExprConstructor, ExprFunction, ExprFunctionPtr, ExprGet, ExprGoto, ExprIdent, ExprIntrinsic,
+    ExprLiteral, ExprSet, ExprSwitch, ExprTuple, ExprUnary, Function, Program,
 };
 
 trait Visit {
@@ -23,6 +23,10 @@ trait Visit {
 
     fn expr_function(&self, expr: &mut ExprFunction) {
         default_expr_function(self, expr);
+    }
+
+    fn expr_function_ptr(&self, expr: &mut ExprFunctionPtr) {
+        default_expr_function_ptr(self, expr);
     }
 
     fn expr_tuple(&self, expr: &mut ExprTuple) {
@@ -108,6 +112,10 @@ const fn default_expr_ident<V: Visit + ?Sized>(_: &V, expr: &mut ExprIdent) {
 
 const fn default_expr_function<V: Visit + ?Sized>(_: &V, expr: &mut ExprFunction) {
     let ExprFunction { function: _ } = expr;
+}
+
+const fn default_expr_function_ptr<V: Visit + ?Sized>(_: &V, expr: &mut ExprFunctionPtr) {
+    let ExprFunctionPtr { function: _ } = expr;
 }
 
 fn default_expr_tuple<V: Visit + ?Sized>(v: &V, expr: &mut ExprTuple) {
@@ -257,6 +265,7 @@ fn default_expr<V: Visit + ?Sized>(v: &V, expr: &mut Expr) {
         Expr::Literal(expr) => v.expr_literal(expr),
         Expr::Ident(expr) => v.expr_ident(expr),
         Expr::Function(expr) => v.expr_function(expr),
+        Expr::FunctionPtr(expr) => v.expr_function_ptr(expr),
         Expr::Tuple(expr) => v.expr_tuple(expr),
         Expr::Constructor(expr) => v.expr_constructor(expr),
         Expr::Array(expr) => v.expr_array(expr),

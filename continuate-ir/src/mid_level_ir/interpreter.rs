@@ -598,6 +598,7 @@ impl Executor {
         }))
     }
 
+    #[expect(clippy::too_many_lines, reason = "this is just a big match")]
     fn expr(&mut self, expr: &Expr, program: &Program) -> ControlFlow<Rc<Value>> {
         match *expr {
             Expr::Literal(ref expr) => ControlFlow::Value(Rc::new(expr.literal.clone().into())),
@@ -607,6 +608,9 @@ impl Executor {
                 ))
             }
             Expr::Function(ref expr) => ControlFlow::Value(Rc::new(Value::Function(expr.function))),
+            Expr::FunctionPtr(ref expr) => {
+                ControlFlow::Value(Rc::new(Value::Function(expr.function)))
+            }
             Expr::Tuple(ExprTuple { ty: _, ref values }) => ControlFlow::Value(Rc::new(
                 Value::tuple(value!(self.expr_list(values, program))),
             )),

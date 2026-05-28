@@ -32,13 +32,13 @@ pub(crate) fn standard_library(program: &mut Program<()>) -> StdLib {
     let fn_termination_ref = FuncRef::new();
     program.functions.insert(fn_termination_ref, fn_termination);
 
-    let fn_termination_ty = Type::function(vec![Arc::clone(&ty_int)], HashMap::new());
+    let fn_termination_ty = Type::function_ptr(vec![Arc::clone(&ty_int)], HashMap::new());
     let fn_termination_ty = program.insert_type(fn_termination_ty);
     program
         .signatures
         .insert(fn_termination_ref, fn_termination_ty);
 
-    let int_fn = Type::function(vec![Arc::clone(&ty_int)], HashMap::new());
+    let int_fn = Type::function_ptr(vec![Arc::clone(&ty_int)], HashMap::new());
     let int_fn = program.insert_type(int_fn);
 
     let mut fn_discriminant = Function::new("discriminant".to_string());
@@ -78,7 +78,7 @@ pub(crate) fn standard_library(program: &mut Program<()>) -> StdLib {
 
     let mut fn_discriminant_conts = HashMap::with_capacity(1);
     fn_discriminant_conts.insert(cont, int_fn);
-    let fn_discriminant_ty = Type::function(vec![Arc::clone(&ty_bool)], fn_discriminant_conts);
+    let fn_discriminant_ty = Type::function_ptr(vec![Arc::clone(&ty_bool)], fn_discriminant_conts);
     let fn_discriminant_ty = program.insert_type(fn_discriminant_ty);
     program
         .signatures

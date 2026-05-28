@@ -9,9 +9,9 @@ use continuate_ir::{
     common::{BinaryOp, FuncRef, Ident, Intrinsic, Literal, UnaryOp},
     mid_level_ir::{
         BlockId, Expr, ExprApplication, ExprArray, ExprAssign, ExprBinary, ExprCall, ExprClosure,
-        ExprConstructor, ExprFunction, ExprGet, ExprGoto, ExprIdent, ExprIntrinsic, ExprLiteral,
-        ExprSet, ExprSwitch, ExprTuple, ExprUnary, Function as MirFunction, FunctionTy,
-        Type as MirType, UserDefinedType,
+        ExprConstructor, ExprFunction, ExprFunctionPtr, ExprGet, ExprGoto, ExprIdent,
+        ExprIntrinsic, ExprLiteral, ExprSet, ExprSwitch, ExprTuple, ExprUnary,
+        Function as MirFunction, FunctionTy, Type as MirType, UserDefinedType,
     },
 };
 
@@ -158,7 +158,8 @@ const fn is_ptr(ty: &MirType) -> bool {
         MirType::String
         | MirType::Array(_, _)
         | MirType::Tuple(_)
-        | MirType::Function(_)
+        | MirType::Function(..)
+        | MirType::FunctionPtr(_)
         | MirType::UserDefined(_) => true,
     }
 }
@@ -278,6 +279,14 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
     }
 
     fn expr_function(&mut self, expr: &ExprFunction) -> Value {
+        let func_id = self.functions[&expr.function].0;
+        let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
+        let function_ptr = self.builder.ins().func_addr(ptr_ty(self.triple), func_ref);
+        let metadata = self.builder.ins().iconst(ptr_ty(self.triple), 0);
+        self.fat_ptr(metadata, function_ptr)
+    }
+
+    fn expr_function_ptr(&mut self, expr: &ExprFunctionPtr) -> Value {
         let func_id = self.functions[&expr.function].0;
         let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
         let function_ptr = self.builder.ins().func_addr(ptr_ty(self.triple), func_ref);
@@ -434,15 +443,20 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
         Ok(value)
     }
 
-    fn callable(&mut self, callee: &Expr) -> Result<Callable> {
-        match callee {
-            Expr::Function(expr) => Ok(Callable::Static(expr.function)),
-            _ => Ok(Callable::Dynamic(self.expr(callee)?)),
+    fn callable(&mut self, callee: &Expr, callee_ty: &MirType) -> Result<Callable> {
+        match (callee, callee_ty) {
+            // Statically link known functions
+            (_, MirType::Function(_, fun)) => Ok(Callable::Static(*fun)),
+            // Try to recover static linking from function pointers
+            (Expr::Function(expr), _) => Ok(Callable::Static(expr.function)),
+            (Expr::FunctionPtr(expr), _) => Ok(Callable::Static(expr.function)),
+            // Give up and link dynamically
+            (callee, _) => Ok(Callable::Dynamic(self.expr(callee)?)),
         }
     }
 
     fn expr_call(&mut self, expr: &ExprCall) -> Result<Value> {
-        let callable = self.callable(&expr.callee)?;
+        let callable = self.callable(&expr.callee, &expr.callee_ty)?;
 
         let positional: Vec<_> = expr.positional.iter().map(|e| self.expr(e)).collect();
         let args: Result<Vec<_>> = iter::once(Ok(Value::reserved_value()))
@@ -730,6 +744,7 @@ impl<'function, M: Module + ?Sized> FunctionCompiler<'function, '_, M> {
                 Ok(self.builder.use_var(var))
             }
             Expr::Function(expr) => Ok(self.expr_function(expr)),
+            Expr::FunctionPtr(expr) => Ok(self.expr_function_ptr(expr)),
             Expr::Tuple(expr) => self.expr_tuple(expr),
             Expr::Constructor(expr) => self.expr_constructor(expr),
             Expr::Array(expr) => self.expr_array(expr),

@@ -110,6 +110,7 @@ pub enum Expr<T: Tag> {
     Literal(Literal),
     Ident(ExprIdent<T>),
     Function(FuncRef),
+    FunctionPtr(FuncRef),
     Block(T::Tagged<ExprBlock<T>>),
     Tuple(T::Tagged<ExprTuple<T>>),
     Constructor(ExprConstructor<T>),
@@ -134,6 +135,7 @@ impl<T: Tag> fmt::Debug for Expr<T> {
             Expr::Literal(l) => f.debug_tuple("Literal").field(l).finish(),
             Expr::Ident(i) => f.debug_tuple("Ident").field(i).finish(),
             Expr::Function(fun) => f.debug_tuple("Function").field(fun).finish(),
+            Expr::FunctionPtr(fun) => f.debug_tuple("FunctionPtr").field(fun).finish(),
             Expr::Block(x) => f.debug_tuple("Block").field(x).finish(),
             Expr::Tuple(x) => f.debug_tuple("Tuple").field(x).finish(),
             Expr::Constructor(x) => f.debug_tuple("Constructor").field(x).finish(),
@@ -286,7 +288,8 @@ pub enum Type {
     String,
     Array(Arc<Type>, u64),
     Tuple(Vec<Arc<Type>>),
-    Function(FunctionTy),
+    Function(FunctionTy, FuncRef),
+    FunctionPtr(FunctionTy),
     UserDefined(UserDefinedTyRef),
     Unknown,
     None,
@@ -297,8 +300,23 @@ impl Type {
     pub const fn function(
         positional_params: Vec<Arc<Type>>,
         named_params: HashMap<Ident, Arc<Type>>,
+        function: FuncRef,
     ) -> Type {
-        Type::Function(FunctionTy {
+        Type::Function(
+            FunctionTy {
+                positional_params,
+                named_params,
+            },
+            function,
+        )
+    }
+
+    #[inline]
+    pub const fn function_ptr(
+        positional_params: Vec<Arc<Type>>,
+        named_params: HashMap<Ident, Arc<Type>>,
+    ) -> Type {
+        Type::FunctionPtr(FunctionTy {
             positional_params,
             named_params,
         })
@@ -346,11 +364,18 @@ impl Type {
                 Ok(program.insert_type(Type::Tuple(types?)))
             }
             (
-                Type::Function(FunctionTy {
+                Type::Function(
+                    FunctionTy {
+                        positional_params: positional_params_1,
+                        named_params: named_params_1,
+                    },
+                    _,
+                )
+                | Type::FunctionPtr(FunctionTy {
                     positional_params: positional_params_1,
                     named_params: named_params_1,
                 }),
-                Type::Function(FunctionTy {
+                Type::FunctionPtr(FunctionTy {
                     positional_params: positional_params_2,
                     named_params: named_params_2,
                 }),
@@ -379,7 +404,7 @@ impl Type {
                     })
                     .collect();
 
-                let ty = Type::function(params?, named_params?);
+                let ty = Type::function_ptr(params?, named_params?);
                 Ok(program.insert_type(ty))
             }
             (Type::Unknown | Type::None, _) => Ok(Arc::clone(other)),

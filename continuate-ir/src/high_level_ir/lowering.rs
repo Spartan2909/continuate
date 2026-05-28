@@ -77,7 +77,7 @@ impl<'a> Lowerer<'a> {
                 named,
                 span: _,
             } => {
-                let ty = Type::function(
+                let ty = Type::function_ptr(
                     positional.iter().map(|ty| self.ty(ty)).collect(),
                     named
                         .iter()
